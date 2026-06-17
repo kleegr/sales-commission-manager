@@ -5,8 +5,8 @@
 //  - seeds the two demo tenants on first run (proves a WRITE)
 //  - returns Postgres version + per-tenant row counts (proves a READ)
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { hasDb, connectionEnvVar, query } from "./_lib/db";
-import { ensureSchema, seedIfEmpty, listTenants, tenantCounts } from "./_lib/repository";
+import { hasDb, connectionEnvVar, query } from "./_lib/db.js";
+import { ensureSchema, seedIfEmpty, listTenants, tenantCounts } from "./_lib/repository.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!hasDb()) {

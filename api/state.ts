@@ -7,8 +7,8 @@
 // ApiStore simply GETs and PUTs AppData here, and this function does the
 // relational read/write, tenant-scoped.
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { hasDb } from "./_lib/db";
-import { ensureSchema, getTenantBySlug, readState, writeState, seedIfEmpty } from "./_lib/repository";
+import { hasDb } from "./_lib/db.js";
+import { ensureSchema, getTenantBySlug, readState, writeState, seedIfEmpty } from "./_lib/repository.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!hasDb()) {

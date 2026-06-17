@@ -1,8 +1,8 @@
 // POST /api/seed         -> seed demo tenants only if the DB is empty
 // POST /api/seed?reset=1  -> force a full re-seed of the demo tenants
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { hasDb } from "./_lib/db";
-import { ensureSchema, seedIfEmpty, seedAll, listTenants } from "./_lib/repository";
+import { hasDb } from "./_lib/db.js";
+import { ensureSchema, seedIfEmpty, seedAll, listTenants } from "./_lib/repository.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!hasDb()) return res.status(503).json({ error: "database_not_configured" });

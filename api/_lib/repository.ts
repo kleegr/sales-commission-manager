@@ -19,9 +19,9 @@
 // this phase (see SECURITY in README for what real auth still needs to add).
 // ============================================================================
 
-import { query, withTransaction, type PoolClient } from "./db";
-import { SCHEMA_SQL, TABLES_CHILD_FIRST } from "./schema";
-import { buildDemoData } from "../../src/lib/demo-data";
+import { query, withTransaction, type PoolClient } from "./db.js";
+import { SCHEMA_SQL, TABLES_CHILD_FIRST } from "./schema.js";
+import { buildDemoData } from "../../src/lib/demo-data.js";
 import {
   SCHEMA_VERSION,
   type AppData,
@@ -32,7 +32,7 @@ import {
   type Payout,
   type Rule,
   type Salesperson,
-} from "../../src/types";
+} from "../../src/types/index.js";
 
 const nowISO = () => new Date().toISOString();
 

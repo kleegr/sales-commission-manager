@@ -27,9 +27,10 @@ import {
 } from "../components/ui";
 import { ConfirmModal } from "../components/ui/Modal";
 import { downloadJSON } from "../lib/export";
+import { saveSettings } from "../lib/resource-client";
 
 export default function Settings() {
-  const { data, dispatch, storeName } = useApp();
+  const { data, dispatch, storeName, backend } = useApp();
   const fileRef = useRef<HTMLInputElement>(null);
   const [resetOpen, setResetOpen] = useState(false);
   const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -37,6 +38,32 @@ export default function Settings() {
   const a = data.settings.assumptions;
   const setAssumptions = (patch: Partial<ProjectionAssumptions>) =>
     dispatch({ type: "SET_ASSUMPTIONS", assumptions: { ...a, ...patch } });
+
+  // Mirror settings to the real per-resource endpoint (PUT /api/settings) on a
+  // short debounce whenever they change on the Neon backend. The reducer keeps
+  // the UI instant (sidebar, theme); this writes the authoritative row through
+  // the new API. The legacy snapshot still persists settings too and acts as a
+  // fallback if the API call fails — it will be retired once every resource is
+  // on its own endpoint.
+  const settings = data.settings;
+  const firstSettingsRun = useRef(true);
+  useEffect(() => {
+    if (backend !== "neon") return; // local-only mode: the snapshot handles it
+    if (firstSettingsRun.current) {
+      firstSettingsRun.current = false;
+      return; // don't write on initial hydrate
+    }
+    const t = setTimeout(() => {
+      void saveSettings({
+        companyName: settings.companyName,
+        theme: settings.theme,
+        assumptions: settings.assumptions,
+      }).catch(() => {
+        /* snapshot already persisted as fallback */
+      });
+    }, 600);
+    return () => clearTimeout(t);
+  }, [settings, backend]);
 
   function exportJSON() {
     downloadJSON("commission-data.json", data);

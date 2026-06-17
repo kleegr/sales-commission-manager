@@ -62,4 +62,44 @@ ALTER TABLE payout_batches ADD COLUMN IF NOT EXISTS approved_by_user_id TEXT;
 ALTER TABLE payout_batches ADD COLUMN IF NOT EXISTS paid_by_user_id     TEXT;
 ALTER TABLE payout_batches ADD COLUMN IF NOT EXISTS rejected_at         TEXT;
 ALTER TABLE payout_batches ADD COLUMN IF NOT EXISTS canceled_at         TEXT;
+
+-- 0005 — proposals & contracts foundation -----------------------------------
+-- Tenant-scoped document templates + per-client proposals/contracts. These are
+-- SERVER-OWNED (managed by /api/documents) and are intentionally NOT part of
+-- the snapshot replace-all in writeState, so an admin save never wipes them.
+-- e-signature is out of scope for this phase; the status column tracks the lifecycle.
+CREATE TABLE IF NOT EXISTS document_templates (
+  id           TEXT PRIMARY KEY,
+  tenant_id    TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  kind         TEXT NOT NULL DEFAULT 'proposal',   -- proposal | contract
+  name         TEXT NOT NULL DEFAULT '',
+  body         TEXT NOT NULL DEFAULT '',           -- supports {{company}} {{contact}} {{setup_fee}} {{monthly}} tokens
+  is_default   BOOLEAN NOT NULL DEFAULT false,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_doc_templates_tenant ON document_templates(tenant_id, kind);
+
+CREATE TABLE IF NOT EXISTS documents (
+  id            TEXT PRIMARY KEY,
+  tenant_id     TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  kind          TEXT NOT NULL DEFAULT 'proposal',  -- proposal | contract
+  title         TEXT NOT NULL DEFAULT '',
+  client_id     TEXT,
+  salesperson_id TEXT,
+  template_id   TEXT,
+  body          TEXT NOT NULL DEFAULT '',
+  status        TEXT NOT NULL DEFAULT 'draft',     -- draft | sent | viewed | signed | canceled
+  amount        DOUBLE PRECISION NOT NULL DEFAULT 0,
+  created_by_user_id TEXT,
+  sent_at       TIMESTAMPTZ,
+  viewed_at     TIMESTAMPTZ,
+  signed_at     TIMESTAMPTZ,
+  canceled_at   TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_documents_tenant      ON documents(tenant_id, kind);
+CREATE INDEX IF NOT EXISTS idx_documents_tenant_sp   ON documents(tenant_id, salesperson_id);
+CREATE INDEX IF NOT EXISTS idx_documents_tenant_cli  ON documents(tenant_id, client_id);
 `;

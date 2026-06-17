@@ -28,7 +28,12 @@ import type {
   Salesperson,
 } from "../types";
 import { SCHEMA_VERSION } from "../types";
-import { store } from "../lib/storage/localStorage";
+import {
+  store,
+  getBackendInfo,
+  setActiveTenant,
+  type Backend,
+} from "../lib/storage/apiStore";
 import { buildDemoData } from "../lib/demo-data";
 import {
   recomputePaymentCommissions,
@@ -272,6 +277,9 @@ interface Ctx {
   data: AppData;
   dispatch: React.Dispatch<Action>;
   storeName: string;
+  backend: Backend;
+  tenant: string;
+  switchTenant: (slug: string) => Promise<void>;
 }
 
 const AppCtx = createContext<Ctx | null>(null);
@@ -341,10 +349,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [data.settings.theme]);
 
-  const value = useMemo(
-    () => ({ data, dispatch, storeName: store.name }),
-    [data],
-  );
+  // Switch the active GoHighLevel sub-account / tenant: repoint the store and
+  // re-hydrate the whole dataset from that tenant's isolated Postgres rows.
+  async function switchTenant(slug: string): Promise<void> {
+    setActiveTenant(slug);
+    hydrated.current = false;
+    const loaded = await store.load();
+    if (loaded) {
+      dispatch({ type: "HYDRATE", data: loaded });
+    } else {
+      const demo = buildDemoData();
+      dispatch({ type: "HYDRATE", data: demo });
+      await store.save(demo);
+    }
+    hydrated.current = true;
+  }
+
+  const value = useMemo(() => {
+    const info = getBackendInfo();
+    return {
+      data,
+      dispatch,
+      storeName: info.label,
+      backend: info.backend,
+      tenant: info.tenant,
+      switchTenant,
+    };
+  }, [data]);
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>;
 }

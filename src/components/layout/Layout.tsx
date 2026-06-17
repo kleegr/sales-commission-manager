@@ -18,6 +18,8 @@ import {
   Menu,
   X,
   Coins,
+  Database,
+  HardDrive,
 } from "lucide-react";
 import { classNames } from "../../lib/format";
 import { useApp } from "../../store/AppContext";
@@ -146,6 +148,42 @@ function Brand() {
   );
 }
 
+function DataSourceBadge() {
+  const { backend, tenant } = useApp();
+  const onNeon = backend === "neon";
+  const detecting = backend === "unknown";
+  return (
+    <div className="flex items-center gap-2">
+      <span
+        className={classNames(
+          "flex h-6 w-6 flex-none items-center justify-center rounded-md",
+          onNeon
+            ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400"
+            : "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400",
+        )}
+      >
+        {onNeon ? (
+          <Database className="h-3.5 w-3.5" />
+        ) : (
+          <HardDrive className="h-3.5 w-3.5" />
+        )}
+      </span>
+      <div className="min-w-0 leading-tight">
+        <p className="truncate text-[11px] font-medium text-slate-600 dark:text-slate-300">
+          {detecting
+            ? "Detecting data source…"
+            : onNeon
+              ? "Neon Postgres"
+              : "Browser storage"}
+        </p>
+        <p className="truncate text-[10px] text-slate-400">
+          {onNeon ? `tenant: ${tenant}` : "local fallback"}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function Layout({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
@@ -156,8 +194,8 @@ export function Layout({ children }: { children: ReactNode }) {
       <aside className="hidden w-64 flex-none flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 lg:flex">
         <Brand />
         <NavContents />
-        <div className="border-t border-slate-200 px-4 py-3 text-[11px] text-slate-400 dark:border-slate-800">
-          Prototype · browser storage only
+        <div className="border-t border-slate-200 px-4 py-3 dark:border-slate-800">
+          <DataSourceBadge />
         </div>
       </aside>
 

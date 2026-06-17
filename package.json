@@ -4,22 +4,32 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Standalone prototype for a Sales / Affiliate / Partner Commission Management system.",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "tsx src/lib/commission-engine.test.ts"
+    "test": "tsx src/lib/commission-engine.test.ts",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:seed": "tsx scripts/seed.ts"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^0.10.4",
     "lucide-react": "^0.408.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.2",
-    "recharts": "^2.12.7"
+    "recharts": "^2.12.7",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@types/node": "^20.14.0",
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
+    "@types/ws": "^8.5.12",
+    "@vercel/node": "^3.2.0",
     "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.47",

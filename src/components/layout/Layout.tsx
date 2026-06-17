@@ -4,14 +4,13 @@ import {
   LayoutDashboard,
   Users,
   ScrollText,
-  Layers,
   Building2,
   CreditCard,
   BookOpenText,
   Wallet,
   UserRound,
-  UserPlus,
   Presentation,
+  BarChart3,
   Settings as SettingsIcon,
   Moon,
   Sun,
@@ -20,9 +19,12 @@ import {
   Coins,
   Database,
   HardDrive,
+  LogOut,
 } from "lucide-react";
 import { classNames } from "../../lib/format";
 import { useApp } from "../../store/AppContext";
+import { useAuth } from "../../store/AuthContext";
+import { canAccess, homePath, ROLE_LABEL, type Role } from "../../lib/roles";
 
 interface NavItem {
   to: string;
@@ -34,9 +36,7 @@ interface NavItem {
 const SECTIONS: { heading: string; items: NavItem[] }[] = [
   {
     heading: "Overview",
-    items: [
-      { to: "/", label: "Dashboard", icon: <LayoutDashboard className="h-4 w-4" />, end: true },
-    ],
+    items: [{ to: "/", label: "Dashboard", icon: <LayoutDashboard className="h-4 w-4" />, end: true }],
   },
   {
     heading: "Manage",
@@ -52,21 +52,19 @@ const SECTIONS: { heading: string; items: NavItem[] }[] = [
     items: [
       { to: "/ledger", label: "Commission Ledger", icon: <BookOpenText className="h-4 w-4" /> },
       { to: "/payouts", label: "Payouts", icon: <Wallet className="h-4 w-4" /> },
+      { to: "/reports", label: "Reports", icon: <BarChart3 className="h-4 w-4" /> },
     ],
   },
   {
-    heading: "Portals",
+    heading: "Portal",
     items: [
-      { to: "/portal", label: "Salesperson View", icon: <UserRound className="h-4 w-4" /> },
-      { to: "/signup", label: "Affiliate Signup", icon: <UserPlus className="h-4 w-4" /> },
+      { to: "/portal", label: "My Portal", icon: <UserRound className="h-4 w-4" /> },
       { to: "/present", label: "Recruiting View", icon: <Presentation className="h-4 w-4" /> },
     ],
   },
   {
     heading: "System",
-    items: [
-      { to: "/settings", label: "Settings & Data", icon: <SettingsIcon className="h-4 w-4" /> },
-    ],
+    items: [{ to: "/settings", label: "Settings & Data", icon: <SettingsIcon className="h-4 w-4" /> }],
   },
 ];
 
@@ -87,13 +85,21 @@ function ThemeToggle() {
 
 function NavContents({ onNavigate }: { onNavigate?: () => void }) {
   const { data } = useApp();
+  const { user } = useAuth();
+  const role = (user?.role ?? "salesperson") as Role;
+
   const pendingAffiliates = data.salespeople.filter(
     (s) => s.source === "affiliate_portal" && s.approvalStatus === "pending",
   ).length;
 
+  const sections = SECTIONS.map((section) => ({
+    ...section,
+    items: section.items.filter((item) => canAccess(role, item.to)),
+  })).filter((section) => section.items.length > 0);
+
   return (
     <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-4">
-      {SECTIONS.map((section) => (
+      {sections.map((section) => (
         <div key={section.heading}>
           <p className="mb-1.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
             {section.heading}
@@ -148,8 +154,38 @@ function Brand() {
   );
 }
 
+function UserCard() {
+  const { user, logout } = useAuth();
+  if (!user) return null;
+  const initials = user.name
+    .split(" ")
+    .map((p) => p[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+  return (
+    <div className="flex items-center gap-2.5">
+      <span className="flex h-8 w-8 flex-none items-center justify-center rounded-full bg-brand-100 text-xs font-semibold text-brand-700 dark:bg-brand-500/15 dark:text-brand-300">
+        {initials}
+      </span>
+      <div className="min-w-0 flex-1 leading-tight">
+        <p className="truncate text-[12px] font-medium text-slate-700 dark:text-slate-200">{user.name}</p>
+        <p className="truncate text-[10px] text-slate-400">{ROLE_LABEL[user.role]}</p>
+      </div>
+      <button
+        onClick={() => void logout()}
+        title="Sign out"
+        aria-label="Sign out"
+        className="inline-flex h-8 w-8 flex-none items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-rose-600 dark:hover:bg-slate-800"
+      >
+        <LogOut className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
+
 function DataSourceBadge() {
-  const { backend, tenant } = useApp();
+  const { backend, tenant, readOnly } = useApp();
   const onNeon = backend === "neon";
   const detecting = backend === "unknown";
   return (
@@ -162,22 +198,14 @@ function DataSourceBadge() {
             : "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400",
         )}
       >
-        {onNeon ? (
-          <Database className="h-3.5 w-3.5" />
-        ) : (
-          <HardDrive className="h-3.5 w-3.5" />
-        )}
+        {onNeon ? <Database className="h-3.5 w-3.5" /> : <HardDrive className="h-3.5 w-3.5" />}
       </span>
       <div className="min-w-0 leading-tight">
         <p className="truncate text-[11px] font-medium text-slate-600 dark:text-slate-300">
-          {detecting
-            ? "Detecting data source…"
-            : onNeon
-              ? "Neon Postgres"
-              : "Browser storage"}
+          {detecting ? "Detecting…" : onNeon ? "Neon Postgres" : "Browser storage"}
         </p>
         <p className="truncate text-[10px] text-slate-400">
-          {onNeon ? `tenant: ${tenant}` : "local fallback"}
+          {onNeon ? `${tenant}${readOnly ? " · read-only" : ""}` : "local fallback"}
         </p>
       </div>
     </div>
@@ -194,7 +222,8 @@ export function Layout({ children }: { children: ReactNode }) {
       <aside className="hidden w-64 flex-none flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 lg:flex">
         <Brand />
         <NavContents />
-        <div className="border-t border-slate-200 px-4 py-3 dark:border-slate-800">
+        <div className="space-y-3 border-t border-slate-200 px-4 py-3 dark:border-slate-800">
+          <UserCard />
           <DataSourceBadge />
         </div>
       </aside>
@@ -202,10 +231,7 @@ export function Layout({ children }: { children: ReactNode }) {
       {/* Mobile drawer */}
       {mobileOpen && (
         <div className="fixed inset-0 z-40 lg:hidden">
-          <div
-            className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm"
-            onClick={() => setMobileOpen(false)}
-          />
+          <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
           <aside className="absolute inset-y-0 left-0 flex w-72 flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
             <div className="flex items-center justify-between">
               <Brand />
@@ -217,6 +243,10 @@ export function Layout({ children }: { children: ReactNode }) {
               </button>
             </div>
             <NavContents onNavigate={() => setMobileOpen(false)} />
+            <div className="space-y-3 border-t border-slate-200 px-4 py-3 dark:border-slate-800">
+              <UserCard />
+              <DataSourceBadge />
+            </div>
           </aside>
         </div>
       )}
@@ -235,10 +265,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <ThemeToggle />
         </header>
 
-        <main
-          key={location.pathname}
-          className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 lg:px-8 lg:py-8"
-        >
+        <main key={location.pathname} className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 lg:px-8 lg:py-8">
           {children}
         </main>
       </div>

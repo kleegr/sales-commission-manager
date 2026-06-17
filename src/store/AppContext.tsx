@@ -31,9 +31,9 @@ import { SCHEMA_VERSION } from "../types";
 import {
   store,
   getBackendInfo,
-  setActiveTenant,
   type Backend,
 } from "../lib/storage/apiStore";
+import { useAuth } from "./AuthContext";
 import { buildDemoData } from "../lib/demo-data";
 import {
   recomputePaymentCommissions,
@@ -279,7 +279,9 @@ interface Ctx {
   storeName: string;
   backend: Backend;
   tenant: string;
-  switchTenant: (slug: string) => Promise<void>;
+  role: string;
+  readOnly: boolean;
+  reload: () => Promise<void>;
 }
 
 const AppCtx = createContext<Ctx | null>(null);
@@ -349,22 +351,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [data.settings.theme]);
 
-  // Switch the active GoHighLevel sub-account / tenant: repoint the store and
-  // re-hydrate the whole dataset from that tenant's isolated Postgres rows.
-  async function switchTenant(slug: string): Promise<void> {
-    setActiveTenant(slug);
-    hydrated.current = false;
+  // Switching tenants is no longer a client action: the tenant is fixed by the
+  // authenticated session. (To act as another tenant, log in as a user there.)
+
+  // Re-pull the authoritative dataset from the server. Used after server-side
+  // workflow actions (e.g. payout transitions) that change rows directly.
+  async function reload(): Promise<void> {
     const loaded = await store.load();
-    if (loaded) {
-      dispatch({ type: "HYDRATE", data: loaded });
-    } else {
-      const demo = buildDemoData();
-      dispatch({ type: "HYDRATE", data: demo });
-      await store.save(demo);
-    }
-    hydrated.current = true;
+    if (loaded) dispatch({ type: "HYDRATE", data: loaded });
   }
 
+  const { user } = useAuth();
   const value = useMemo(() => {
     const info = getBackendInfo();
     return {
@@ -372,10 +369,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       dispatch,
       storeName: info.label,
       backend: info.backend,
-      tenant: info.tenant,
-      switchTenant,
+      tenant: user?.tenantName ?? user?.tenantSlug ?? "",
+      role: user?.role ?? "",
+      readOnly: info.readOnly,
+      reload,
     };
-  }, [data]);
+  }, [data, user]);
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>;
 }

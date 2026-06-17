@@ -161,6 +161,7 @@ const payoutTone: Record<PayoutStatus, Tone> = {
   approved: "indigo",
   paid: "green",
   rejected: "rose",
+  canceled: "slate",
 };
 
 export function PayoutBadge({ status }: { status: PayoutStatus }) {

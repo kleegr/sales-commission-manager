@@ -1,44 +1,58 @@
-// /api/state?tenant=<slug>
-//   GET -> the tenant's full AppData snapshot (assembled from normalized tables)
-//   PUT -> persist a full AppData snapshot for the tenant (transactional replace)
+// /api/state
+//   GET -> the CURRENT USER's AppData, scoped to their tenant AND role.
+//   PUT -> persist a full AppData snapshot (owner/admin only) for their tenant.
 //
-// This is the adapter that lets the existing localStorage-shaped front-end run
-// on Postgres without touching the UI or the commission engine: the client's
-// ApiStore simply GETs and PUTs AppData here, and this function does the
-// relational read/write, tenant-scoped.
+// SECURITY: the tenant is taken from the authenticated session, never from the
+// client. A query param `?tenant=` is accepted only if it matches the session
+// tenant; any mismatch is a 403. Non-admin roles receive a server-filtered
+// dataset (their own / their team's rows only) and may NOT write the snapshot
+// (which is a replace-all and would otherwise wipe sibling data). Their write
+// actions go through dedicated per-resource endpoints (e.g. /api/payouts).
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { hasDb } from "./_lib/db.js";
-import { ensureSchema, getTenantBySlug, readState, writeState, seedIfEmpty } from "./_lib/repository.js";
+import { ensureSchema, readScopedState, writeState, seedIfEmpty } from "./_lib/repository.js";
+import { getSessionUser, isAdminRole } from "./_lib/auth.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (!hasDb()) {
-    return res.status(503).json({ error: "database_not_configured" });
-  }
-
-  const slug = String(req.query.tenant ?? "demo").trim() || "demo";
+  if (!hasDb()) return res.status(503).json({ error: "database_not_configured" });
 
   try {
     await ensureSchema();
-    await seedIfEmpty(); // guarantees the default tenants exist on a cold DB
+    await seedIfEmpty();
 
-    const tenant = await getTenantBySlug(slug);
-    if (!tenant) {
-      return res.status(404).json({ error: "tenant_not_found", slug });
+    const user = await getSessionUser(req);
+    if (!user) return res.status(401).json({ error: "unauthorized" });
+
+    // If a tenant is named in the query, it must match the session tenant.
+    const requested = req.query.tenant ? String(req.query.tenant).trim() : null;
+    if (requested && requested !== user.tenantSlug) {
+      return res.status(403).json({ error: "tenant_forbidden" });
     }
 
     if (req.method === "GET") {
-      const data = await readState(tenant.id);
-      return res.status(200).json({ tenant: { slug: tenant.slug, name: tenant.name }, data });
+      const data = await readScopedState(user.tenantId, {
+        userId: user.id,
+        role: user.role,
+        salespersonId: user.salespersonId,
+      });
+      return res.status(200).json({
+        tenant: { slug: user.tenantSlug, name: user.tenantName },
+        role: user.role,
+        data,
+      });
     }
 
     if (req.method === "PUT" || req.method === "POST") {
+      if (!isAdminRole(user.role)) {
+        return res.status(403).json({ error: "forbidden", hint: "snapshot writes are owner/admin only" });
+      }
       const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body ?? {};
       const data = body.data ?? body;
       if (!data || !Array.isArray(data.salespeople)) {
-        return res.status(400).json({ error: "invalid_payload", hint: "expected an AppData object or { data: AppData }" });
+        return res.status(400).json({ error: "invalid_payload" });
       }
-      await writeState(tenant.id, data);
-      return res.status(200).json({ ok: true, tenant: tenant.slug });
+      await writeState(user.tenantId, data);
+      return res.status(200).json({ ok: true, tenant: user.tenantSlug });
     }
 
     res.setHeader("Allow", "GET, PUT");

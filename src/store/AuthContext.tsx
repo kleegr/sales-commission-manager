@@ -22,21 +22,33 @@ export interface AuthUser {
 interface AuthCtx {
   user: AuthUser | null;
   loading: boolean;
+  /** True when the server is in review/demo mode (login not required). */
+  demo: boolean;
   login: (email: string, password: string, tenant?: string) => Promise<{ ok: boolean; error?: string }>;
   logout: () => Promise<void>;
+  /** Re-fetch the current user from the server. */
+  refresh: () => Promise<void>;
+  /** Review mode: switch the viewed tenant + role, then reload the session. */
+  setDemo: (tenantSlug: string, role: Role) => Promise<void>;
 }
 
 const Ctx = createContext<AuthCtx | null>(null);
 
+function setDemoCookie(name: string, value: string) {
+  document.cookie = `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=2592000; SameSite=Lax`;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [demo, setDemoFlag] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
       const res = await fetch("/api/auth/me", { headers: { accept: "application/json" } });
+      const body = await res.json().catch(() => ({}));
+      setDemoFlag(!!body?.demo);
       if (res.ok) {
-        const body = await res.json();
         setUser(body.user as AuthUser);
       } else {
         setUser(null);
@@ -51,6 +63,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const setDemo = useCallback<AuthCtx["setDemo"]>(
+    async (tenantSlug, role) => {
+      setDemoCookie("scm_demo_tenant", tenantSlug);
+      setDemoCookie("scm_demo_role", role);
+      await refresh();
+    },
+    [refresh],
+  );
 
   const login = useCallback<AuthCtx["login"]>(async (email, password, tenant) => {
     try {
@@ -79,7 +100,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
-  return <Ctx.Provider value={{ user, loading, login, logout }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ user, loading, demo, login, logout, refresh, setDemo }}>{children}</Ctx.Provider>;
 }
 
 export function useAuth(): AuthCtx {

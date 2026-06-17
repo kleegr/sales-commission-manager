@@ -37,6 +37,7 @@ export function homePath(role: Role): string {
 // parent (handled in canAccess by prefix match).
 const ACCESS: Array<{ path: string; roles: Role[] }> = [
   { path: "/", roles: ["owner", "admin", "sales_manager"] },
+  { path: "/agency", roles: ["owner", "admin"] },
   { path: "/people", roles: ["owner", "admin"] },
   { path: "/plans", roles: ["owner", "admin"] },
   { path: "/clients", roles: ["owner", "admin", "sales_manager"] },
@@ -44,6 +45,7 @@ const ACCESS: Array<{ path: string; roles: Role[] }> = [
   { path: "/ledger", roles: ["owner", "admin", "sales_manager"] },
   { path: "/payouts", roles: ["owner", "admin", "sales_manager", "salesperson", "affiliate", "partner"] },
   { path: "/reports", roles: ["owner", "admin", "sales_manager"] },
+  { path: "/documents", roles: ["owner", "admin", "sales_manager", "salesperson", "affiliate", "partner"] },
   { path: "/portal", roles: ["salesperson", "affiliate", "partner"] },
   { path: "/present", roles: ["owner", "admin"] },
   { path: "/settings", roles: ["owner", "admin"] },

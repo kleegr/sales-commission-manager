@@ -25,6 +25,8 @@ import { classNames } from "../../lib/format";
 import { useApp } from "../../store/AppContext";
 import { useAuth } from "../../store/AuthContext";
 import { canAccess, homePath, ROLE_LABEL, type Role } from "../../lib/roles";
+import { DemoBar } from "./DemoBar";
+import { Network, FileSignature } from "lucide-react";
 
 interface NavItem {
   to: string;
@@ -36,7 +38,10 @@ interface NavItem {
 const SECTIONS: { heading: string; items: NavItem[] }[] = [
   {
     heading: "Overview",
-    items: [{ to: "/", label: "Dashboard", icon: <LayoutDashboard className="h-4 w-4" />, end: true }],
+    items: [
+      { to: "/", label: "Dashboard", icon: <LayoutDashboard className="h-4 w-4" />, end: true },
+      { to: "/agency", label: "Agency (all sub-accounts)", icon: <Network className="h-4 w-4" /> },
+    ],
   },
   {
     heading: "Manage",
@@ -53,6 +58,12 @@ const SECTIONS: { heading: string; items: NavItem[] }[] = [
       { to: "/ledger", label: "Commission Ledger", icon: <BookOpenText className="h-4 w-4" /> },
       { to: "/payouts", label: "Payouts", icon: <Wallet className="h-4 w-4" /> },
       { to: "/reports", label: "Reports", icon: <BarChart3 className="h-4 w-4" /> },
+    ],
+  },
+  {
+    heading: "Documents",
+    items: [
+      { to: "/documents", label: "Proposals & Contracts", icon: <FileSignature className="h-4 w-4" /> },
     ],
   },
   {
@@ -155,7 +166,7 @@ function Brand() {
 }
 
 function UserCard() {
-  const { user, logout } = useAuth();
+  const { user, logout, demo } = useAuth();
   if (!user) return null;
   const initials = user.name
     .split(" ")
@@ -170,16 +181,21 @@ function UserCard() {
       </span>
       <div className="min-w-0 flex-1 leading-tight">
         <p className="truncate text-[12px] font-medium text-slate-700 dark:text-slate-200">{user.name}</p>
-        <p className="truncate text-[10px] text-slate-400">{ROLE_LABEL[user.role]}</p>
+        <p className="truncate text-[10px] text-slate-400">
+          {ROLE_LABEL[user.role]}
+          {demo ? " · review mode" : ""}
+        </p>
       </div>
-      <button
-        onClick={() => void logout()}
-        title="Sign out"
-        aria-label="Sign out"
-        className="inline-flex h-8 w-8 flex-none items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-rose-600 dark:hover:bg-slate-800"
-      >
-        <LogOut className="h-4 w-4" />
-      </button>
+      {!demo && (
+        <button
+          onClick={() => void logout()}
+          title="Sign out"
+          aria-label="Sign out"
+          className="inline-flex h-8 w-8 flex-none items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-rose-600 dark:hover:bg-slate-800"
+        >
+          <LogOut className="h-4 w-4" />
+        </button>
+      )}
     </div>
   );
 }
@@ -217,57 +233,60 @@ export function Layout({ children }: { children: ReactNode }) {
   const location = useLocation();
 
   return (
-    <div className="min-h-screen lg:flex">
-      {/* Desktop sidebar */}
-      <aside className="hidden w-64 flex-none flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 lg:flex">
-        <Brand />
-        <NavContents />
-        <div className="space-y-3 border-t border-slate-200 px-4 py-3 dark:border-slate-800">
-          <UserCard />
-          <DataSourceBadge />
+    <div className="flex min-h-screen flex-col">
+      <DemoBar />
+      <div className="flex min-h-0 flex-1 lg:flex">
+        {/* Desktop sidebar */}
+        <aside className="hidden w-64 flex-none flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 lg:flex">
+          <Brand />
+          <NavContents />
+          <div className="space-y-3 border-t border-slate-200 px-4 py-3 dark:border-slate-800">
+            <UserCard />
+            <DataSourceBadge />
+          </div>
+        </aside>
+
+        {/* Mobile drawer */}
+        {mobileOpen && (
+          <div className="fixed inset-0 z-40 lg:hidden">
+            <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
+            <aside className="absolute inset-y-0 left-0 flex w-72 flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex items-center justify-between">
+                <Brand />
+                <button
+                  onClick={() => setMobileOpen(false)}
+                  className="mr-3 inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <NavContents onNavigate={() => setMobileOpen(false)} />
+              <div className="space-y-3 border-t border-slate-200 px-4 py-3 dark:border-slate-800">
+                <UserCard />
+                <DataSourceBadge />
+              </div>
+            </aside>
+          </div>
+        )}
+
+        {/* Main column */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header className="z-30 flex items-center gap-3 border-b border-slate-200 bg-white/80 px-4 py-3 backdrop-blur dark:border-slate-800 dark:bg-slate-900/80 lg:px-8">
+            <button
+              onClick={() => setMobileOpen(true)}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 lg:hidden"
+              aria-label="Open menu"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+            <div className="flex-1" />
+            <ThemeToggle />
+          </header>
+
+          <main key={location.pathname} className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 lg:px-8 lg:py-8">
+            {children}
+          </main>
         </div>
-      </aside>
-
-      {/* Mobile drawer */}
-      {mobileOpen && (
-        <div className="fixed inset-0 z-40 lg:hidden">
-          <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
-          <aside className="absolute inset-y-0 left-0 flex w-72 flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-            <div className="flex items-center justify-between">
-              <Brand />
-              <button
-                onClick={() => setMobileOpen(false)}
-                className="mr-3 inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            <NavContents onNavigate={() => setMobileOpen(false)} />
-            <div className="space-y-3 border-t border-slate-200 px-4 py-3 dark:border-slate-800">
-              <UserCard />
-              <DataSourceBadge />
-            </div>
-          </aside>
-        </div>
-      )}
-
-      {/* Main column */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex items-center gap-3 border-b border-slate-200 bg-white/80 px-4 py-3 backdrop-blur dark:border-slate-800 dark:bg-slate-900/80 lg:px-8">
-          <button
-            onClick={() => setMobileOpen(true)}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 lg:hidden"
-            aria-label="Open menu"
-          >
-            <Menu className="h-5 w-5" />
-          </button>
-          <div className="flex-1" />
-          <ThemeToggle />
-        </header>
-
-        <main key={location.pathname} className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 lg:px-8 lg:py-8">
-          {children}
-        </main>
       </div>
     </div>
   );

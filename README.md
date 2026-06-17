@@ -17,6 +17,35 @@ earnings change with closings and churn.
 > locally. The schema is **GoHighLevel-ready** for a future marketplace /
 > sub-account integration.
 
+## Demo / Review mode
+
+The app ships with a **Review Mode** so it can be explored without credentials.
+When enabled, a sticky top bar lets you switch **tenant** (Demo / Acme) and
+**role** on the fly and see exactly what each user sees:
+
+| Bar button          | Role           | Lands on        |
+| ------------------- | -------------- | --------------- |
+| Agency Owner        | `owner`        | `/agency`       |
+| Sub-account Admin   | `admin`        | `/` (workspace) |
+| Sales Manager       | `sales_manager`| `/`             |
+| Salesperson         | `salesperson`  | `/portal`       |
+| Affiliate / Partner | `affiliate`    | `/portal`       |
+
+**How it works (and stays safe):**
+
+- Demo mode is controlled by the `DEMO_MODE` env var and is **ON by default**.
+  Set `DEMO_MODE=off` (or `0`/`false`/`disabled`/`no`) to require real login.
+- The bypass only ever resolves to an **existing seeded demo user** for the
+  chosen tenant + role — it never invents an identity. A real password session
+  (cookie `scm_session`) always takes precedence over the demo bypass.
+- The selected tenant/role is stored in the cookies `scm_demo_tenant` /
+  `scm_demo_role`; tenant + role still come from the server, and every query is
+  filtered by `tenant_id`, so tenants remain fully data-isolated in demo mode.
+
+> ⚠️ **Security:** `DEMO_MODE` must be turned **off** before the app holds any
+> real customer data. While it is on, anyone with the URL can view any seeded
+> demo tenant without a password.
+
 ## Run it
 
 ### Frontend only (uses localStorage)

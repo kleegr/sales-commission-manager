@@ -14,6 +14,9 @@ import Ledger from "./pages/Ledger";
 import Payouts from "./pages/Payouts";
 import Reports from "./pages/Reports";
 import SalespersonPortal from "./pages/SalespersonPortal";
+import AffiliatePortal from "./pages/AffiliatePortal";
+import Agency from "./pages/Agency";
+import Documents from "./pages/Documents";
 import Presentation from "./pages/Presentation";
 import Settings from "./pages/Settings";
 
@@ -28,6 +31,14 @@ function Guard({ children }: { children: JSX.Element }) {
   return children;
 }
 
+/** The /portal route shows the affiliate/partner portal or the salesperson portal. */
+function Portal() {
+  const { user } = useAuth();
+  const role = (user?.role ?? "salesperson") as Role;
+  if (role === "affiliate" || role === "partner") return <AffiliatePortal />;
+  return <SalespersonPortal />;
+}
+
 export default function App() {
   const { user } = useAuth();
   const role = (user?.role ?? "salesperson") as Role;
@@ -36,6 +47,7 @@ export default function App() {
     <Layout>
       <Routes>
         <Route path="/" element={<Guard><Dashboard /></Guard>} />
+        <Route path="/agency" element={<Guard><Agency /></Guard>} />
         <Route path="/people" element={<Guard><People /></Guard>} />
         <Route path="/people/:id" element={<Guard><SalespersonDetail /></Guard>} />
         <Route path="/plans" element={<Guard><Plans /></Guard>} />
@@ -47,7 +59,8 @@ export default function App() {
         <Route path="/ledger" element={<Guard><Ledger /></Guard>} />
         <Route path="/payouts" element={<Guard><Payouts /></Guard>} />
         <Route path="/reports" element={<Guard><Reports /></Guard>} />
-        <Route path="/portal" element={<Guard><SalespersonPortal /></Guard>} />
+        <Route path="/documents" element={<Guard><Documents /></Guard>} />
+        <Route path="/portal" element={<Guard><Portal /></Guard>} />
         <Route path="/present" element={<Guard><Presentation /></Guard>} />
         <Route path="/settings" element={<Guard><Settings /></Guard>} />
         <Route path="*" element={<Navigate to={homePath(role)} replace />} />

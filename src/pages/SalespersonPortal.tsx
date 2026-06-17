@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { UserRound, Building2 } from "lucide-react";
+import { UserRound, Building2, Plus, Loader2 } from "lucide-react";
 import { useApp } from "../store/AppContext";
 import {
   PageHeader,
   Card,
+  Button,
   EmptyState,
   StatCard,
   CommissionBadge,
@@ -12,6 +13,9 @@ import {
   SectionTitle,
   Select,
   Field,
+  Input,
+  Textarea,
+  NumberField,
   Table,
   THead,
   TBody,
@@ -19,15 +23,61 @@ import {
   TH,
   TD,
 } from "../components/ui";
+import { Modal } from "../components/ui/Modal";
 import { MoneyBarChart } from "../components/charts/Charts";
 import { fullLedger, displayStatus, clientLabel } from "../lib/ledger";
 import { commissionTotals, monthlySeries } from "../lib/analytics";
 import { formatCurrency, formatDate } from "../lib/format";
 
+interface LeadDraft {
+  companyName: string;
+  contactName: string;
+  email: string;
+  phone: string;
+  setupFee: number;
+  monthlySubscription: number;
+  notes: string;
+}
+function emptyLead(): LeadDraft {
+  return { companyName: "", contactName: "", email: "", phone: "", setupFee: 0, monthlySubscription: 0, notes: "" };
+}
+
 export default function SalespersonPortal() {
-  const { data } = useApp();
+  const { data, reload } = useApp();
   const active = data.salespeople.filter((s) => s.approvalStatus !== "rejected");
   const [spId, setSpId] = useState<string>("");
+
+  const [leadOpen, setLeadOpen] = useState(false);
+  const [lead, setLead] = useState<LeadDraft>(emptyLead());
+  const [saving, setSaving] = useState(false);
+  const [leadError, setLeadError] = useState<string | null>(null);
+
+  async function submitLead() {
+    if (!lead.companyName.trim()) {
+      setLeadError("A company / client name is required.");
+      return;
+    }
+    setSaving(true);
+    setLeadError(null);
+    try {
+      const res = await fetch("/api/clients", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...lead, status: "active" }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `error_${res.status}`);
+      }
+      setLeadOpen(false);
+      setLead(emptyLead());
+      await reload();
+    } catch {
+      setLeadError("Couldn't add the lead. Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   useEffect(() => {
     if (!spId && active.length > 0) setSpId(active[0].id);
@@ -82,15 +132,20 @@ export default function SalespersonPortal() {
         title="Salesperson portal"
         subtitle="A simulated rep login — each person sees only their own clients and earnings"
         actions={
-          <Field className="w-64">
-            <Select value={spId} onChange={(e) => setSpId(e.target.value)}>
-              {active.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
+          <div className="flex items-center gap-2">
+            <Field className="w-56">
+              <Select value={spId} onChange={(e) => setSpId(e.target.value)}>
+                {active.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Button onClick={() => setLeadOpen(true)}>
+              <Plus className="h-4 w-4" /> Add lead
+            </Button>
+          </div>
         }
       />
 
@@ -250,6 +305,52 @@ export default function SalespersonPortal() {
           </Card>
         </>
       )}
+
+      <Modal
+        open={leadOpen}
+        onClose={() => setLeadOpen(false)}
+        title="Add a lead"
+        size="lg"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setLeadOpen(false)} disabled={saving}>Cancel</Button>
+            <Button onClick={() => void submitLead()} disabled={saving}>
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Save lead
+            </Button>
+          </>
+        }
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Company / client name" required className="sm:col-span-2">
+            <Input value={lead.companyName} onChange={(e) => setLead({ ...lead, companyName: e.target.value })} />
+          </Field>
+          <Field label="Contact name">
+            <Input value={lead.contactName} onChange={(e) => setLead({ ...lead, contactName: e.target.value })} />
+          </Field>
+          <Field label="Email">
+            <Input type="email" value={lead.email} onChange={(e) => setLead({ ...lead, email: e.target.value })} />
+          </Field>
+          <Field label="Phone">
+            <Input value={lead.phone} onChange={(e) => setLead({ ...lead, phone: e.target.value })} />
+          </Field>
+          <Field label="Status">
+            <Input value="Active" disabled />
+          </Field>
+          <Field label="Setup fee">
+            <NumberField value={lead.setupFee} onChange={(v) => setLead({ ...lead, setupFee: v })} prefix="$" min={0} />
+          </Field>
+          <Field label="Monthly subscription">
+            <NumberField value={lead.monthlySubscription} onChange={(v) => setLead({ ...lead, monthlySubscription: v })} prefix="$" min={0} />
+          </Field>
+          <Field label="Notes" className="sm:col-span-2">
+            <Textarea value={lead.notes} onChange={(e) => setLead({ ...lead, notes: e.target.value })} />
+          </Field>
+          {leadError && <p className="text-sm text-rose-600 sm:col-span-2">{leadError}</p>}
+          <p className="text-xs text-slate-400 sm:col-span-2">
+            New leads are saved to the app database and assigned to you automatically. (GoHighLevel sync comes later.)
+          </p>
+        </div>
+      </Modal>
     </div>
   );
 }

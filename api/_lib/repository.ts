@@ -460,39 +460,73 @@ function variantData(company: string, factor: number): AppData {
   return d;
 }
 
-/** If the database has no tenants yet, create the agency + two demo tenants. */
-export async function seedIfEmpty(): Promise<{ seeded: boolean; tenants: string[] }> {
-  const existing = await listTenants();
-  if (existing.length > 0) return { seeded: false, tenants: existing.map((t) => t.slug) };
-  await seedAll();
-  return { seeded: true, tenants: DEMO_TENANTS.map((t) => t.slug) };
-}
+type DemoTenant = (typeof DEMO_TENANTS)[number];
 
-/** (Re)create the agency, both demo tenants, owner users and their datasets. */
-export async function seedAll(): Promise<void> {
-  const ts = nowISO();
+/** Idempotently ensure the owning agency row exists. */
+async function ensureAgency(): Promise<void> {
   await query(
     `INSERT INTO agency_accounts (id, name, status, created_at, updated_at)
      VALUES ($1,$2,'active', now(), now()) ON CONFLICT (id) DO NOTHING`,
     [DEMO_AGENCY_ID, "Demo Agency (App Owner)"],
   );
+}
 
-  for (const [i, t] of DEMO_TENANTS.entries()) {
-    await query(
-      `INSERT INTO tenants (id, name, slug, ghl_location_id, agency_id, status, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,'active', now(), now())
-       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, slug = EXCLUDED.slug`,
-      [t.id, t.name, t.slug, t.ghl, DEMO_AGENCY_ID],
-    );
-    await query(
-      `INSERT INTO users (id, tenant_id, name, email, role, status, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,'owner','active', now(), now())
-       ON CONFLICT (tenant_id, email) DO NOTHING`,
-      [`user_owner_${t.slug}`, t.id, `${t.company} Owner`, `owner@${t.slug}.example.com`],
-    );
+/** True when a tenant already has business data (used to detect partial seeds). */
+async function tenantHasData(tenantId: string): Promise<boolean> {
+  const { rows } = await query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM salespeople WHERE tenant_id = $1`,
+    [tenantId],
+  );
+  return Number(rows[0]?.n ?? 0) > 0;
+}
 
-    const data = i === 0 ? withCompany(buildDemoData(), t.company) : variantData(t.company, 0.9);
-    await writeState(t.id, data);
+/** Create/refresh one demo tenant: its row, an owner user, and its dataset. */
+async function seedTenant(index: number, t: DemoTenant): Promise<void> {
+  await query(
+    `INSERT INTO tenants (id, name, slug, ghl_location_id, agency_id, status, created_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,'active', now(), now())
+     ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, slug = EXCLUDED.slug`,
+    [t.id, t.name, t.slug, t.ghl, DEMO_AGENCY_ID],
+  );
+  await query(
+    `INSERT INTO users (id, tenant_id, name, email, role, status, created_at, updated_at)
+     VALUES ($1,$2,$3,$4,'owner','active', now(), now())
+     ON CONFLICT (tenant_id, email) DO NOTHING`,
+    [`user_owner_${t.slug}`, t.id, `${t.company} Owner`, `owner@${t.slug}.example.com`],
+  );
+  const data = index === 0 ? withCompany(buildDemoData(), t.company) : variantData(t.company, 0.9);
+  await writeState(t.id, data);
+}
+
+/**
+ * Ensure every demo tenant exists AND has data. Self-healing and idempotent:
+ * a tenant is (re)seeded only if it is missing or empty, so an interrupted
+ * cold-start seed is repaired on a later request without touching tenants that
+ * are already populated (and each call stays small enough to finish quickly).
+ */
+export async function seedIfEmpty(): Promise<{ seeded: boolean; tenants: string[] }> {
+  await ensureAgency();
+  const existing = await listTenants();
+  const bySlug = new Map(existing.map((t) => [t.slug, t]));
+
+  let seeded = false;
+  for (let i = 0; i < DEMO_TENANTS.length; i++) {
+    const t = DEMO_TENANTS[i];
+    const row = bySlug.get(t.slug);
+    const needsSeed = !row || !(await tenantHasData(row.id));
+    if (needsSeed) {
+      await seedTenant(i, t);
+      seeded = true;
+    }
+  }
+  return { seeded, tenants: DEMO_TENANTS.map((t) => t.slug) };
+}
+
+/** Force a full (re)seed of the agency + both demo tenants and their datasets. */
+export async function seedAll(): Promise<void> {
+  await ensureAgency();
+  for (let i = 0; i < DEMO_TENANTS.length; i++) {
+    await seedTenant(i, DEMO_TENANTS[i]);
   }
 }
 

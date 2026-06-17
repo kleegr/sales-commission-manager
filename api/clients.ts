@@ -36,7 +36,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (req.method === "POST") {
-      if (!["owner", "admin", "sales_manager"].includes(user.role)) {
+      const SELF_ROLES = ["salesperson", "affiliate", "partner"];
+      if (!["owner", "admin", "sales_manager", ...SELF_ROLES].includes(user.role)) {
         return res.status(403).json({ error: "forbidden" });
       }
       const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body ?? {};
@@ -44,7 +45,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!companyName) return res.status(400).json({ error: "company_name_required" });
 
       let salespersonId: string | null = body.salespersonId ? String(body.salespersonId) : null;
-      if (salespersonId) {
+
+      if (SELF_ROLES.includes(user.role)) {
+        // A rep/affiliate/partner can only file a lead against THEIR OWN record.
+        salespersonId = user.salespersonId ?? null;
+      } else if (salespersonId) {
         // validate the salesperson is in this tenant (and the manager's team)
         const { rows } = await query<any>(
           `SELECT id, manager_user_id FROM salespeople WHERE tenant_id = $1 AND id = $2`,

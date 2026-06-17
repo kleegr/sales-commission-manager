@@ -2,7 +2,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { hasDb } from "../_lib/db.js";
 import { ensureSchema, seedIfEmpty } from "../_lib/repository.js";
-import { getSessionUser } from "../_lib/auth.js";
+import { getSessionUser, demoModeEnabled } from "../_lib/auth.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!hasDb()) return res.status(503).json({ error: "database_not_configured" });
@@ -10,8 +10,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await ensureSchema();
     await seedIfEmpty();
     const user = await getSessionUser(req);
-    if (!user) return res.status(401).json({ error: "unauthorized" });
+    if (!user) return res.status(401).json({ error: "unauthorized", demo: demoModeEnabled() });
     return res.status(200).json({
+      demo: demoModeEnabled(),
       user: {
         id: user.id,
         name: user.name,

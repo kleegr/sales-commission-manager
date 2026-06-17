@@ -11,7 +11,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "tsx src/lib/commission-engine.test.ts",
+    "test": "tsx src/lib/commission-engine.test.ts && tsx api/_lib/auth.test.ts",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:seed": "tsx scripts/seed.ts"
   },

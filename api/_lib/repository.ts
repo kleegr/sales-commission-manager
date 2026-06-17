@@ -21,6 +21,9 @@
 
 import { query, withTransaction, type PoolClient } from "./db.js";
 import { SCHEMA_SQL, TABLES_CHILD_FIRST } from "./schema.js";
+import { MIGRATIONS_SQL } from "./migrations.js";
+import { ensureAuthSeed } from "./auth-seed.js";
+import { ADMIN_ROLES } from "./auth.js";
 import { buildDemoData } from "../../src/lib/demo-data.js";
 import {
   SCHEMA_VERSION,
@@ -46,10 +49,16 @@ let schemaReady = false;
 export async function ensureSchema(): Promise<void> {
   if (schemaReady) return;
   await query(SCHEMA_SQL);
+  await query(MIGRATIONS_SQL);
   await query(
     `INSERT INTO schema_migrations (id) VALUES ($1)
      ON CONFLICT (id) DO NOTHING`,
     ["0001_init"],
+  );
+  await query(
+    `INSERT INTO schema_migrations (id) VALUES ($1)
+     ON CONFLICT (id) DO NOTHING`,
+    ["0002_auth_sessions_teams_payout_history"],
   );
   schemaReady = true;
 }
@@ -261,6 +270,55 @@ export async function readState(tenantId: string): Promise<AppData> {
 }
 
 // ---------------------------------------------------------------------------
+// READ (role-scoped): server-enforced data isolation
+//
+// owner/admin   -> the whole tenant
+// sales_manager -> only their team (salespeople.manager_user_id = their user id)
+//                  and everything belonging to that team
+// self roles    -> only their own salesperson record + clients/commissions/payouts
+//
+// Plans and settings stay visible (non-sensitive config the portals need for
+// labels and projections). This is enforced HERE on the server, so a scoped
+// user physically never receives another person's rows.
+// ---------------------------------------------------------------------------
+
+export interface DataScope {
+  userId: string;
+  role: string;
+  salespersonId: string | null;
+}
+
+function filterAppData(full: AppData, visibleSp: Set<string>): AppData {
+  const clients = full.clients.filter((c) => c.salespersonId && visibleSp.has(c.salespersonId));
+  const clientIds = new Set(clients.map((c) => c.id));
+  return {
+    ...full,
+    salespeople: full.salespeople.filter((s) => visibleSp.has(s.id)),
+    clients,
+    payments: full.payments.filter((p) => clientIds.has(p.clientId)),
+    commissions: full.commissions.filter((e) => visibleSp.has(e.salespersonId)),
+    payouts: full.payouts.filter((p) => visibleSp.has(p.salespersonId)),
+  };
+}
+
+export async function readScopedState(tenantId: string, scope: DataScope): Promise<AppData> {
+  const full = await readState(tenantId);
+  if (ADMIN_ROLES.includes(scope.role as any)) return full;
+
+  let visibleSp: Set<string>;
+  if (scope.role === "sales_manager") {
+    const { rows } = await query<{ id: string }>(
+      `SELECT id FROM salespeople WHERE tenant_id = $1 AND manager_user_id = $2`,
+      [tenantId, scope.userId],
+    );
+    visibleSp = new Set(rows.map((r) => r.id));
+  } else {
+    visibleSp = new Set(scope.salespersonId ? [scope.salespersonId] : []);
+  }
+  return filterAppData(full, visibleSp);
+}
+
+// ---------------------------------------------------------------------------
 // WRITE: AppData -> rows (transactional replace-all, tenant-scoped)
 // ---------------------------------------------------------------------------
 
@@ -297,8 +355,14 @@ export async function writeState(tenantId: string, data: AppData): Promise<void>
   for (const po of data.payouts) for (const eid of po.commissionEntryIds) entryToPayout.set(eid, po.id);
 
   await withTransaction(async (c: PoolClient) => {
-    // 1. clear this tenant's data (child-first); tenants row is preserved
-    for (const table of TABLES_CHILD_FIRST) {
+    // 1. clear this tenant's data (child-first); tenants row is preserved.
+    //    NOTE: payout_batches / payout_batch_entries / payout_events are
+    //    SERVER-OWNED (managed by /api/payouts) and are deliberately excluded
+    //    so a snapshot save never wipes payout history. See writeState docs.
+    const SNAPSHOT_TABLES = TABLES_CHILD_FIRST.filter(
+      (t) => t !== "payout_batches" && t !== "payout_batch_entries",
+    );
+    for (const table of SNAPSHOT_TABLES) {
       await c.query(`DELETE FROM ${table} WHERE tenant_id = $1`, [tenantId]);
     }
 
@@ -390,24 +454,9 @@ export async function writeState(tenantId: string, data: AppData): Promise<void>
       );
     }
 
-    // 8. payout batches + their entry membership
-    for (const po of data.payouts) {
-      await c.query(
-        `INSERT INTO payout_batches
-           (id, tenant_id, salesperson_id, status, total_amount, submitted_at, approved_at, paid_at,
-            notes, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-        [po.id, tenantId, po.salespersonId, po.status, po.totalAmount, po.submittedAt, po.approvedAt, po.paidAt,
-         po.notes, po.createdAt || ts, ts],
-      );
-      for (const eid of po.commissionEntryIds) {
-        await c.query(
-          `INSERT INTO payout_batch_entries (payout_batch_id, commission_entry_id, tenant_id)
-           VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
-          [po.id, eid, tenantId],
-        );
-      }
-    }
+    // 8. payout batches are SERVER-OWNED (see /api/payouts). The snapshot path
+    //    no longer writes them, so their workflow state + audit history survive
+    //    admin edits to other resources.
 
     // 9. audit trail — every snapshot save is recorded (financial systems need this)
     await c.query(
@@ -559,6 +608,7 @@ export async function seedIfEmpty(): Promise<{ seeded: boolean; tenants: string[
       seeded = true;
     }
   }
+  await ensureAuthSeed();
   return { seeded, tenants: DEMO_TENANTS.map((t) => t.slug) };
 }
 
@@ -568,6 +618,7 @@ export async function seedAll(): Promise<void> {
   for (let i = 0; i < DEMO_TENANTS.length; i++) {
     await seedTenant(i, DEMO_TENANTS[i]);
   }
+  await ensureAuthSeed();
 }
 
 function withCompany(d: AppData, company: string): AppData {

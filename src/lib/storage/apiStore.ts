@@ -1,64 +1,38 @@
 // ============================================================================
 // HYBRID STORE  (Neon API first, localStorage fallback)
 //
-// Implements the same DataStore interface the whole app already uses. On the
-// first load() it probes the serverless API:
-//   - API reachable + DB configured  -> read/write the active tenant via /api/state
-//   - otherwise (e.g. `vite dev` with no functions, or DB not set) -> localStorage
+// Implements the DataStore interface the whole app uses. On load() it reads the
+// current user's tenant-scoped AppData from /api/state (the TENANT IS DERIVED
+// FROM THE SESSION on the server — never sent by the client). If the API is
+// unreachable (e.g. `vite dev` with no serverless functions), it falls back to
+// browser localStorage so the UI still renders.
 //
-// Because it satisfies DataStore, NOTHING else in the app changes: the commission
-// engine, reducer, and every page keep working exactly as before — the bytes
-// just now live in Postgres, scoped per tenant.
+// save() PUTs the snapshot back; this only succeeds for owner/admin sessions
+// (the server rejects snapshot writes from scoped roles with 403, which the
+// store treats as read-only and silently ignores).
 // ============================================================================
 
 import type { AppData } from "../../types";
 import type { DataStore } from "./index";
 import { LocalStorageStore } from "./localStorage";
 
-const TENANT_KEY = "scm.tenant";
-const DEFAULT_TENANT = "demo";
-
-export function getActiveTenant(): string {
-  try {
-    return localStorage.getItem(TENANT_KEY) || DEFAULT_TENANT;
-  } catch {
-    return DEFAULT_TENANT;
-  }
-}
-
-export function setActiveTenant(slug: string): void {
-  try {
-    localStorage.setItem(TENANT_KEY, slug);
-  } catch {
-    /* ignore */
-  }
-}
-
 export type Backend = "neon" | "local" | "unknown";
 
-interface BackendInfo {
-  backend: Backend;
-  tenant: string;
-  label: string;
-}
-
 let backend: Backend = "unknown";
+let readOnly = false;
 
-export function getBackendInfo(): BackendInfo {
-  const tenant = getActiveTenant();
+export function getBackendInfo(): { backend: Backend; label: string; readOnly: boolean } {
   const label =
     backend === "neon"
-      ? `Neon Postgres · tenant “${tenant}”`
+      ? "Neon Postgres"
       : backend === "local"
         ? "Browser localStorage (fallback)"
         : "Detecting…";
-  return { backend, tenant, label };
+  return { backend, label, readOnly };
 }
 
-async function apiGet(tenant: string): Promise<AppData | null> {
-  const res = await fetch(`/api/state?tenant=${encodeURIComponent(tenant)}`, {
-    headers: { accept: "application/json" },
-  });
+async function apiGet(): Promise<AppData | null> {
+  const res = await fetch(`/api/state`, { headers: { accept: "application/json" } });
   if (!res.ok) throw new Error(`state GET ${res.status}`);
   const ct = res.headers.get("content-type") || "";
   if (!ct.includes("application/json")) throw new Error("not json");
@@ -69,12 +43,17 @@ async function apiGet(tenant: string): Promise<AppData | null> {
   return body.data as AppData;
 }
 
-async function apiPut(tenant: string, data: AppData): Promise<void> {
-  const res = await fetch(`/api/state?tenant=${encodeURIComponent(tenant)}`, {
+async function apiPut(data: AppData): Promise<void> {
+  const res = await fetch(`/api/state`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ data }),
   });
+  if (res.status === 403) {
+    // scoped role: snapshot writes aren't allowed — go read-only, don't error
+    readOnly = true;
+    return;
+  }
   if (!res.ok) throw new Error(`state PUT ${res.status}`);
 }
 
@@ -88,11 +67,9 @@ export class HybridStore implements DataStore {
   }
 
   async load(): Promise<AppData | null> {
-    const tenant = getActiveTenant();
     try {
-      const data = await apiGet(tenant);
+      const data = await apiGet();
       backend = "neon";
-      // mirror to localStorage as an offline cache / backup
       void this.local.save(data as AppData).catch(() => {});
       return data;
     } catch {
@@ -102,11 +79,9 @@ export class HybridStore implements DataStore {
   }
 
   async save(data: AppData): Promise<void> {
-    // always keep a local backup immediately
     void this.local.save(data).catch(() => {});
-    if (backend !== "neon") return;
+    if (backend !== "neon" || readOnly) return;
 
-    // debounce API writes so a burst of edits coalesces into one PUT
     this.pending = data;
     if (this.saveTimer) clearTimeout(this.saveTimer);
     await new Promise<void>((resolve) => {
@@ -115,9 +90,8 @@ export class HybridStore implements DataStore {
         this.pending = null;
         if (!snapshot) return resolve();
         try {
-          await apiPut(getActiveTenant(), snapshot);
+          await apiPut(snapshot);
         } catch {
-          // network blip: the local backup above still has the data
           backend = "local";
         } finally {
           resolve();
@@ -128,7 +102,6 @@ export class HybridStore implements DataStore {
 
   async clear(): Promise<void> {
     await this.local.clear();
-    // server data is re-seedable via POST /api/seed?reset=1; we don't drop it here
   }
 }
 

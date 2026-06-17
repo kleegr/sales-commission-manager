@@ -60,6 +60,11 @@ export async function ensureSchema(): Promise<void> {
      ON CONFLICT (id) DO NOTHING`,
     ["0002_auth_sessions_teams_payout_history"],
   );
+  await query(
+    `INSERT INTO schema_migrations (id) VALUES ($1)
+     ON CONFLICT (id) DO NOTHING`,
+    ["0005_proposals_contracts"],
+  );
   schemaReady = true;
 }
 

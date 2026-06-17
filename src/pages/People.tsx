@@ -25,6 +25,13 @@ import {
 } from "../components/ui";
 import { ConfirmModal } from "../components/ui/Modal";
 import { uid, todayISO, formatCurrency } from "../lib/format";
+import {
+  createSalesperson,
+  updateSalesperson,
+  deactivateSalesperson,
+  setSalespersonApproval,
+  type SalespersonInput,
+} from "../lib/resource-client";
 
 const ROLE_LABEL: Record<Role, string> = {
   salesperson: "Salesperson",
@@ -53,12 +60,30 @@ function emptySalesperson(): Salesperson {
 }
 
 export default function People() {
-  const { data, dispatch } = useApp();
+  const { data, dispatch, reload } = useApp();
   const [editing, setEditing] = useState<Salesperson | null>(null);
   const [isNew, setIsNew] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [roleFilter, setRoleFilter] = useState<"all" | Role>("all");
   const [search, setSearch] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // Map the edited record to the fields the per-resource API accepts.
+  function toInput(sp: Salesperson): SalespersonInput {
+    return {
+      name: sp.name,
+      email: sp.email,
+      phone: sp.phone,
+      role: sp.role,
+      referralCode: sp.referralCode,
+      status: sp.status,
+      commissionPlanId: sp.commissionPlanId,
+      weeklySalary: sp.weeklySalary,
+      salaryStartDate: sp.salaryStartDate,
+      salaryEndDate: sp.salaryEndDate,
+      notes: sp.notes,
+    };
+  }
 
   const pending = data.salespeople.filter(
     (s) => s.source === "affiliate_portal" && s.approvalStatus === "pending",
@@ -86,10 +111,40 @@ export default function People() {
     setEditing({ ...sp });
     setIsNew(false);
   }
-  function save() {
-    if (!editing) return;
-    dispatch(isNew ? { type: "SP_ADD", sp: editing } : { type: "SP_UPDATE", sp: editing });
-    setEditing(null);
+  async function save() {
+    if (!editing || busy) return;
+    setBusy(true);
+    try {
+      if (isNew) await createSalesperson(toInput(editing));
+      else await updateSalesperson(editing.id, toInput(editing));
+      await reload();
+    } catch {
+      // API unreachable (local/dev) or rejected — keep working via local store.
+      dispatch(isNew ? { type: "SP_ADD", sp: editing } : { type: "SP_UPDATE", sp: editing });
+    } finally {
+      setBusy(false);
+      setEditing(null);
+    }
+  }
+
+  async function deactivate(id: string) {
+    try {
+      await deactivateSalesperson(id);
+      await reload();
+    } catch {
+      dispatch({ type: "SP_DELETE", id });
+    } finally {
+      setDeleteId(null);
+    }
+  }
+
+  async function approve(id: string, approval: "approved" | "rejected") {
+    try {
+      await setSalespersonApproval(id, approval);
+      await reload();
+    } catch {
+      dispatch({ type: "SP_APPROVAL", id, approval });
+    }
   }
 
   return (
@@ -126,13 +181,13 @@ export default function People() {
                   </p>
                 </div>
                 <div className="flex gap-2">
-                  <Button size="sm" onClick={() => dispatch({ type: "SP_APPROVAL", id: s.id, approval: "approved" })}>
+                  <Button size="sm" onClick={() => approve(s.id, "approved")}>
                     <Check className="h-4 w-4" /> Approve
                   </Button>
                   <Button
                     size="sm"
                     variant="secondary"
-                    onClick={() => dispatch({ type: "SP_APPROVAL", id: s.id, approval: "rejected" })}
+                    onClick={() => approve(s.id, "rejected")}
                   >
                     <X className="h-4 w-4" /> Reject
                   </Button>
@@ -203,7 +258,7 @@ export default function People() {
                       <Button variant="ghost" size="sm" onClick={() => openEdit(s)} aria-label="Edit">
                         <Pencil className="h-4 w-4" />
                       </Button>
-                      <Button variant="ghost" size="sm" onClick={() => setDeleteId(s.id)} aria-label="Delete" className="text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-500/10">
+                      <Button variant="ghost" size="sm" onClick={() => setDeleteId(s.id)} aria-label="Deactivate" title="Deactivate" className="text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-500/10">
                         <Trash2 className="h-4 w-4" />
                       </Button>
                     </div>
@@ -225,7 +280,9 @@ export default function People() {
           footer={
             <>
               <Button variant="secondary" onClick={() => setEditing(null)}>Cancel</Button>
-              <Button onClick={save} disabled={!editing.name.trim()}>Save</Button>
+              <Button onClick={save} disabled={busy || !editing.name.trim()}>
+                {busy ? "Saving…" : "Save"}
+              </Button>
             </>
           }
         >
@@ -300,9 +357,10 @@ export default function People() {
       <ConfirmModal
         open={!!deleteId}
         onClose={() => setDeleteId(null)}
-        onConfirm={() => deleteId && dispatch({ type: "SP_DELETE", id: deleteId })}
-        title="Delete person?"
-        message="This removes the person and unassigns their clients. Their commission history will be recalculated. This cannot be undone."
+        onConfirm={() => deleteId && deactivate(deleteId)}
+        title="Deactivate person?"
+        message="This marks the person inactive so they no longer appear in active reporting. Their clients and commission history are preserved, and you can reactivate them later by editing their status."
+        confirmLabel="Deactivate"
       />
     </div>
   );

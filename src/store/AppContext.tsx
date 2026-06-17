@@ -313,6 +313,11 @@ function emptyData(): AppData {
 export function AppProvider({ children }: { children: ReactNode }) {
   const [data, dispatch] = useReducer(reducer, undefined, emptyData);
   const hydrated = useRef(false);
+  // When true, the next persist effect is skipped. Set by reload(): re-pulling
+  // authoritative server data should not be echoed straight back as a snapshot
+  // write. This is what lets per-resource API writes (salespeople, settings,
+  // payouts) be the real source of truth instead of the snapshot.
+  const suppressPersist = useRef(false);
 
   // Load once on mount; seed demo data if storage is empty.
   useEffect(() => {
@@ -334,9 +339,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // Persist on every change (after initial hydration).
+  // Persist on every change (after initial hydration), unless this change came
+  // from a reload() of authoritative server state (then we skip the echo).
   useEffect(() => {
-    if (hydrated.current) void store.save(data);
+    if (!hydrated.current) return;
+    if (suppressPersist.current) {
+      suppressPersist.current = false;
+      return;
+    }
+    void store.save(data);
   }, [data]);
 
   // Reflect theme on <html> and remember it for the pre-paint script.
@@ -355,10 +366,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // authenticated session. (To act as another tenant, log in as a user there.)
 
   // Re-pull the authoritative dataset from the server. Used after server-side
-  // workflow actions (e.g. payout transitions) that change rows directly.
+  // workflow actions (e.g. payout transitions, salespeople/settings writes)
+  // that change rows directly.
   async function reload(): Promise<void> {
     const loaded = await store.load();
-    if (loaded) dispatch({ type: "HYDRATE", data: loaded });
+    if (loaded) {
+      suppressPersist.current = true;
+      dispatch({ type: "HYDRATE", data: loaded });
+    }
   }
 
   const { user } = useAuth();

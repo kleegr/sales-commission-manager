@@ -32,7 +32,7 @@ import {
   type SetupFeeRule,
   type SignupBonusRule,
   type ValueType,
-} from "../types";
+} from "../types/index.js";
 import {
   clampNum,
   formatCurrency,
@@ -40,7 +40,7 @@ import {
   round2,
   uid,
   weeksBetween,
-} from "./format";
+} from "./format.js";
 
 // ---------------------------------------------------------------------------
 // Result shapes

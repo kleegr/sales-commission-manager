@@ -442,22 +442,62 @@ export const DEMO_TENANTS = [
   { id: "tenant_acme", slug: "acme", name: "Acme Partners", company: "Acme Partners", ghl: "ghl_loc_acme_002" },
 ] as const;
 
-/** A lightly-varied second dataset so two tenants visibly differ. */
-function variantData(company: string, factor: number): AppData {
+/**
+ * Re-key every record id (and every reference to one) with a tenant-specific
+ * prefix. The tables use a global TEXT primary key, so two tenants seeded from
+ * the same demo dataset would otherwise collide (e.g. both inserting
+ * "sp_jordan"). Prefixing keeps each tenant's ids unique while preserving all
+ * internal relationships. (There are no global unique constraints on email /
+ * referral_code, so only ids need remapping.)
+ */
+function prefixIds(d: AppData, prefix: string): AppData {
+  const P = (id: string) => `${prefix}${id}`;
+  return {
+    ...d,
+    salespeople: d.salespeople.map((s) => ({
+      ...s,
+      id: P(s.id),
+      commissionPlanId: s.commissionPlanId ? P(s.commissionPlanId) : null,
+    })),
+    plans: d.plans.map((pl) => ({
+      ...pl,
+      id: P(pl.id),
+      rules: pl.rules.map((r): Rule => ({ ...r, id: P(r.id) })),
+    })),
+    clients: d.clients.map((c) => ({
+      ...c,
+      id: P(c.id),
+      salespersonId: c.salespersonId ? P(c.salespersonId) : null,
+    })),
+    payments: d.payments.map((pay) => ({ ...pay, id: P(pay.id), clientId: P(pay.clientId) })),
+    commissions: d.commissions.map((e) => ({
+      ...e,
+      id: P(e.id),
+      salespersonId: P(e.salespersonId),
+      clientId: e.clientId ? P(e.clientId) : null,
+      paymentId: e.paymentId ? P(e.paymentId) : null,
+      ruleId: e.ruleId ? P(e.ruleId) : null,
+    })),
+    payouts: [],
+  };
+}
+
+/** A lightly-varied, re-keyed second dataset so two tenants visibly differ. */
+function variantData(slug: string, company: string, factor: number): AppData {
   const d = buildDemoData();
   d.settings.companyName = company;
-  // scale subscription/setup a touch and trim the book so tenant B != tenant A
+  // scale subscription a touch and trim the book so tenant B != tenant A
   d.clients = d.clients.slice(0, Math.max(3, Math.round(d.clients.length * 0.6))).map((c) => ({
     ...c,
     monthlySubscription: Math.round(c.monthlySubscription * factor),
   }));
   const keep = new Set(d.clients.map((c) => c.id));
   d.payments = d.payments.filter((p) => keep.has(p.clientId));
-  // re-derive ledger for the trimmed set happens client-side on hydrate; keep
-  // only commissions whose client still exists (or salary rows with no client)
+  // keep only commissions whose client still exists (or salary rows, no client)
   d.commissions = d.commissions.filter((e) => !e.clientId || keep.has(e.clientId));
   d.payouts = [];
-  return d;
+  // re-key so this tenant's ids never collide with another tenant's
+  return prefixIds(d, `${slug}_`);
 }
 
 type DemoTenant = (typeof DEMO_TENANTS)[number];
@@ -494,7 +534,7 @@ async function seedTenant(index: number, t: DemoTenant): Promise<void> {
      ON CONFLICT (tenant_id, email) DO NOTHING`,
     [`user_owner_${t.slug}`, t.id, `${t.company} Owner`, `owner@${t.slug}.example.com`],
   );
-  const data = index === 0 ? withCompany(buildDemoData(), t.company) : variantData(t.company, 0.9);
+  const data = index === 0 ? withCompany(buildDemoData(), t.company) : variantData(t.slug, t.company, 0.9);
   await writeState(t.id, data);
 }
 

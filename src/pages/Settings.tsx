@@ -232,9 +232,8 @@ function Stat({ label, value }: { label: string; value: number }) {
 // Data source & tenant panel
 //
 // Talks to the serverless API to show whether the app is actually backed by
-// Neon Postgres, and lets you switch the active GoHighLevel sub-account /
-// tenant. The per-tenant row counts are live proof that each location's data
-// is isolated.
+// Neon Postgres, and shows the signed-in user's (session-bound) workspace. The
+// per-tenant row counts are live proof that each location's data is isolated.
 // ---------------------------------------------------------------------------
 
 interface TenantReport {
@@ -259,10 +258,9 @@ interface HealthResponse {
 }
 
 function WorkspacePanel() {
-  const { backend, tenant, switchTenant } = useApp();
+  const { backend, tenant } = useApp();
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [switching, setSwitching] = useState<string | null>(null);
 
   async function refresh() {
     setLoading(true);
@@ -285,19 +283,10 @@ function WorkspacePanel() {
     void refresh();
   }, []);
 
-  async function onSwitch(slug: string) {
-    if (slug === tenant) return;
-    setSwitching(slug);
-    try {
-      await switchTenant(slug);
-    } finally {
-      setSwitching(null);
-    }
-  }
-
   const onNeon = backend === "neon" && health?.database.configured;
   const dbConfigured = health?.database.configured ?? false;
-  const tenants = health?.tenants ?? [];
+  // Only the signed-in user's own workspace is shown (tenant isolation).
+  const tenants = (health?.tenants ?? []).filter((t) => t.name === tenant);
 
   return (
     <Card className="space-y-4">
@@ -347,25 +336,20 @@ function WorkspacePanel() {
         </Button>
       </div>
 
-      {/* Tenant switcher + per-tenant proof of isolation */}
+      {/* Current workspace + per-tenant proof of isolation (read-only) */}
       {onNeon && tenants.length > 0 && (
         <div className="space-y-3">
           <p className="text-sm text-slate-500">
-            This app is multi-tenant. Each GoHighLevel sub-account / location has its own
-            isolated data. Switch the active tenant to load a different location's records.
+            This app is multi-tenant. Your session is bound to one workspace (GoHighLevel
+            sub-account / location); you only ever see this workspace's isolated data.
           </p>
           <div className="space-y-2">
             {tenants.map((t) => {
-              const active = t.slug === tenant;
+              const active = t.name === tenant;
               return (
                 <div
                   key={t.slug}
-                  className={
-                    "flex flex-wrap items-center gap-3 rounded-lg border p-3 " +
-                    (active
-                      ? "border-brand-300 bg-brand-50/60 dark:border-brand-500/40 dark:bg-brand-500/10"
-                      : "border-slate-200 dark:border-slate-800")
-                  }
+                  className="flex flex-wrap items-center gap-3 rounded-lg border border-brand-300 bg-brand-50/60 p-3 dark:border-brand-500/40 dark:bg-brand-500/10"
                 >
                   <span className="flex h-8 w-8 flex-none items-center justify-center rounded-lg bg-slate-100 text-slate-500 dark:bg-slate-800">
                     <Building2 className="h-4 w-4" />
@@ -387,13 +371,6 @@ function WorkspacePanel() {
                         : ""}
                     </p>
                   </div>
-                  <Button
-                    variant={active ? "secondary" : "primary"}
-                    disabled={active || switching !== null}
-                    onClick={() => void onSwitch(t.slug)}
-                  >
-                    {switching === t.slug ? "Switching…" : active ? "Current" : "Switch"}
-                  </Button>
                 </div>
               );
             })}

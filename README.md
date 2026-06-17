@@ -31,7 +31,7 @@ The app seeds a full demo dataset on first run.
 ```bash
 npm run build    # type-check + production build (SPA)
 npm run preview  # preview the production build
-npm test         # run the commission-engine unit tests (29 cases)
+npm test         # commission-engine (29) + auth (8) unit tests
 ```
 
 Requires Node 18+ (developed on Node 22; Vercel builds on Node 22).
@@ -48,9 +48,9 @@ vercel env pull .env      # pull DATABASE_URL etc. into a local .env
 vercel dev                # serves the SPA *and* /api/* against Neon
 ```
 
-With `vercel dev` running, the app detects the API, reads/writes Postgres, and
-the **Settings → Data source & workspace** panel shows the live connection and a
-tenant switcher.
+With `vercel dev` running, the app detects the API and reads/writes Postgres;
+the **Settings → Data source & workspace** panel shows the live connection and
+the current (session-bound) workspace.
 
 ## Database
 
@@ -73,6 +73,8 @@ usually sets `DATABASE_URL` automatically).
 The schema is defined once in `api/_lib/schema.ts` and mirrored, for humans, in
 `migrations/0001_init.sql`. It is **idempotent** (`CREATE TABLE IF NOT EXISTS`),
 and is applied automatically by the API on first request (`/api/health`).
+Forward-only column/table additions live in `api/_lib/migrations.ts` and run on
+every cold start, so a previously-seeded database is upgraded without a wipe.
 
 You can also run it from the CLI (these require `DATABASE_URL` and a network that
 can reach Neon — they do **not** run inside a restricted sandbox):
@@ -94,15 +96,15 @@ tenants are seeded to prove isolation:
 | `demo` | Northwind Agency — Demo     | `ghl_loc_demo_001`  | full demo dataset            |
 | `acme` | Acme Partners               | `ghl_loc_acme_002`  | scaled-down variant          |
 
-The active tenant is stored client-side (`scm.tenant`, default `demo`) and can be
-switched from **Settings → Data source & workspace**. Switching re-hydrates the
-whole app from that tenant's isolated rows.
+The active tenant is **fixed by the authenticated session** (derived server-side
+from the logged-in user), so a user only ever sees their own tenant's isolated
+rows. To act in another tenant, log in as a user there.
 
 ### Tables
 
-`agency_accounts`, `tenants`, `ghl_connections`, `users`, `salespeople`,
-`commission_plans`, `commission_rules`, `clients`, `payments`,
-`commission_ledger`, `payout_batches`, `payout_batch_entries`,
+`agency_accounts`, `tenants`, `ghl_connections`, `users`, `sessions`,
+`salespeople`, `commission_plans`, `commission_rules`, `clients`, `payments`,
+`commission_ledger`, `payout_batches`, `payout_batch_entries`, `payout_events`,
 `affiliate_applications`, `settings`, `projection_assumptions`, `audit_logs`,
 `integration_events`, plus `schema_migrations`.
 
@@ -114,16 +116,48 @@ and webhook work can be added **without a migration of existing data**.
 
 ## API
 
-Serverless routes under `/api` (Vercel Node runtime):
+Serverless routes under `/api` (Vercel Node runtime). All data routes require
+an authenticated session; the **tenant is derived from the session**, never the
+client.
 
-- `GET /api/health` — is the database real & working? Confirms the connection
-  string, ensures the schema, seeds demo tenants on a cold DB (proves a **write**),
-  and returns the Postgres version + per-tenant row counts (proves a **read**).
-- `GET /api/tenants` — the list of tenants/locations (powers the switcher).
-- `GET /api/state?tenant=<slug>` — the full `AppData` snapshot for a tenant.
-- `PUT /api/state?tenant=<slug>` — replace a tenant's data transactionally
-  (writes an `audit_logs` row each save).
-- `POST /api/seed` (`?reset=1` to force) — seed/reseed demo tenants.
+Auth:
+- `POST /api/auth/login` — `{ email, password, tenant? }`; sets an httpOnly
+  session cookie and returns the user.
+- `POST /api/auth/logout` — destroys the session.
+- `GET  /api/auth/me` — the current user, or 401.
+
+Data:
+- `GET  /api/state` — the current user's `AppData`, scoped to their tenant **and
+  role** (owner/admin = whole tenant; sales_manager = their team; salesperson /
+  affiliate / partner = only their own rows).
+- `PUT  /api/state` — replace the tenant's snapshot transactionally
+  (**owner/admin only**; writes an `audit_logs` row).
+- `GET/POST /api/clients` — list (role-scoped) / create ONE client (real
+  single-row insert, not a snapshot replace).
+- `GET  /api/payouts` — payouts visible to the user + their audit history.
+- `POST /api/payouts` — `submit | approve | reject | mark_paid | cancel`; real
+  per-resource DB writes with role checks, logged to `payout_events`.
+
+Ops/diagnostics:
+- `GET  /api/health` — DB connectivity, Postgres version, per-tenant counts.
+- `GET  /api/tenants` — tenant list (diagnostic).
+- `POST /api/seed` (`?reset=1`) — seed/reseed demo tenants + role users.
+
+### Demo logins (password `demo1234` for all)
+
+Two workspaces (`demo`, `acme`); each has one user per role:
+
+| Role          | Email (demo workspace)        |
+| ------------- | ----------------------------- |
+| owner         | `owner@demo.example.com`      |
+| admin         | `admin@demo.example.com`      |
+| sales_manager | `manager@demo.example.com`    |
+| salesperson   | `rep@demo.example.com`        |
+| affiliate     | `affiliate@demo.example.com`  |
+| partner       | `partner@demo.example.com`    |
+
+(Swap `demo` → `acme` for the second workspace.) These are seeded demo
+credentials — rotate/disable before production.
 
 ## Architecture
 
@@ -132,33 +166,28 @@ api/
   _lib/
     db.ts            # Neon serverless Pool (WebSocket) + env-var resolution
     schema.ts        # canonical SQL schema (source of truth) + child-first order
-    repository.ts    # ensureSchema, read/write a tenant's AppData, seeding
-  health.ts          # GET /api/health  (self-init + report)
-  state.ts           # GET/PUT /api/state  (per-tenant snapshot)
-  tenants.ts         # GET /api/tenants
-  seed.ts            # POST /api/seed
-migrations/
-  0001_init.sql      # human-readable mirror of schema.ts
-scripts/
-  migrate.ts         # npm run db:migrate
-  seed.ts            # npm run db:seed
+    migrations.ts    # forward-only idempotent ALTERs / new tables (auth, sessions, payout_events)
+    auth.ts          # scrypt password hashing + DB-backed sessions + cookies
+    auth-seed.ts     # one user per role per tenant; links portals + manager teams
+    repository.ts    # ensureSchema, read/role-scoped-read/write AppData, seeding
+    payouts.ts       # real per-resource payout workflow + audit history
+  auth/{login,logout,me}.ts   # session endpoints
+  state.ts           # GET (role-scoped) / PUT (owner-admin) /api/state
+  clients.ts         # GET/POST one client (per-resource write example)
+  payouts.ts         # GET list / POST workflow actions
+  health.ts, tenants.ts, seed.ts
 src/
   types/             # the whole data model (serializable, GHL/DB-swap friendly)
   lib/
     commission-engine.ts  # pure, deterministic projection + payment calc (tested)
-    commission-engine.test.ts
-    ledger.ts             # derive the live ledger; projected-vs-real status logic
+    ledger.ts             # derive the live ledger; status logic
     analytics.ts          # totals, rollups, monthly series for charts
-    demo-data.ts          # the seeded demo dataset (also used to seed Postgres)
-    format.ts             # formatting + small date helpers
-    export.ts             # CSV / JSON / print-to-PDF helpers
-    storage/
-      index.ts            # DataStore interface  ← the swap seam
-      localStorage.ts     # browser implementation (fallback)
-      apiStore.ts         # HybridStore: Neon API first, localStorage fallback
-  store/AppContext.tsx  # global state (useReducer); exposes backend + tenant + switchTenant
-  components/           # UI primitives, charts, plan builder, layout (live data-source badge)
-  pages/                # one file per section (Settings has the data-source/tenant panel)
+    roles.ts              # role labels, home paths, route access map (client guard)
+    payouts-client.ts     # client for the /api/payouts workflow
+    storage/apiStore.ts   # HybridStore: session-scoped Neon API first, localStorage fallback
+  store/AuthContext.tsx # current user + login/logout
+  store/AppContext.tsx  # global state (useReducer) + reload(); tenant/role from session
+  pages/                # Login, Reports, Payouts, portals, admin sections
 ```
 
 ### Why the engine is separate
@@ -169,16 +198,20 @@ live preview, the projection page, the recruiting view, and the real ledger — 
 what a candidate is shown and what actually gets paid come from one source of
 truth.
 
-### How persistence works (the snapshot seam)
+### How persistence works (the snapshot seam + per-resource writes)
 
 `src/lib/storage/index.ts` defines a `DataStore` interface
 (`load` / `save` / `clear` / `name`). `apiStore.ts` implements it as a
-**HybridStore**: on first load it probes `/api/state`; if the API + DB are
-reachable it reads/writes the active tenant in Postgres (debounced PUTs), and
-otherwise it falls back to `localStorage`. Because it satisfies the same
-interface, **nothing in the engine, reducer, or pages changed**. On the server,
-`writeState` performs a transactional per-tenant replace into the normalized
-relational tables; `readState` rebuilds the exact `AppData` snapshot.
+**HybridStore**: on first load it reads the session-scoped dataset from
+`/api/state`; if the API + DB are reachable it reads/writes Postgres (debounced
+PUTs, owner/admin only), otherwise it falls back to `localStorage`.
+
+The snapshot `PUT /api/state` is a transactional per-tenant replace. The newer,
+role-aware workflows (payouts; `/api/clients` create) are **real per-resource
+writes** that do NOT replace the tenant — they are the pattern for migrating the
+remaining resources off the snapshot. The payout tables are server-owned and
+excluded from the snapshot replace so their workflow state + history survive
+admin edits elsewhere.
 
 ## Deploy
 
@@ -195,19 +228,33 @@ Required env var on Vercel: **`DATABASE_URL`** (Neon pooled connection string).
 After it is set, the next deployment (or a redeploy) will connect; visit
 `/api/health` to confirm `ok: true`.
 
-## What's still local / next steps
+## What's done in this phase / next steps
 
-- **Auth is not real yet.** The Salesperson Portal and Affiliate Signup are
-  simulated. Next: real authentication (JWT/session) and per-role access using
-  the existing `users` table.
-- **Writes are snapshot-based.** `PUT /api/state` replaces a tenant's data as one
-  transaction (last-write-wins). For concurrent multi-user editing, add granular
-  REST endpoints per resource (the normalized tables already support this).
-- **GoHighLevel integration.** The schema is ready; the next phase is the OAuth
-  install flow + webhook handlers writing to `ghl_connections` /
-  `integration_events`, and syncing `clients.ghl_contact_id` etc.
-- **Reporting & portals** can be built on the relational tables (indexes for
-  tenant-scoped lookups are in place).
+Done in this phase:
+- **Real authentication** — scrypt-hashed passwords, DB-backed sessions
+  (httpOnly cookie), `/api/auth/*`, and one seeded user per role per tenant.
+- **Role-based portals + server-enforced isolation** — `/api/state` scopes data
+  by tenant and role; scoped roles physically never receive other users' rows,
+  and snapshot writes are owner/admin only.
+- **Real payout workflow** — `/api/payouts` does per-resource DB writes
+  (submit → approve → reject → mark paid → claw back/cancel) with role checks
+  and an append-only `payout_events` history. These tables are server-owned and
+  excluded from the snapshot replace, so history survives admin edits.
+- **Reports** — revenue, commission liability/paid/pending/projected,
+  salesperson & affiliate performance, top clients — all role/tenant scoped.
+
+Next steps:
+- **Migrate remaining writes off the snapshot.** People/plans/clients/payments
+  still use `PUT /api/state` (replace-all). Add per-resource endpoints like the
+  `/api/clients` and `/api/payouts` examples. Known limitation: editing the
+  underlying payments/plans after a payout exists can stale that batch's exact
+  line linkage (the batch + history + totals are preserved).
+- **GoHighLevel integration.** Schema is ready (`ghl_connections`,
+  `integration_events`, `ghl_*` id columns). Next: OAuth install flow + webhook
+  handlers + contact/payment/opportunity sync, per `ghl_location_id`.
+- **Password reset / user management UI**, session revocation, and rate limiting
+  on login.
+- **Code-split** the bundle (currently one ~730 kB chunk).
 
 ---
 

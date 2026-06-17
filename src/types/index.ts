@@ -182,7 +182,7 @@ export interface CommissionEntry {
 // Payouts (two-step approval)
 // ----------------------------------------------------------------------------
 
-export type PayoutStatus = "submitted" | "approved" | "paid" | "rejected";
+export type PayoutStatus = "submitted" | "approved" | "paid" | "rejected" | "canceled";
 
 export interface Payout {
   id: string;

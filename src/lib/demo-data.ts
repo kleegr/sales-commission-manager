@@ -9,13 +9,13 @@
 import {
   recomputePaymentCommissions,
   recomputeSalaryEntries,
-} from "./ledger";
+} from "./ledger.js";
 import {
   addMonthsISO,
   monthsSince,
   todayISO,
   uid,
-} from "./format";
+} from "./format.js";
 import {
   SCHEMA_VERSION,
   type AppData,
@@ -23,7 +23,7 @@ import {
   type CommissionPlan,
   type Payment,
   type Salesperson,
-} from "../types";
+} from "../types/index.js";
 
 function makePlans(): CommissionPlan[] {
   return [

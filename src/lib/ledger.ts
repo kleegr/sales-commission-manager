@@ -13,15 +13,15 @@ import {
   residualAmount,
   residualLabel,
   ruleAppliesToMonth,
-} from "./commission-engine";
-import { addMonthsISO, isoToDate, monthsSince, round2, todayISO } from "./format";
+} from "./commission-engine.js";
+import { addMonthsISO, isoToDate, monthsSince, round2, todayISO } from "./format.js";
 import type {
   AppData,
   Client,
   CommissionEntry,
   CommissionStatus,
   MonthlyResidualRule,
-} from "../types";
+} from "../types/index.js";
 
 /** Statuses that are "locked in" — not auto-derived from the due date. */
 const LOCKED: CommissionStatus[] = [

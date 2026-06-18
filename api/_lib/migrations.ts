@@ -183,4 +183,63 @@ CREATE INDEX IF NOT EXISTS idx_feature_access_tenant ON tenant_feature_access(te
 -- record this migration (kept here so repository.ts ensureSchema needs no edit)
 INSERT INTO schema_migrations (id) VALUES ('0008_tenant_feature_access')
 ON CONFLICT (id) DO NOTHING;
+
+-- 0009 — AI business setup + structured proposals/contracts -----------------
+-- The proposals/contracts foundation (0005) stored each template/document as a
+-- single TEXT \`body\`. This slice upgrades them to STRUCTURED, reorderable
+-- sections (a JSONB array; a null/empty array preserves the legacy single-body
+-- behaviour, so nothing already saved breaks) and adds the AI Business Setup
+-- profile + an append-only AI generation history. Everything is tenant-scoped
+-- and SERVER-OWNED (managed by /api/documents, /api/business-profile, /api/ai)
+-- and, like the 0005 tables, is intentionally NOT part of the /api/state
+-- snapshot replace-all, so an admin save never wipes it.
+
+ALTER TABLE document_templates ADD COLUMN IF NOT EXISTS sections           JSONB;
+ALTER TABLE document_templates ADD COLUMN IF NOT EXISTS description        TEXT NOT NULL DEFAULT '';
+ALTER TABLE document_templates ADD COLUMN IF NOT EXISTS style              TEXT NOT NULL DEFAULT 'modern';
+ALTER TABLE document_templates ADD COLUMN IF NOT EXISTS created_by_user_id TEXT;
+
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS sections JSONB;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS style    TEXT NOT NULL DEFAULT 'modern';
+
+-- One business profile per tenant — the AI Business Setup wizard target. The
+-- merge-field-relevant answers are first-class columns; the long tail of wizard
+-- answers (services, packages, scope, terms, tone, legal language, style, …)
+-- rides in \`profile\` JSONB so the wizard can evolve without a migration.
+CREATE TABLE IF NOT EXISTS business_profiles (
+  tenant_id          TEXT PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+  business_name      TEXT NOT NULL DEFAULT '',
+  logo_url           TEXT NOT NULL DEFAULT '',
+  website            TEXT NOT NULL DEFAULT '',
+  industry           TEXT NOT NULL DEFAULT '',
+  address            TEXT NOT NULL DEFAULT '',
+  contact_email      TEXT NOT NULL DEFAULT '',
+  contact_phone      TEXT NOT NULL DEFAULT '',
+  brand_tone         TEXT NOT NULL DEFAULT 'professional',
+  profile            JSONB,        -- the remaining wizard answers (see BusinessProfile)
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_by_user_id TEXT
+);
+
+-- Append-only history of every AI generation (proposal/contract/section/email).
+CREATE TABLE IF NOT EXISTS ai_generated_content (
+  id             TEXT PRIMARY KEY,
+  tenant_id      TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  user_id        TEXT,
+  salesperson_id TEXT,
+  kind           TEXT NOT NULL DEFAULT 'proposal',  -- proposal | contract | section | email
+  target         TEXT NOT NULL DEFAULT 'template',  -- template | document | section | email
+  title          TEXT NOT NULL DEFAULT '',
+  prompt         TEXT NOT NULL DEFAULT '',
+  content        JSONB,                              -- the generated sections / text
+  model          TEXT NOT NULL DEFAULT '',
+  client_id      TEXT,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ai_content_tenant ON ai_generated_content(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_content_sp     ON ai_generated_content(tenant_id, salesperson_id);
+
+INSERT INTO schema_migrations (id) VALUES ('0009_ai_proposals_contracts')
+ON CONFLICT (id) DO NOTHING;
 `;

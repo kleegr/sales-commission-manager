@@ -299,3 +299,82 @@ export function normalizeMilestoneInput(body: Record<string, unknown>): Result<M
   if (thresholdValue <= 0) return { ok: false, error: "threshold_required" };
   return { ok: true, value: { goalId, title: str(body.title), thresholdValue, reward: str(body.reward) } };
 }
+
+// ===========================================================================
+// Tenant feature access (pure)  — used by /api/features
+//
+// The agency/owner controls which product areas a tenant (sub-account) may use.
+// Flags are stored as OVERRIDES in tenant_feature_access; ABSENCE OF A ROW means
+// the feature is ENABLED (features are on by default, so a brand-new tenant has
+// the full product). Only owner/admin may change them. The validation here is
+// PURE and DB-free so it can be unit-tested (see handlers.test.ts). The route
+// guard + nav on the client mirror this list in src/lib/features.ts.
+// ===========================================================================
+
+/** Canonical product areas an agency can toggle per tenant. KEEP IN SYNC with
+ *  FEATURES in src/lib/features.ts on the client. */
+export const FEATURE_KEYS = [
+  "commissions",
+  "sales_portal",
+  "affiliate_portal",
+  "proposals",
+  "contracts",
+  "ai",
+  "payouts",
+  "reports",
+] as const;
+export type FeatureKey = (typeof FEATURE_KEYS)[number];
+export type FeatureFlags = Record<FeatureKey, boolean>;
+
+const FEATURE_KEY_SET = new Set<string>(FEATURE_KEYS);
+
+/** Every feature enabled — the default for a tenant with no override rows. */
+export function defaultFeatureFlags(): FeatureFlags {
+  const out = {} as FeatureFlags;
+  for (const k of FEATURE_KEYS) out[k] = true;
+  return out;
+}
+
+/** Build the effective flag map from stored override rows (default = enabled). */
+export function mergeFeatureRows(
+  rows: Array<{ feature: string; enabled: boolean | null }>,
+): FeatureFlags {
+  const out = defaultFeatureFlags();
+  for (const r of rows) {
+    if (FEATURE_KEY_SET.has(r.feature)) out[r.feature as FeatureKey] = !!r.enabled;
+  }
+  return out;
+}
+
+/** Only owner/admin may change feature access (agency-level control). */
+export function canManageFeatures(role: Role): boolean {
+  return ADMIN_ROLES.includes(role);
+}
+
+function toBool(v: unknown): boolean {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v !== 0;
+  const s = String(v).trim().toLowerCase();
+  return !["0", "false", "off", "no", "disabled", ""].includes(s);
+}
+
+/**
+ * Validate a feature-flag PUT/PATCH body into a partial map of KNOWN features
+ * only (unknown keys are ignored, never trusted). Accepts a flat body
+ * `{ commissions: false }` or a wrapped one `{ features: { … } }`. An empty
+ * patch (no recognised feature keys) is rejected.
+ */
+export function normalizeFeatureFlags(
+  body: Record<string, unknown>,
+): Result<Partial<FeatureFlags>> {
+  const src =
+    body.features && typeof body.features === "object"
+      ? (body.features as Record<string, unknown>)
+      : body;
+  const out: Partial<FeatureFlags> = {};
+  for (const k of FEATURE_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(src, k)) out[k] = toBool(src[k]);
+  }
+  if (Object.keys(out).length === 0) return { ok: false, error: "no_known_features" };
+  return { ok: true, value: out };
+}

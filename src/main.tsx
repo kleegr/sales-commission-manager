@@ -5,6 +5,7 @@ import App from "./App";
 import Login from "./pages/Login";
 import { AppProvider } from "./store/AppContext";
 import { AuthProvider, useAuth } from "./store/AuthContext";
+import { FeaturesProvider } from "./store/FeaturesContext";
 import "./index.css";
 
 /** Decides between the login screen and the authenticated app shell. */
@@ -25,7 +26,9 @@ function Root() {
   // fresh, correctly-scoped dataset is loaded for the new session.
   return (
     <AppProvider key={user.id}>
-      <App />
+      <FeaturesProvider>
+        <App />
+      </FeaturesProvider>
     </AppProvider>
   );
 }

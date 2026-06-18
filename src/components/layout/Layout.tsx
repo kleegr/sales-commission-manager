@@ -24,7 +24,9 @@ import {
 import { classNames } from "../../lib/format";
 import { useApp } from "../../store/AppContext";
 import { useAuth } from "../../store/AuthContext";
+import { useFeatures } from "../../store/FeaturesContext";
 import { canAccess, homePath, ROLE_LABEL, type Role } from "../../lib/roles";
+import { featureAllowsPath } from "../../lib/features";
 import { DemoBar } from "./DemoBar";
 import { Network, FileSignature, Target } from "lucide-react";
 
@@ -98,6 +100,7 @@ function ThemeToggle() {
 function NavContents({ onNavigate }: { onNavigate?: () => void }) {
   const { data } = useApp();
   const { user } = useAuth();
+  const { features } = useFeatures();
   const role = (user?.role ?? "salesperson") as Role;
 
   const pendingAffiliates = data.salespeople.filter(
@@ -106,7 +109,9 @@ function NavContents({ onNavigate }: { onNavigate?: () => void }) {
 
   const sections = SECTIONS.map((section) => ({
     ...section,
-    items: section.items.filter((item) => canAccess(role, item.to)),
+    items: section.items.filter(
+      (item) => canAccess(role, item.to) && featureAllowsPath(item.to, role, features),
+    ),
   })).filter((section) => section.items.length > 0);
 
   return (

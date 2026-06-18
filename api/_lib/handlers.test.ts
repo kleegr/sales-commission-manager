@@ -9,6 +9,9 @@ import {
   normalizeSalespersonInsert,
   buildSalespersonUpdate,
   normalizeSettingsInput,
+  canManageGoals,
+  normalizeGoalInput,
+  normalizeMilestoneInput,
 } from "./handlers.js";
 
 let passed = 0;
@@ -118,6 +121,36 @@ ok("negative fee floored to 0", sNeg.ok && sNeg.value.defaultSetupFee === 0);
 
 const sBadTheme = normalizeSettingsInput({ theme: "neon" });
 ok("invalid theme falls back to light", sBadTheme.ok && sBadTheme.value.theme === "light");
+
+console.log("\n[Handlers \u00b7 goals authorization]");
+ok("owner can manage goals", canManageGoals("owner" as any));
+ok("admin can manage goals", canManageGoals("admin" as any));
+ok("manager can manage goals", canManageGoals("sales_manager" as any));
+ok("salesperson CANNOT manage goals", !canManageGoals("salesperson" as any));
+ok("affiliate CANNOT manage goals", !canManageGoals("affiliate" as any));
+
+console.log("\n[Handlers \u00b7 goal validation]");
+const gMissingTarget = normalizeGoalInput({ scopeType: "tenant", metric: "revenue" });
+ok("goal needs a positive target", !gMissingTarget.ok);
+const gSpNoId = normalizeGoalInput({ scopeType: "salesperson", targetValue: 1000 });
+ok("salesperson goal needs a salespersonId", !gSpNoId.ok);
+const gOk = normalizeGoalInput({ scopeType: "salesperson", salespersonId: "sp1", metric: "clients_closed", targetValue: 5, period: "monthly" });
+ok("valid salesperson goal accepted", gOk.ok);
+ok("metric preserved", gOk.ok && gOk.value.metric === "clients_closed");
+ok("period preserved", gOk.ok && gOk.value.period === "monthly");
+const gBadMetric = normalizeGoalInput({ scopeType: "tenant", metric: "vibes", targetValue: 9 });
+ok("invalid metric falls back to revenue", gBadMetric.ok && gBadMetric.value.metric === "revenue");
+const gTeam = normalizeGoalInput({ scopeType: "team", managerUserId: "u9", targetValue: 50000 });
+ok("team goal keeps managerUserId", gTeam.ok && gTeam.value.managerUserId === "u9");
+ok("tenant goal clears salespersonId", gBadMetric.ok && gBadMetric.value.salespersonId === null);
+
+console.log("\n[Handlers \u00b7 milestone validation]");
+const mNoGoal = normalizeMilestoneInput({ thresholdValue: 100 });
+ok("milestone needs a goalId", !mNoGoal.ok);
+const mNoThreshold = normalizeMilestoneInput({ goalId: "g1" });
+ok("milestone needs a positive threshold", !mNoThreshold.ok);
+const mOk = normalizeMilestoneInput({ goalId: "g1", title: "Halfway", thresholdValue: 2500, reward: "$100" });
+ok("valid milestone accepted", mOk.ok && mOk.value.thresholdValue === 2500 && mOk.value.reward === "$100");
 
 console.log(`\n========================\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);

@@ -97,3 +97,75 @@ export async function saveSettings(payload: SettingsPayload): Promise<void> {
   });
   await asJson(res);
 }
+
+// ---- Goals & milestones ----------------------------------------------------
+// Server-owned; fetched directly (not part of AppData). Tenant + role come from
+// the session. Each goal in the response carries a server-computed `actual`.
+
+import type { Goal, GoalMetric, GoalPeriod, GoalScopeType, Milestone } from "../types";
+
+export interface GoalsResponse {
+  goals: Goal[];
+  milestones: Milestone[];
+}
+
+export async function listGoals(): Promise<GoalsResponse> {
+  const res = await fetch("/api/goals", { headers: { "content-type": "application/json" } });
+  return asJson(res);
+}
+
+export interface GoalInput {
+  scopeType: GoalScopeType;
+  salespersonId?: string | null;
+  managerUserId?: string | null;
+  metric: GoalMetric;
+  title: string;
+  targetValue: number;
+  period: GoalPeriod;
+  periodStart?: string | null;
+  periodEnd?: string | null;
+}
+
+export async function createGoal(input: GoalInput): Promise<{ id: string }> {
+  const res = await fetch("/api/goals", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return asJson(res);
+}
+
+export async function updateGoal(id: string, input: GoalInput): Promise<void> {
+  const res = await fetch(`/api/goals?id=${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  await asJson(res);
+}
+
+export async function deleteGoal(id: string): Promise<void> {
+  const res = await fetch(`/api/goals?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+  await asJson(res);
+}
+
+export interface MilestoneInput {
+  goalId: string;
+  title: string;
+  thresholdValue: number;
+  reward: string;
+}
+
+export async function createMilestone(input: MilestoneInput): Promise<{ id: string }> {
+  const res = await fetch("/api/goals?resource=milestone", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return asJson(res);
+}
+
+export async function deleteMilestone(id: string): Promise<void> {
+  const res = await fetch(`/api/goals?resource=milestone&id=${encodeURIComponent(id)}`, { method: "DELETE" });
+  await asJson(res);
+}

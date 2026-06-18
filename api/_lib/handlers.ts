@@ -227,3 +227,75 @@ export function normalizeSettingsInput(body: Record<string, unknown>): Result<Se
     },
   };
 }
+
+// ===========================================================================
+// Goals + milestones (pure validation)  — used by /api/goals
+//
+// A goal targets a metric for a salesperson, a manager's team, or the tenant,
+// over a period. Only owner/admin/sales_manager manage them; the endpoint adds
+// the scope guards (a manager may only target their own team/reps). Progress is
+// computed elsewhere (src/lib/goals.ts) from real data — never trusted/stored.
+// ===========================================================================
+
+import type { GoalMetric, GoalScopeType, GoalPeriod } from "../../src/types/index.js";
+
+const GOAL_METRICS = ["revenue", "clients_closed", "referrals", "mrr", "commission_earned", "activity"] as const;
+const GOAL_SCOPES = ["salesperson", "team", "tenant"] as const;
+const GOAL_PERIODS = ["monthly", "quarterly", "custom"] as const;
+
+export function canManageGoals(role: Role): boolean {
+  return ADMIN_ROLES.includes(role) || MANAGER_ROLES.includes(role);
+}
+
+export interface GoalInput {
+  scopeType: GoalScopeType;
+  salespersonId: string | null;
+  managerUserId: string | null;
+  metric: GoalMetric;
+  title: string;
+  targetValue: number;
+  period: GoalPeriod;
+  periodStart: string | null;
+  periodEnd: string | null;
+}
+
+/** Validate + normalize a goal for create/update (scope guards live in the endpoint). */
+export function normalizeGoalInput(body: Record<string, unknown>): Result<GoalInput> {
+  const scopeType = oneOf(body.scopeType, GOAL_SCOPES, "salesperson");
+  const targetValue = nonNeg(body.targetValue, 0);
+  if (targetValue <= 0) return { ok: false, error: "target_required" };
+
+  const salespersonId = scopeType === "salesperson" && body.salespersonId ? str(body.salespersonId) : "";
+  if (scopeType === "salesperson" && !salespersonId) return { ok: false, error: "salesperson_required" };
+
+  return {
+    ok: true,
+    value: {
+      scopeType,
+      salespersonId: salespersonId || null,
+      managerUserId: scopeType === "team" && body.managerUserId ? str(body.managerUserId) : null,
+      metric: oneOf(body.metric, GOAL_METRICS, "revenue") as GoalMetric,
+      title: str(body.title),
+      targetValue,
+      period: oneOf(body.period, GOAL_PERIODS, "monthly") as GoalPeriod,
+      periodStart: body.periodStart ? str(body.periodStart) : null,
+      periodEnd: body.periodEnd ? str(body.periodEnd) : null,
+    },
+  };
+}
+
+export interface MilestoneInput {
+  goalId: string;
+  title: string;
+  thresholdValue: number;
+  reward: string;
+}
+
+/** Validate + normalize a milestone for INSERT (goalId + positive threshold). */
+export function normalizeMilestoneInput(body: Record<string, unknown>): Result<MilestoneInput> {
+  const goalId = str(body.goalId);
+  if (!goalId) return { ok: false, error: "goal_id_required" };
+  const thresholdValue = nonNeg(body.thresholdValue, 0);
+  if (thresholdValue <= 0) return { ok: false, error: "threshold_required" };
+  return { ok: true, value: { goalId, title: str(body.title), thresholdValue, reward: str(body.reward) } };
+}

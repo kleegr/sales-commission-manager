@@ -169,3 +169,26 @@ export async function deleteMilestone(id: string): Promise<void> {
   const res = await fetch(`/api/goals?resource=milestone&id=${encodeURIComponent(id)}`, { method: "DELETE" });
   await asJson(res);
 }
+
+// ---- Feature access --------------------------------------------------------
+// Server-owned, tenant-scoped feature flags (agency/owner control). The tenant
+// comes from the session. GET returns the full map; PUT (owner/admin) writes
+// overrides and returns the updated map.
+
+import type { FeatureFlags } from "./features";
+
+export async function getFeatures(): Promise<Partial<FeatureFlags>> {
+  const res = await fetch("/api/features", { headers: { accept: "application/json" } });
+  const body = await asJson(res);
+  return (body?.features ?? {}) as Partial<FeatureFlags>;
+}
+
+export async function saveFeatures(patch: Partial<FeatureFlags>): Promise<FeatureFlags> {
+  const res = await fetch("/api/features", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ features: patch }),
+  });
+  const body = await asJson(res);
+  return body.features as FeatureFlags;
+}

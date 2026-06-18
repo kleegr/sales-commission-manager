@@ -13,6 +13,7 @@ import Plans from "./pages/Plans";
 import PlanBuilder from "./pages/PlanBuilder";
 import PlanProjection from "./pages/PlanProjection";
 import Clients from "./pages/Clients";
+import ClientDetail from "./pages/ClientDetail";
 import Payments from "./pages/Payments";
 import Ledger from "./pages/Ledger";
 import Payouts from "./pages/Payouts";
@@ -73,6 +74,7 @@ export default function App() {
         <Route path="/plans/:id/edit" element={<Guard><PlanBuilder /></Guard>} />
         <Route path="/plans/:id/projection" element={<Guard><PlanProjection /></Guard>} />
         <Route path="/clients" element={<Guard><Clients /></Guard>} />
+        <Route path="/clients/:id" element={<Guard><ClientDetail /></Guard>} />
         <Route path="/payments" element={<Guard><Payments /></Guard>} />
         <Route path="/ledger" element={<Guard><Ledger /></Guard>} />
         <Route path="/payouts" element={<Guard><Payouts /></Guard>} />

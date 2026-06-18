@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { Plus, Pencil, Trash2, Building2, Search } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Plus, Pencil, Trash2, Building2, Search, Eye } from "lucide-react";
 import { useApp } from "../store/AppContext";
 import type { Client, ClientStatus } from "../types";
 import {
@@ -151,7 +152,9 @@ export default function Clients() {
               {rows.map((c) => (
                 <TR key={c.id}>
                   <TD className="font-medium text-slate-900 dark:text-white">
-                    {c.companyName}
+                    <Link to={`/clients/${c.id}`} className="hover:text-brand-600 hover:underline">
+                      {c.companyName}
+                    </Link>
                   </TD>
                   <TD>
                     <div className="text-slate-700 dark:text-slate-200">{c.contactName || "—"}</div>
@@ -166,6 +169,9 @@ export default function Clients() {
                   </TD>
                   <TD className="text-right">
                     <div className="flex justify-end gap-1">
+                      <Link to={`/clients/${c.id}`} aria-label="View" title="View details" className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-brand-600 dark:hover:bg-slate-800">
+                        <Eye className="h-4 w-4" />
+                      </Link>
                       <Button variant="ghost" size="sm" onClick={() => openEdit(c)} aria-label="Edit">
                         <Pencil className="h-4 w-4" />
                       </Button>

@@ -326,3 +326,135 @@ export interface Milestone {
   reward: string;
   createdAt: string;
 }
+
+// ----------------------------------------------------------------------------
+// AI Business Setup + Proposals / Contracts (server-owned; fetched via
+// /api/business-profile, /api/documents, /api/ai — NOT part of AppData)
+//
+// Templates and client documents are made of STRUCTURED, reorderable sections
+// (not one text blob). Templates carry merge-field tokens like {{client_name}};
+// when a client document is created from a template the tokens are resolved on
+// the server and baked into the document's sections.
+// ----------------------------------------------------------------------------
+
+export type DocumentKind = "proposal" | "contract";
+export type DocStatus = "draft" | "sent" | "viewed" | "signed" | "canceled";
+export type DocumentStyle = "modern" | "classic" | "minimal" | "bold";
+
+/** Every supported section type across proposals and contracts. */
+export type SectionType =
+  // proposal
+  | "cover"
+  | "problem"
+  | "solution"
+  | "scope"
+  | "deliverables"
+  | "timeline"
+  | "pricing"
+  | "addons"
+  | "terms"
+  | "next_steps"
+  | "signature"
+  // contract
+  | "parties"
+  | "payment_terms"
+  | "term_length"
+  | "cancellation"
+  | "refund"
+  | "confidentiality"
+  | "responsibilities"
+  | "disclaimers"
+  // either
+  | "custom";
+
+export interface DocumentSection {
+  id: string;
+  type: SectionType;
+  title: string;
+  /** Plain text / light markdown. May contain merge-field tokens on a template. */
+  content: string;
+}
+
+export interface DocumentTemplate {
+  id: string;
+  kind: DocumentKind;
+  name: string;
+  description: string;
+  style: DocumentStyle;
+  sections: DocumentSection[];
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ClientDocument {
+  id: string;
+  kind: DocumentKind;
+  title: string;
+  clientId: string | null;
+  salespersonId: string | null;
+  templateId: string | null;
+  style: DocumentStyle;
+  sections: DocumentSection[];
+  status: DocStatus;
+  amount: number;
+  createdAt: string;
+  updatedAt: string;
+  sentAt: string | null;
+  viewedAt: string | null;
+  signedAt: string | null;
+  canceledAt: string | null;
+}
+
+/** What "sells" — used to tailor proposal/contract generation. */
+export type SellsType = "services" | "software" | "both";
+
+/**
+ * The AI Business Setup profile (one per tenant). All wizard answers; the
+ * server stores the merge-relevant ones as columns and the rest as JSONB.
+ */
+export interface BusinessProfile {
+  businessName: string;
+  logoUrl: string;
+  website: string;
+  industry: string;
+  description: string;
+  services: string;
+  software: string;
+  sells: SellsType;
+  targetCustomers: string;
+  pricingModel: string;
+  setupFees: string;
+  monthlyFees: string;
+  packages: string;
+  scopeOfWork: string;
+  deliverables: string;
+  timeline: string;
+  paymentTerms: string;
+  cancellationTerms: string;
+  refundTerms: string;
+  contractLength: string;
+  guarantees: string;
+  brandTone: string;
+  companyAddress: string;
+  contactEmail: string;
+  contactPhone: string;
+  legalLanguage: string;
+  proposalStyle: DocumentStyle;
+  contractStyle: DocumentStyle;
+  updatedAt?: string;
+}
+
+export type AiTarget = "template" | "document" | "section" | "email";
+
+export interface AiGeneration {
+  id: string;
+  kind: DocumentKind | "section" | "email";
+  target: AiTarget;
+  title: string;
+  prompt: string;
+  content: { sections?: DocumentSection[]; text?: string } | null;
+  model: string;
+  clientId: string | null;
+  createdAt: string;
+}

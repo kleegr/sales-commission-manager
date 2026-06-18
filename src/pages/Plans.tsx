@@ -8,6 +8,7 @@ import {
   ScrollText,
   LineChart,
   Users,
+  Clock,
 } from "lucide-react";
 import { useApp } from "../store/AppContext";
 import type { CommissionPlan } from "../types";
@@ -20,6 +21,7 @@ import {
 } from "../components/ui";
 import { ConfirmModal } from "../components/ui/Modal";
 import { ruleHeadline } from "../lib/commission-engine";
+import { timingHeadline } from "../lib/commission-timing";
 import { uid, todayISO, formatCurrency } from "../lib/format";
 
 const TYPE_TONE = {
@@ -105,6 +107,13 @@ export default function Plans() {
               <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-xs text-slate-400 dark:border-slate-800">
                 <span>Sample: {formatCurrency(plan.sampleSetupFee)} setup · {formatCurrency(plan.sampleMonthly)}/mo</span>
               </div>
+
+              {plan.timing && (
+                <div className="mt-2 flex items-start gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+                  <Clock className="mt-0.5 h-3.5 w-3.5 flex-none text-slate-400" />
+                  <span>{timingHeadline(plan.timing)}</span>
+                </div>
+              )}
 
               <div className="mt-3 flex flex-wrap gap-2">
                 <Link to={`/plans/${plan.id}/projection`} className="flex-1">

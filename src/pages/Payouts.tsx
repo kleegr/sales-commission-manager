@@ -19,7 +19,7 @@ import {
   TD,
 } from "../components/ui";
 import { DateRangeFilter, type DateRange } from "../components/DateRangeFilter";
-import { displayStatus, clientLabel } from "../lib/ledger";
+import { displayStatus, clientLabel, fullLedger } from "../lib/ledger";
 import { inRange } from "../lib/analytics";
 import { formatCurrency, formatDate } from "../lib/format";
 import {
@@ -71,14 +71,18 @@ export default function Payouts() {
   const clientName = (id: string | null) => clientLabel(data.clients.find((c) => c.id === id));
 
   // Eligible = real, earned commissions currently pending (not in a payout yet).
+  // Sourced from fullLedger so timing is re-derived: held / clawed-back lines are
+  // excluded even after a plain reload that didn't run a recompute.
+  const ledger = useMemo(() => fullLedger(data, 0), [data]);
   const eligible = useMemo(
     () =>
-      data.commissions
+      ledger
+        .filter((e) => !e.isProjection)
         .filter((e) => displayStatus(e) === "pending")
         .filter((e) => (spFilter === "all" ? true : e.salespersonId === spFilter))
         .filter((e) => inRange(e.paymentDate, range.from, range.to))
         .sort((a, b) => (a.dueDate < b.dueDate ? 1 : -1)),
-    [data.commissions, spFilter, range],
+    [ledger, spFilter, range],
   );
 
   const selectedIds = useMemo(

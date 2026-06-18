@@ -41,6 +41,7 @@ import {
   TRIGGER_LABEL,
 } from "../lib/commission-timing";
 import { uid, todayISO } from "../lib/format";
+import { createPlan, updatePlan } from "../lib/resource-client";
 
 const ADD_BUTTONS: { type: RuleType; label: string; icon: typeof Gift }[] = [
   { type: "setup_fee", label: "Setup Fee", icon: CircleDollarSign },
@@ -66,7 +67,7 @@ function clonePlan(p: CommissionPlan): CommissionPlan {
 }
 
 export default function PlanBuilder() {
-  const { data, dispatch } = useApp();
+  const { data, dispatch, reload } = useApp();
   const navigate = useNavigate();
   const { id } = useParams();
   const isEdit = !!id;
@@ -133,13 +134,30 @@ export default function PlanBuilder() {
     setEditing(null);
   }
 
-  function savePlan() {
+  async function savePlan() {
     const plan: CommissionPlan = {
       ...draft,
       name: draft.name.trim() || "Untitled plan",
     };
-    if (isEdit && existing) dispatch({ type: "PLAN_UPDATE", plan });
-    else dispatch({ type: "PLAN_ADD", plan });
+    const payload = {
+      name: plan.name,
+      description: plan.description,
+      sampleSetupFee: plan.sampleSetupFee,
+      sampleMonthly: plan.sampleMonthly,
+      timing: plan.timing,
+      rules: plan.rules,
+    };
+    try {
+      // Real DB API: persist the plan + its rules + timing, recompute the ledger
+      // for everyone on the plan, then reload authoritative state. Falls back to
+      // the local store off the API (e.g. vite dev with no functions).
+      if (isEdit && existing) await updatePlan(existing.id, payload);
+      else await createPlan(payload);
+      await reload();
+    } catch {
+      if (isEdit && existing) dispatch({ type: "PLAN_UPDATE", plan });
+      else dispatch({ type: "PLAN_ADD", plan });
+    }
     navigate("/plans");
   }
 

@@ -13,6 +13,7 @@ import Payments from "./pages/Payments";
 import Ledger from "./pages/Ledger";
 import Payouts from "./pages/Payouts";
 import Reports from "./pages/Reports";
+import Goals from "./pages/Goals";
 import SalespersonPortal from "./pages/SalespersonPortal";
 import AffiliatePortal from "./pages/AffiliatePortal";
 import Agency from "./pages/Agency";
@@ -59,6 +60,7 @@ export default function App() {
         <Route path="/ledger" element={<Guard><Ledger /></Guard>} />
         <Route path="/payouts" element={<Guard><Payouts /></Guard>} />
         <Route path="/reports" element={<Guard><Reports /></Guard>} />
+        <Route path="/goals" element={<Guard><Goals /></Guard>} />
         <Route path="/documents" element={<Guard><Documents /></Guard>} />
         <Route path="/portal" element={<Guard><Portal /></Guard>} />
         <Route path="/present" element={<Guard><Presentation /></Guard>} />

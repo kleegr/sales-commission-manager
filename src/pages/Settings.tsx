@@ -13,6 +13,7 @@ import {
   AlertTriangle,
   Building2,
   RefreshCw,
+  ToggleRight,
 } from "lucide-react";
 import { useApp } from "../store/AppContext";
 import type { AppData, ProjectionAssumptions } from "../types";
@@ -24,10 +25,13 @@ import {
   Field,
   Input,
   NumberField,
+  Checkbox,
 } from "../components/ui";
 import { ConfirmModal } from "../components/ui/Modal";
 import { downloadJSON } from "../lib/export";
-import { saveSettings } from "../lib/resource-client";
+import { saveSettings, saveFeatures } from "../lib/resource-client";
+import { useFeatures } from "../store/FeaturesContext";
+import { FEATURES, FEATURE_KEYS, type FeatureFlags } from "../lib/features";
 
 export default function Settings() {
   const { data, dispatch, storeName, backend } = useApp();
@@ -99,6 +103,9 @@ export default function Settings() {
       <div className="space-y-6">
         {/* Data source & tenant (multi-tenant / GoHighLevel sub-account) */}
         <WorkspacePanel />
+
+        {/* Feature access (agency/owner control over this sub-account) */}
+        <FeatureAccessPanel />
 
         {/* Company + theme */}
         <Card className="space-y-4">
@@ -252,6 +259,102 @@ function Stat({ label, value }: { label: string; value: number }) {
       <p className="text-xs text-slate-500">{label}</p>
       <p className="text-lg font-semibold text-slate-900 dark:text-white">{value}</p>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Feature access panel
+//
+// Agency/owner control over which product areas THIS sub-account (the session's
+// tenant) can use. Toggles persist to /api/features (owner/admin only) and take
+// effect immediately: the nav + route guard read the same flags, so a disabled
+// area disappears for everyone in the workspace. Reaching Settings already
+// requires owner/admin (see roles.ts), so no extra role check is needed here.
+// ---------------------------------------------------------------------------
+
+function FeatureAccessPanel() {
+  const { features, setLocal, refresh } = useFeatures();
+  const [draft, setDraft] = useState<FeatureFlags>(features);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // Keep the editable draft in sync when the authoritative flags load/refresh.
+  useEffect(() => {
+    setDraft(features);
+  }, [features]);
+
+  const dirty = FEATURE_KEYS.some((k) => draft[k] !== features[k]);
+
+  async function save() {
+    setSaving(true);
+    setMsg(null);
+    try {
+      const next = await saveFeatures(draft);
+      setLocal(next);
+      setMsg({ ok: true, text: "Feature access saved." });
+    } catch {
+      // Re-pull server truth so the UI never drifts from what was actually saved.
+      await refresh().catch(() => {});
+      setMsg({
+        ok: false,
+        text: "Couldn't save feature access. Check that the database is connected.",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="space-y-4">
+      <SectionTitle right={<ToggleRight className="h-4 w-4 text-slate-400" />}>
+        Feature access
+      </SectionTitle>
+      <p className="text-sm text-slate-500">
+        Control which product areas this sub-account can use. Disabled areas are hidden from
+        everyone in this workspace; the server enforces the same flags. Changes save to the
+        database and take effect immediately.
+      </p>
+
+      {msg && (
+        <p
+          className={
+            "rounded-lg px-3 py-2 text-sm " +
+            (msg.ok
+              ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"
+              : "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300")
+          }
+        >
+          {msg.text}
+        </p>
+      )}
+
+      <div className="divide-y divide-slate-100 dark:divide-slate-800">
+        {FEATURES.map((f) => (
+          <div key={f.key} className="flex items-center justify-between gap-4 py-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-slate-800 dark:text-slate-200">{f.label}</p>
+              <p className="text-xs text-slate-500">{f.description}</p>
+            </div>
+            <Checkbox
+              label={draft[f.key] ? "On" : "Off"}
+              checked={draft[f.key]}
+              onChange={(v) => setDraft((d) => ({ ...d, [f.key]: v }))}
+            />
+          </div>
+        ))}
+      </div>
+
+      <div className="flex items-center gap-2">
+        <Button onClick={() => void save()} disabled={!dirty || saving}>
+          {saving ? "Saving…" : "Save feature access"}
+        </Button>
+        {dirty && (
+          <Button variant="ghost" onClick={() => setDraft(features)} disabled={saving}>
+            Reset
+          </Button>
+        )}
+      </div>
+    </Card>
   );
 }
 

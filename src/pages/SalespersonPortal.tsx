@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { UserRound, Building2, Plus, Loader2 } from "lucide-react";
+import { UserRound, Building2, Plus, Loader2, Flag } from "lucide-react";
 import { useApp } from "../store/AppContext";
 import {
   PageHeader,
@@ -11,6 +11,7 @@ import {
   PayoutBadge,
   StatusBadge,
   SectionTitle,
+  Badge,
   Select,
   Field,
   Input,
@@ -27,7 +28,10 @@ import { Modal } from "../components/ui/Modal";
 import { MoneyBarChart } from "../components/charts/Charts";
 import { fullLedger, displayStatus, clientLabel } from "../lib/ledger";
 import { commissionTotals, monthlySeries } from "../lib/analytics";
-import { formatCurrency, formatDate } from "../lib/format";
+import { formatCurrency, formatDate, formatNumber, todayISO } from "../lib/format";
+import { listGoals } from "../lib/resource-client";
+import type { Goal, Milestone } from "../types";
+import { goalProgress, paceProjection, resolveGoalPeriod, nextMilestone, projectedCommissionPerDeal } from "../lib/goals";
 
 interface LeadDraft {
   companyName: string;
@@ -41,6 +45,19 @@ interface LeadDraft {
 function emptyLead(): LeadDraft {
   return { companyName: "", contactName: "", email: "", phone: "", setupFee: 0, monthlySubscription: 0, notes: "" };
 }
+
+const GOAL_MONEY_METRICS = new Set(["revenue", "mrr", "commission_earned"]);
+const fmtGoalMetric = (metric: string, v: number) =>
+  GOAL_MONEY_METRICS.has(metric) ? formatCurrency(v) : formatNumber(v);
+const GOAL_METRIC_NOUN: Record<string, string> = {
+  revenue: "revenue",
+  clients_closed: "clients",
+  referrals: "referrals",
+  mrr: "MRR",
+  commission_earned: "commission",
+  activity: "activities",
+};
+const GOAL_PERIOD_LABEL: Record<string, string> = { monthly: "this month", quarterly: "this quarter", custom: "this period" };
 
 export default function SalespersonPortal() {
   const { data, reload } = useApp();
@@ -113,6 +130,53 @@ export default function SalespersonPortal() {
     [mine],
   );
 
+  // Goals & milestones (server-owned; each goal carries a server-computed actual).
+  const [allGoals, setAllGoals] = useState<Goal[]>([]);
+  const [allMilestones, setAllMilestones] = useState<Milestone[]>([]);
+  useEffect(() => {
+    let alive = true;
+    listGoals()
+      .then((r) => {
+        if (!alive) return;
+        setAllGoals(r.goals);
+        setAllMilestones(r.milestones);
+      })
+      .catch(() => {
+        /* API unreachable (e.g. offline) — the goals section simply stays hidden */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // The selected rep sees their own salesperson goals plus any company-wide goal.
+  const myGoals = useMemo(
+    () =>
+      sp
+        ? allGoals.filter(
+            (g) => g.scopeType === "tenant" || (g.scopeType === "salesperson" && g.salespersonId === sp.id),
+          )
+        : [],
+    [allGoals, sp],
+  );
+  const milestonesByGoal = useMemo(() => {
+    const m = new Map<string, Milestone[]>();
+    for (const ms of allMilestones) {
+      const list = m.get(ms.goalId) ?? [];
+      list.push(ms);
+      m.set(ms.goalId, list);
+    }
+    return m;
+  }, [allMilestones]);
+
+  // "Each new client like your average earns ~$X in commission (first 12 months)."
+  const perDealCommission = useMemo(() => {
+    if (!sp) return 0;
+    const plan = data.plans.find((p) => p.id === sp.commissionPlanId) ?? null;
+    const a = data.settings.assumptions;
+    return projectedCommissionPerDeal(plan, a.avgSetupFee, a.avgMonthly);
+  }, [sp, data.plans, data.settings.assumptions]);
+
   if (active.length === 0) {
     return (
       <div>
@@ -173,6 +237,83 @@ export default function SalespersonPortal() {
             <StatCard label="Pending" value={formatCurrency(totals.pending)} tone="amber" />
             <StatCard label="Projected" value={formatCurrency(totals.projected)} tone="cyan" />
           </div>
+
+          {myGoals.length > 0 && (
+            <Card className="mb-5">
+              <div className="flex items-center justify-between">
+                <SectionTitle>Your goals &amp; milestones</SectionTitle>
+                {perDealCommission > 0 && (
+                  <span className="hidden text-xs text-slate-500 sm:block">
+                    Each new client ≈ <span className="font-semibold text-emerald-600 dark:text-emerald-400">{formatCurrency(perDealCommission)}</span> commission
+                  </span>
+                )}
+              </div>
+              <div className="mt-4 space-y-5">
+                {myGoals.map((g) => {
+                  const actual = g.actual ?? 0;
+                  const prog = goalProgress(actual, g.targetValue);
+                  const period = resolveGoalPeriod(g, todayISO());
+                  const pace = paceProjection(actual, g.targetValue, period, todayISO());
+                  const next = nextMilestone(milestonesByGoal.get(g.id) ?? [], actual);
+                  const isCount = !GOAL_MONEY_METRICS.has(g.metric);
+                  const dealsToGo = isCount ? Math.ceil(prog.remaining) : 0;
+                  return (
+                    <div key={g.id}>
+                      <div className="flex items-baseline justify-between gap-2">
+                        <p className="truncate text-sm font-medium text-slate-900 dark:text-white">
+                          {g.title}
+                          {g.scopeType === "tenant" && (
+                            <Badge tone="violet" className="ml-2 align-middle">Company</Badge>
+                          )}
+                        </p>
+                        <p className="flex-none text-xs text-slate-500">
+                          {fmtGoalMetric(g.metric, actual)} / {fmtGoalMetric(g.metric, g.targetValue)} {GOAL_PERIOD_LABEL[g.period]}
+                        </p>
+                      </div>
+                      <div className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+                        <div
+                          className={
+                            "h-full rounded-full transition-all " +
+                            (prog.reached ? "bg-emerald-500" : pace.onTrack ? "bg-brand-500" : "bg-amber-500")
+                          }
+                          style={{ width: `${Math.max(2, prog.pct)}%` }}
+                        />
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
+                        <span className={prog.reached ? "font-medium text-emerald-600 dark:text-emerald-400" : "text-slate-600 dark:text-slate-300"}>
+                          {prog.reached
+                            ? "Goal reached — nice work! 🎉"
+                            : `${prog.pct}% there · ${fmtGoalMetric(g.metric, prog.remaining)} ${GOAL_METRIC_NOUN[g.metric]} to go`}
+                        </span>
+                        {!prog.reached && g.period !== "custom" && (
+                          <span className={pace.onTrack ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}>
+                            {pace.onTrack ? "On pace ✓" : "Behind pace"} · projecting {fmtGoalMetric(g.metric, pace.projectedEnd)}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* motivational nudge for count-based goals */}
+                      {!prog.reached && isCount && dealsToGo > 0 && perDealCommission > 0 && (g.metric === "clients_closed" || g.metric === "referrals") && (
+                        <p className="mt-1.5 rounded-lg bg-emerald-50 px-3 py-1.5 text-xs text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">
+                          Close <span className="font-semibold">{dealsToGo} more</span> to hit this goal — about{" "}
+                          <span className="font-semibold">{formatCurrency(dealsToGo * perDealCommission)}</span> in commission.
+                        </p>
+                      )}
+
+                      {next && (
+                        <div className="mt-1.5 flex items-center gap-1.5 text-xs text-slate-500">
+                          <Flag className="h-3.5 w-3.5 text-slate-400" />
+                          Next milestone: <span className="font-medium text-slate-700 dark:text-slate-200">{next.title}</span>
+                          {" "}at {fmtGoalMetric(g.metric, next.thresholdValue)}
+                          {" "}({fmtGoalMetric(g.metric, next.remaining)} away){next.reward && ` — ${next.reward}`}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
 
           <Card className="mb-5">
             <SectionTitle>Earnings over time</SectionTitle>

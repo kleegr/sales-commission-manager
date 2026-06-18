@@ -228,3 +228,49 @@ export interface AppData {
 }
 
 export const SCHEMA_VERSION = 1;
+
+// ----------------------------------------------------------------------------
+// Goals & milestones (server-owned; fetched via /api/goals, NOT part of AppData)
+//
+// A goal targets a measurable metric for a salesperson, a manager's team, or the
+// whole tenant, over a period. Progress is computed from real data, never
+// stored. Milestones are sub-thresholds of a goal used to motivate.
+// ----------------------------------------------------------------------------
+
+export type GoalMetric =
+  | "revenue" // $ collected (setup + subscription − refunds) in the period
+  | "clients_closed" // new clients signed in the period
+  | "referrals" // new referral-sourced clients in the period
+  | "mrr" // current monthly recurring revenue (active clients)
+  | "commission_earned" // commission earned (non-projected) in the period
+  | "activity"; // proxy: clients signed + payments recorded in the period
+
+export type GoalScopeType = "salesperson" | "team" | "tenant";
+export type GoalPeriod = "monthly" | "quarterly" | "custom";
+export type GoalStatus = "active" | "archived";
+
+export interface Goal {
+  id: string;
+  scopeType: GoalScopeType;
+  salespersonId: string | null; // when scopeType === 'salesperson'
+  managerUserId: string | null; // when scopeType === 'team'
+  metric: GoalMetric;
+  title: string;
+  targetValue: number;
+  period: GoalPeriod;
+  periodStart: string | null; // ISO yyyy-mm-dd
+  periodEnd: string | null; // ISO yyyy-mm-dd
+  status: GoalStatus;
+  createdAt: string;
+  /** Computed server-side and attached to the GET response (not persisted). */
+  actual?: number;
+}
+
+export interface Milestone {
+  id: string;
+  goalId: string;
+  title: string;
+  thresholdValue: number; // in the goal's metric units
+  reward: string;
+  createdAt: string;
+}

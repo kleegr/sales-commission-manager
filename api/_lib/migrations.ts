@@ -102,4 +102,47 @@ CREATE TABLE IF NOT EXISTS documents (
 CREATE INDEX IF NOT EXISTS idx_documents_tenant      ON documents(tenant_id, kind);
 CREATE INDEX IF NOT EXISTS idx_documents_tenant_sp   ON documents(tenant_id, salesperson_id);
 CREATE INDEX IF NOT EXISTS idx_documents_tenant_cli  ON documents(tenant_id, client_id);
+
+-- 0006 — goals & milestones -------------------------------------------------
+-- Sales goals + motivational milestones. A goal targets a measurable metric for
+-- a salesperson, a manager's team, or the whole tenant, over a period. Progress
+-- is COMPUTED from real data (payments / clients / commissions) — never stored —
+-- so it always reflects the live ledger. Milestones are sub-thresholds of a
+-- goal (e.g. 25% / 50% / 75% markers, or a bonus tier). These rows are
+-- SERVER-OWNED (managed by /api/goals) and are intentionally NOT part of the
+-- snapshot replace-all in writeState, so an admin save never wipes them.
+CREATE TABLE IF NOT EXISTS goals (
+  id                 TEXT PRIMARY KEY,
+  tenant_id          TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  scope_type         TEXT NOT NULL DEFAULT 'salesperson', -- salesperson | team | tenant
+  salesperson_id     TEXT,        -- set when scope_type = 'salesperson'
+  manager_user_id    TEXT,        -- set when scope_type = 'team'
+  metric             TEXT NOT NULL DEFAULT 'revenue',     -- revenue | clients_closed | referrals | mrr | commission_earned | activity
+  title              TEXT NOT NULL DEFAULT '',
+  target_value       DOUBLE PRECISION NOT NULL DEFAULT 0,
+  period             TEXT NOT NULL DEFAULT 'monthly',     -- monthly | quarterly | custom
+  period_start       TEXT,        -- ISO yyyy-mm-dd (inclusive)
+  period_end         TEXT,        -- ISO yyyy-mm-dd (inclusive)
+  status             TEXT NOT NULL DEFAULT 'active',      -- active | archived
+  created_by_user_id TEXT,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_goals_tenant     ON goals(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_goals_tenant_sp  ON goals(tenant_id, salesperson_id);
+CREATE INDEX IF NOT EXISTS idx_goals_tenant_mgr ON goals(tenant_id, manager_user_id);
+
+CREATE TABLE IF NOT EXISTS milestones (
+  id              TEXT PRIMARY KEY,
+  tenant_id       TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  goal_id         TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+  title           TEXT NOT NULL DEFAULT '',
+  threshold_value DOUBLE PRECISION NOT NULL DEFAULT 0,   -- in the goal's metric units
+  reward          TEXT NOT NULL DEFAULT '',
+  sort_order      INTEGER NOT NULL DEFAULT 0,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_milestones_tenant ON milestones(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_milestones_goal   ON milestones(goal_id);
 `;

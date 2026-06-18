@@ -192,3 +192,214 @@ export async function saveFeatures(patch: Partial<FeatureFlags>): Promise<Featur
   const body = await asJson(res);
   return body.features as FeatureFlags;
 }
+
+// ---- AI Business Setup, Proposals & Contracts ------------------------------
+// Server-owned + tenant-scoped (tenant/role from the session). Templates &
+// client documents are made of structured sections; merge fields are resolved
+// on the server. All OpenAI calls go through /api/ai (the key never reaches the
+// browser). Each call throws on a non-2xx response (see asJson).
+
+import type {
+  AiGeneration,
+  AiTarget,
+  BusinessProfile,
+  ClientDocument,
+  DocStatus,
+  DocumentKind,
+  DocumentSection,
+  DocumentStyle,
+  DocumentTemplate,
+  SectionType,
+} from "../types";
+
+// --- Business profile ---
+
+export async function getBusinessProfile(): Promise<BusinessProfile | null> {
+  const res = await fetch("/api/business-profile", { headers: { accept: "application/json" } });
+  const body = await asJson(res);
+  return (body?.profile ?? null) as BusinessProfile | null;
+}
+
+export async function saveBusinessProfile(profile: Partial<BusinessProfile>): Promise<BusinessProfile> {
+  const res = await fetch("/api/business-profile", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(profile),
+  });
+  const body = await asJson(res);
+  return body.profile as BusinessProfile;
+}
+
+// --- Documents (templates + client docs) ---
+
+export interface DocumentsResponse {
+  templates: DocumentTemplate[];
+  documents: ClientDocument[];
+  features: { proposals: boolean; contracts: boolean; ai: boolean };
+}
+
+export interface DocumentsFilter {
+  kind?: DocumentKind;
+  clientId?: string;
+  status?: DocStatus;
+}
+
+export async function listDocuments(filter: DocumentsFilter = {}): Promise<DocumentsResponse> {
+  const qs = new URLSearchParams();
+  if (filter.kind) qs.set("kind", filter.kind);
+  if (filter.clientId) qs.set("clientId", filter.clientId);
+  if (filter.status) qs.set("status", filter.status);
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  const res = await fetch(`/api/documents${suffix}`, { headers: { accept: "application/json" } });
+  return asJson(res);
+}
+
+async function docPost(payload: Record<string, unknown>): Promise<any> {
+  const res = await fetch("/api/documents", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return asJson(res);
+}
+
+export interface TemplateInput {
+  kind: DocumentKind;
+  name: string;
+  description?: string;
+  style?: DocumentStyle;
+  sections?: DocumentSection[];
+}
+
+export const createTemplate = (input: TemplateInput): Promise<{ id: string }> =>
+  docPost({ op: "create_template", ...input });
+
+export const updateTemplate = (
+  id: string,
+  patch: Partial<Omit<TemplateInput, "kind">>,
+): Promise<{ id: string }> => docPost({ op: "update_template", id, ...patch });
+
+export const duplicateTemplate = (id: string): Promise<{ id: string }> =>
+  docPost({ op: "duplicate_template", id });
+
+export const deleteTemplate = (id: string): Promise<{ ok: true }> =>
+  docPost({ op: "delete_template", id });
+
+export type SectionScope = "template" | "document";
+
+export const addDocSection = (
+  scope: SectionScope,
+  id: string,
+  kind: DocumentKind,
+  sectionType: SectionType,
+  atIndex?: number,
+): Promise<{ sections: DocumentSection[] }> =>
+  docPost({ op: "section_add", scope, id, kind, sectionType, atIndex });
+
+export const updateDocSection = (
+  scope: SectionScope,
+  id: string,
+  sectionId: string,
+  patch: { title?: string; content?: string; type?: SectionType },
+): Promise<{ sections: DocumentSection[] }> =>
+  docPost({ op: "section_update", scope, id, sectionId, ...patch });
+
+export const deleteDocSection = (
+  scope: SectionScope,
+  id: string,
+  sectionId: string,
+): Promise<{ sections: DocumentSection[] }> =>
+  docPost({ op: "section_delete", scope, id, sectionId });
+
+export const reorderDocSections = (
+  scope: SectionScope,
+  id: string,
+  orderedIds: string[],
+): Promise<{ sections: DocumentSection[] }> =>
+  docPost({ op: "section_reorder", scope, id, orderedIds });
+
+export interface CreateClientDocInput {
+  kind: DocumentKind;
+  clientId?: string | null;
+  templateId?: string | null;
+  title?: string;
+}
+
+export const createClientDocument = (input: CreateClientDocInput): Promise<{ id: string }> =>
+  docPost({ op: "create", ...input });
+
+export const updateClientDocument = (
+  id: string,
+  patch: { title?: string; style?: DocumentStyle; sections?: DocumentSection[] },
+): Promise<{ id: string }> => docPost({ op: "update_document", id, ...patch });
+
+export const setDocumentStatus = (id: string, status: DocStatus): Promise<{ ok: true }> =>
+  docPost({ op: "set_status", id, status });
+
+export interface PreviewResponse {
+  kind: DocumentKind;
+  title: string;
+  style: DocumentStyle;
+  status?: DocStatus;
+  sections: DocumentSection[];
+  branding: {
+    businessName: string;
+    logoUrl: string;
+    website: string;
+    companyAddress: string;
+    contactEmail: string;
+    contactPhone: string;
+    brandTone: string;
+  } | null;
+}
+
+export const previewDocument = (
+  scope: SectionScope,
+  id: string,
+  clientId?: string | null,
+): Promise<PreviewResponse> => docPost({ op: "preview", scope, id, clientId });
+
+// --- AI generation ---
+
+export interface AiStatus {
+  configured: boolean;
+  model: string;
+}
+
+export async function aiStatus(): Promise<AiStatus> {
+  const res = await fetch("/api/ai", { headers: { accept: "application/json" } });
+  return asJson(res);
+}
+
+export async function listAiHistory(): Promise<AiGeneration[]> {
+  const res = await fetch("/api/ai?resource=history", { headers: { accept: "application/json" } });
+  const body = await asJson(res);
+  return (body?.history ?? []) as AiGeneration[];
+}
+
+export interface AiGenerateInput {
+  kind: DocumentKind;
+  target: AiTarget;
+  clientId?: string | null;
+  instructions?: string;
+  sectionType?: SectionType;
+}
+
+export interface AiGenerateResult {
+  title: string;
+  sections: DocumentSection[];
+}
+
+/**
+ * Generate sections via the server (OpenAI). Throws Error("ai_not_configured")
+ * when no key is set and Error("ai_disabled") when the tenant feature is off, so
+ * the UI can show the right message while manual creation keeps working.
+ */
+export async function aiGenerate(input: AiGenerateInput): Promise<AiGenerateResult> {
+  const res = await fetch("/api/ai", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ op: "generate", ...input }),
+  });
+  return asJson(res);
+}

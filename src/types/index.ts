@@ -87,11 +87,44 @@ export type Rule =
   | MonthlyResidualRule
   | SalaryRule;
 
+// ----------------------------------------------------------------------------
+// Commission timing (hold / release / clawback)
+//
+// Controls WHEN an earned commission becomes payable, and whether it can be
+// clawed back. Attached to a plan; applies to every commission that plan's
+// rules generate. Defaults (see DEFAULT_TIMING in commission-timing.ts) keep
+// the historical behaviour: pay immediately, no conditions.
+// ----------------------------------------------------------------------------
+
+export type CommissionReleaseTrigger =
+  | "immediate" // payable as soon as earned
+  | "after_days" // payable N days after the earned date
+  | "after_months" // payable N months after the earned date
+  | "after_payments" // payable once the client has made N qualifying payments
+  | "on_approval" // held until a human approves it (manual gate)
+  | "after_refund_window"; // held until a refund window of N days passes
+
+export interface CommissionTiming {
+  trigger: CommissionReleaseTrigger;
+  /** Days for after_days / after_refund_window. */
+  days: number;
+  /** Months for after_months. */
+  months: number;
+  /** Qualifying payment count for after_payments. */
+  payments: number;
+  /** Only release if the client is still active at release time. */
+  requireActiveClient: boolean;
+  /** Claw back if the client cancels/refunds before this many months (0 = off). */
+  clawbackBeforeMonths: number;
+}
+
 export interface CommissionPlan {
   id: string;
   name: string;
   description: string;
   rules: Rule[]; // ordered; order is meaningful for display + drag/drop
+  /** When/whether this plan's commissions become payable. Optional; defaults to pay-immediately. */
+  timing?: CommissionTiming;
   /** Sample inputs stored with the plan so the preview is reproducible. */
   sampleSetupFee: number;
   sampleMonthly: number;
@@ -115,6 +148,8 @@ export interface Client {
   setupFee: number;
   monthlySubscription: number;
   status: ClientStatus;
+  /** When the client canceled/refunded (drives clawback windows). Null while active. */
+  canceledDate: string | null;
   notes: string;
   createdAt: string;
 }
@@ -147,7 +182,8 @@ export interface Payment {
 
 export type CommissionStatus =
   | "projected" // due in the future, not yet earned
-  | "pending" // earned, awaiting submission
+  | "held" // earned but not yet releasable per the plan's timing rule
+  | "pending" // earned + released, awaiting submission
   | "submitted" // submitted for approval (step 1)
   | "approved" // approved (step 2) — ready to pay
   | "paid"
@@ -173,6 +209,22 @@ export interface CommissionEntry {
   dueDate: string; // ISO
   paidDate: string | null;
   notes: string;
+  // --- timing (derived from the plan's CommissionTiming; optional so older
+  //     rows / projections that don't carry timing still type-check) ---------
+  /** Date the commission was earned (normally the payment date). */
+  earnedDate?: string;
+  /** Date a held commission becomes payable; null when N/A (e.g. on_approval). */
+  releaseDate?: string | null;
+  /** Length of the hold in days, for display; null when not date-based. */
+  holdDays?: number | null;
+  /** Why the line is held / what it is waiting on (empty once released). */
+  holdReason?: string;
+  /** Why the line was clawed back, when applicable. */
+  clawbackReason?: string | null;
+  /** The timing trigger that governed this line ("rule used" companion). */
+  timingTrigger?: CommissionReleaseTrigger;
+  /** Admin force-released a held line; sticky across recompute. */
+  releasedOverride?: boolean;
   /** true for future projected rows that are computed, not derived from a real payment */
   isProjection: boolean;
   createdAt: string;

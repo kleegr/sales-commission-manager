@@ -71,6 +71,7 @@ type Action =
   | { type: "PAYMENT_DELETE"; id: string }
   // ledger
   | { type: "COMMISSION_SET_STATUS"; ids: string[]; status: CommissionEntry["status"] }
+  | { type: "RELEASE_COMMISSION"; ids: string[] }
   // payouts
   | { type: "PAYOUT_SUBMIT"; salespersonId: string; commissionEntryIds: string[]; notes: string }
   | { type: "PAYOUT_APPROVE"; id: string }
@@ -83,6 +84,22 @@ function withRecompute(data: AppData): AppData {
   const paymentRows = recomputePaymentCommissions(data);
   const salaryRows = recomputeSalaryEntries({ ...data, commissions: paymentRows });
   return { ...data, commissions: [...paymentRows, ...salaryRows] };
+}
+
+// Keep a client's cancellation date consistent with its status so the clawback
+// window can be measured. When a client is moved to canceled/refunded and no
+// date was supplied, stamp today; when moved back to active/paused, clear it.
+// An explicitly supplied canceledDate (e.g. an admin backdating a cancellation)
+// is preserved.
+function stampClientCancellation(client: Client): Client {
+  const isCanceled = client.status === "canceled" || client.status === "refunded";
+  if (isCanceled && !client.canceledDate) {
+    return { ...client, canceledDate: todayISO() };
+  }
+  if (!isCanceled && client.canceledDate) {
+    return { ...client, canceledDate: null };
+  }
+  return client;
 }
 
 function reducer(state: AppData, action: Action): AppData {
@@ -150,12 +167,17 @@ function reducer(state: AppData, action: Action): AppData {
 
     // --- clients -------------------------------------------------------------
     case "CLIENT_ADD":
-      return withRecompute({ ...state, clients: [...state.clients, action.client] });
-    case "CLIENT_UPDATE":
       return withRecompute({
         ...state,
-        clients: state.clients.map((c) => (c.id === action.client.id ? action.client : c)),
+        clients: [...state.clients, stampClientCancellation(action.client)],
       });
+    case "CLIENT_UPDATE": {
+      const updated = stampClientCancellation(action.client);
+      return withRecompute({
+        ...state,
+        clients: state.clients.map((c) => (c.id === updated.id ? updated : c)),
+      });
+    }
     case "CLIENT_DELETE":
       return withRecompute({
         ...state,
@@ -191,6 +213,17 @@ function reducer(state: AppData, action: Action): AppData {
             : e,
         ),
       };
+
+    // Admin force-release of held commissions. Sets the sticky releasedOverride
+    // flag and recomputes so the resolver moves the line to pending immediately;
+    // the flag survives future recomputes (e.g. on_approval lines never re-hold).
+    case "RELEASE_COMMISSION":
+      return withRecompute({
+        ...state,
+        commissions: state.commissions.map((e) =>
+          action.ids.includes(e.id) ? { ...e, releasedOverride: true } : e,
+        ),
+      });
 
     // --- payouts (two-step) --------------------------------------------------
     case "PAYOUT_SUBMIT": {

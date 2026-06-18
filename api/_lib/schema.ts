@@ -122,6 +122,7 @@ CREATE TABLE IF NOT EXISTS commission_plans (
   sort_order        INTEGER NOT NULL DEFAULT 0,
   sample_setup_fee  DOUBLE PRECISION NOT NULL DEFAULT 0,
   sample_monthly    DOUBLE PRECISION NOT NULL DEFAULT 0,
+  timing            JSONB,           -- CommissionTiming (null = pay immediately)
   created_at        TEXT NOT NULL DEFAULT '',
   updated_at        TEXT NOT NULL DEFAULT ''
 );
@@ -161,6 +162,7 @@ CREATE TABLE IF NOT EXISTS clients (
   setup_fee_amount            DOUBLE PRECISION NOT NULL DEFAULT 0,
   monthly_subscription_amount DOUBLE PRECISION NOT NULL DEFAULT 0,
   status                      TEXT NOT NULL DEFAULT 'active', -- active | paused | canceled | refunded
+  canceled_date               TEXT,        -- ISO date a client canceled/refunded (clawback window anchor)
   notes                       TEXT NOT NULL DEFAULT '',
   ghl_contact_id              TEXT,
   ghl_opportunity_id          TEXT,
@@ -205,6 +207,7 @@ CREATE TABLE IF NOT EXISTS commission_ledger (
   status               TEXT NOT NULL DEFAULT 'pending',
   due_date             TEXT NOT NULL DEFAULT '',
   paid_date            TEXT,
+  released_override    BOOLEAN NOT NULL DEFAULT false, -- sticky admin "Release now"
   payout_batch_id      TEXT,
   is_projection        BOOLEAN NOT NULL DEFAULT false,
   notes                TEXT NOT NULL DEFAULT '',

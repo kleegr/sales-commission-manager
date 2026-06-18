@@ -37,6 +37,7 @@ function emptyClient(): Client {
     setupFee: 2500,
     monthlySubscription: 250,
     status: "active",
+    canceledDate: null,
     notes: "",
     createdAt: todayISO(),
   };
@@ -279,6 +280,20 @@ export default function Clients() {
                 ))}
               </Select>
             </Field>
+            {(editing.status === "canceled" || editing.status === "refunded") && (
+              <Field
+                label="Canceled / refunded date"
+                hint="Anchors the clawback window. Defaults to today if left blank."
+              >
+                <Input
+                  type="date"
+                  value={editing.canceledDate ?? ""}
+                  onChange={(e) =>
+                    setEditing({ ...editing, canceledDate: e.target.value || null })
+                  }
+                />
+              </Field>
+            )}
             <Field label="Notes" className="sm:col-span-2">
               <Textarea
                 value={editing.notes}

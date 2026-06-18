@@ -182,6 +182,7 @@ export async function readState(tenantId: string): Promise<AppData> {
     rules: rulesByPlan.get(p.id) ?? [],
     sampleSetupFee: Number(p.sample_setup_fee),
     sampleMonthly: Number(p.sample_monthly),
+    timing: p.timing ?? undefined,
     createdAt: p.created_at || nowISO(),
   }));
 
@@ -196,6 +197,7 @@ export async function readState(tenantId: string): Promise<AppData> {
     setupFee: Number(c.setup_fee_amount),
     monthlySubscription: Number(c.monthly_subscription_amount),
     status: c.status,
+    canceledDate: c.canceled_date ?? null,
     notes: c.notes ?? "",
     createdAt: c.created_at || nowISO(),
   }));
@@ -228,6 +230,7 @@ export async function readState(tenantId: string): Promise<AppData> {
     status: e.status,
     dueDate: e.due_date ?? "",
     paidDate: e.paid_date ?? null,
+    releasedOverride: !!e.released_override,
     notes: e.notes ?? "",
     isProjection: !!e.is_projection,
     createdAt: e.created_at || nowISO(),
@@ -400,9 +403,9 @@ export async function writeState(tenantId: string, data: AppData): Promise<void>
       const p = data.plans[pi];
       await c.query(
         `INSERT INTO commission_plans
-           (id, tenant_id, name, description, status, sort_order, sample_setup_fee, sample_monthly, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-        [p.id, tenantId, p.name, p.description, "active", pi, p.sampleSetupFee, p.sampleMonthly, p.createdAt || ts, ts],
+           (id, tenant_id, name, description, status, sort_order, sample_setup_fee, sample_monthly, timing, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11)`,
+        [p.id, tenantId, p.name, p.description, "active", pi, p.sampleSetupFee, p.sampleMonthly, p.timing ? JSON.stringify(p.timing) : null, p.createdAt || ts, ts],
       );
       for (let ri = 0; ri < p.rules.length; ri++) {
         const rule = p.rules[ri];
@@ -424,10 +427,10 @@ export async function writeState(tenantId: string, data: AppData): Promise<void>
       await c.query(
         `INSERT INTO clients
            (id, tenant_id, salesperson_id, company_name, contact_name, email, phone, signup_date,
-            setup_fee_amount, monthly_subscription_amount, status, notes, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+            setup_fee_amount, monthly_subscription_amount, status, canceled_date, notes, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
         [cl.id, tenantId, cl.salespersonId, cl.companyName, cl.contactName, cl.email, cl.phone, cl.signupDate,
-         cl.setupFee, cl.monthlySubscription, cl.status, cl.notes, cl.createdAt || ts, ts],
+         cl.setupFee, cl.monthlySubscription, cl.status, cl.canceledDate ?? null, cl.notes, cl.createdAt || ts, ts],
       );
     }
 
@@ -449,12 +452,12 @@ export async function writeState(tenantId: string, data: AppData): Promise<void>
         `INSERT INTO commission_ledger
            (id, tenant_id, salesperson_id, client_id, payment_id, commission_plan_id, commission_rule_id,
             rule_type, payment_date, payment_type, payment_amount, commission_rule_used, commission_type,
-            commission_value, commission_amount, status, due_date, paid_date, payout_batch_id, is_projection,
+            commission_value, commission_amount, status, due_date, paid_date, released_override, payout_batch_id, is_projection,
             notes, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
         [e.id, tenantId, e.salespersonId, e.clientId, e.paymentId, spToPlan.get(e.salespersonId) ?? null, e.ruleId,
          e.ruleType, e.paymentDate, e.paymentType, e.paymentAmount, e.ruleLabel, e.commissionValueType,
-         e.commissionValue, e.commissionAmount, e.status, e.dueDate, e.paidDate, entryToPayout.get(e.id) ?? null,
+         e.commissionValue, e.commissionAmount, e.status, e.dueDate, e.paidDate, e.releasedOverride ?? false, entryToPayout.get(e.id) ?? null,
          e.isProjection, e.notes, e.createdAt || ts, ts],
       );
     }

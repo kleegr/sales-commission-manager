@@ -15,6 +15,10 @@ import {
   ruleAppliesToMonth,
 } from "./commission-engine.js";
 import { addMonthsISO, isoToDate, monthsSince, round2, todayISO } from "./format.js";
+import {
+  normalizeTiming,
+  resolveCommissionTiming,
+} from "./commission-timing.js";
 import type {
   AppData,
   Client,
@@ -23,7 +27,83 @@ import type {
   MonthlyResidualRule,
 } from "../types/index.js";
 
-/** Statuses that are "locked in" — not auto-derived from the due date. */
+/** Statuses set by a human in the payout workflow — timing never overrides these. */
+const MANUAL: CommissionStatus[] = [
+  "submitted",
+  "approved",
+  "paid",
+  "rejected",
+  "canceled",
+];
+
+/** Count a client's qualifying (monthly) payments on/before `asOf`. */
+function clientPaymentCount(
+  data: AppData,
+  clientId: string | null,
+  asOf: string,
+): number {
+  if (!clientId) return 0;
+  const cutoff = isoToDate(asOf).getTime();
+  return data.payments.filter(
+    (p) =>
+      p.clientId === clientId &&
+      p.type === "monthly_subscription" &&
+      isoToDate(p.date).getTime() <= cutoff,
+  ).length;
+}
+
+/**
+ * Resolve a payment-derived commission's timing (hold / release / clawback) and
+ * stamp the derived fields onto a NEW entry. Manual workflow statuses keep their
+ * status (we still attach the display fields); otherwise timing owns the status.
+ * Used by BOTH recompute (write time) and fullLedger (display time) so the
+ * persisted snapshot and the on-screen view always agree.
+ */
+export function stampTiming(
+  entry: CommissionEntry,
+  data: AppData,
+  today = todayISO(),
+): CommissionEntry {
+  // Salary rows and computed projections do not carry payment timing.
+  if (entry.isProjection || entry.paymentType === "salary" || !entry.paymentId) {
+    return entry;
+  }
+  const client = entry.clientId
+    ? data.clients.find((c) => c.id === entry.clientId) ?? null
+    : null;
+  const sp = data.salespeople.find((s) => s.id === entry.salespersonId);
+  const plan = sp?.commissionPlanId
+    ? data.plans.find((p) => p.id === sp.commissionPlanId) ?? null
+    : null;
+  const timing = normalizeTiming(plan?.timing);
+
+  const r = resolveCommissionTiming({
+    timing,
+    earnedDate: entry.paymentDate,
+    asOf: today,
+    clientStatus: client?.status ?? null,
+    clientSignupDate: client?.signupDate ?? null,
+    clientCanceledDate: client?.canceledDate ?? null,
+    clientPaymentCount: clientPaymentCount(data, entry.clientId, today),
+    releasedOverride: Boolean(entry.releasedOverride),
+  });
+
+  const derived: CommissionEntry = {
+    ...entry,
+    earnedDate: r.earnedDate,
+    releaseDate: r.releaseDate,
+    holdDays: r.holdDays,
+    holdReason: r.reason,
+    clawbackReason: r.clawbackReason,
+    timingTrigger: r.trigger,
+  };
+
+  // A human-set workflow status (submitted/approved/paid/…) is authoritative.
+  if (MANUAL.includes(entry.status)) return derived;
+  return { ...derived, status: r.status };
+}
+
+/** Statuses that are "locked in" — not auto-derived from the due/release date. */
 const LOCKED: CommissionStatus[] = [
   "submitted",
   "approved",
@@ -31,35 +111,46 @@ const LOCKED: CommissionStatus[] = [
   "rejected",
   "canceled",
   "clawed_back",
+  "held",
 ];
 
 /**
- * Spec rule: future due date -> Projected; due today/earlier -> Pending,
- * unless the entry has already moved into a locked workflow state.
+ * Display status. Locked / timing-resolved states (held, clawed_back, workflow
+ * states) are returned as-is. Otherwise a future release/due date shows as
+ * Projected; today-or-earlier shows as Pending.
  */
 export function displayStatus(
   entry: CommissionEntry,
   today = todayISO(),
 ): CommissionStatus {
   if (LOCKED.includes(entry.status)) return entry.status;
-  const due = isoToDate(entry.dueDate).getTime();
+  const gate = entry.releaseDate || entry.dueDate;
+  const due = isoToDate(gate).getTime();
   const now = isoToDate(today).getTime();
   return due > now ? "projected" : "pending";
 }
 
 /** Regenerate all payment-derived commission entries, preserving workflow status. */
-export function recomputePaymentCommissions(data: AppData): CommissionEntry[] {
+export function recomputePaymentCommissions(
+  data: AppData,
+  today = todayISO(),
+): CommissionEntry[] {
   const planById = new Map(data.plans.map((p) => [p.id, p]));
   const clientById = new Map(data.clients.map((c) => [c.id, c]));
   const spById = new Map(data.salespeople.map((s) => [s.id, s]));
 
-  // Preserve prior status by a stable key (paymentId + ruleId).
-  const priorStatus = new Map<string, { status: CommissionStatus; paidDate: string | null }>();
+  // Preserve human-set workflow status + admin release flag by a stable key.
+  // Auto states (projected/pending/held/clawed_back) are re-derived by timing.
+  const prior = new Map<
+    string,
+    { status: CommissionStatus; paidDate: string | null; releasedOverride: boolean }
+  >();
   for (const e of data.commissions) {
     if (e.paymentId) {
-      priorStatus.set(`${e.paymentId}:${e.ruleId}`, {
+      prior.set(`${e.paymentId}:${e.ruleId}`, {
         status: e.status,
         paidDate: e.paidDate,
+        releasedOverride: Boolean(e.releasedOverride),
       });
     }
   }
@@ -74,12 +165,13 @@ export function recomputePaymentCommissions(data: AppData): CommissionEntry[] {
     if (!plan) continue;
 
     for (const e of calculateCommissionForPayment(pay, client, sp, plan)) {
-      const prior = priorStatus.get(`${e.paymentId}:${e.ruleId}`);
-      if (prior) {
-        e.status = prior.status;
-        e.paidDate = prior.paidDate;
+      const p = prior.get(`${e.paymentId}:${e.ruleId}`);
+      if (p) {
+        if (MANUAL.includes(p.status)) e.status = p.status;
+        e.paidDate = p.paidDate;
+        e.releasedOverride = p.releasedOverride;
       }
-      fresh.push(e);
+      fresh.push(stampTiming(e, data, today));
     }
   }
 
@@ -179,7 +271,12 @@ export function computeProjectedLedger(
 
 /** Convenience: every ledger row (real + projected) for views that want both. */
 export function fullLedger(data: AppData, futureMonths = 24): CommissionEntry[] {
-  return [...data.commissions, ...computeProjectedLedger(data, futureMonths)];
+  const today = todayISO();
+  // Re-derive timing for the real (payment-backed) rows so the view is correct
+  // even after a plain reload that did not run recompute. Projections + salary
+  // pass through stampTiming untouched.
+  const real = data.commissions.map((e) => stampTiming(e, data, today));
+  return [...real, ...computeProjectedLedger(data, futureMonths)];
 }
 
 export function clientLabel(c: Client | undefined): string {

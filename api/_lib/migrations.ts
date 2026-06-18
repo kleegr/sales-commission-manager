@@ -145,4 +145,22 @@ CREATE TABLE IF NOT EXISTS milestones (
 );
 CREATE INDEX IF NOT EXISTS idx_milestones_tenant ON milestones(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_milestones_goal   ON milestones(goal_id);
+
+-- 0007 — commission timing (hold / release / clawback) ----------------------
+-- The timing feature is mostly DERIVED at read time (a pure resolver decides
+-- held / pending / clawed_back and the release date from these durable inputs),
+-- so only three new persisted columns are required:
+--   commission_plans.timing        — the plan's CommissionTiming config (JSONB,
+--                                     null = pay immediately, preserving legacy
+--                                     behaviour for every existing plan)
+--   clients.canceled_date          — when a client canceled/refunded, so the
+--                                     clawback window can be measured precisely
+--   commission_ledger.released_override — sticky admin "Release now" flag so a
+--                                     manually released line is not re-held by a
+--                                     later recompute (needed for on_approval)
+-- The held / pending / clawed_back state itself rides the EXISTING
+-- commission_ledger.status column — no enum/type change needed.
+ALTER TABLE commission_plans   ADD COLUMN IF NOT EXISTS timing            JSONB;
+ALTER TABLE clients            ADD COLUMN IF NOT EXISTS canceled_date     TEXT;
+ALTER TABLE commission_ledger  ADD COLUMN IF NOT EXISTS released_override BOOLEAN NOT NULL DEFAULT false;
 `;

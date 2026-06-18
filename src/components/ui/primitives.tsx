@@ -132,6 +132,7 @@ export function Badge({
 
 const commissionTone: Record<CommissionStatus, Tone> = {
   projected: "cyan",
+  held: "blue",
   pending: "amber",
   submitted: "violet",
   approved: "indigo",
@@ -143,6 +144,7 @@ const commissionTone: Record<CommissionStatus, Tone> = {
 
 const commissionLabel: Record<CommissionStatus, string> = {
   projected: "Projected",
+  held: "Held",
   pending: "Pending",
   submitted: "Submitted",
   approved: "Approved",

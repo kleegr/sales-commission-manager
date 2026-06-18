@@ -67,6 +67,33 @@ export function weeksBetween(startISO: string, endISO: string): number {
   return Math.floor((b - a) / (7 * 24 * 60 * 60 * 1000));
 }
 
+/** Add `n` whole days to an ISO date, returning ISO (yyyy-mm-dd). */
+export function addDaysISO(iso: string, n: number): string {
+  const d = isoToDate(iso);
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Whole days between two ISO dates (can be negative if end precedes start). */
+export function daysBetween(startISO: string, endISO: string): number {
+  const a = isoToDate(startISO).getTime();
+  const b = isoToDate(endISO).getTime();
+  if (isNaN(a) || isNaN(b)) return 0;
+  return Math.round((b - a) / (24 * 60 * 60 * 1000));
+}
+
+/** Whole calendar months between two ISO dates (end - start; can be negative). */
+export function monthsBetween(startISO: string, endISO: string): number {
+  const a = isoToDate(startISO);
+  const b = isoToDate(endISO);
+  if (isNaN(a.getTime()) || isNaN(b.getTime())) return 0;
+  let months =
+    (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
+  // Don't count the final month until the day-of-month is reached.
+  if (b.getDate() < a.getDate()) months -= 1;
+  return months;
+}
+
 /** Number of whole months a date is in the past/future relative to today. */
 export function monthsSince(iso: string): number {
   const d = isoToDate(iso);

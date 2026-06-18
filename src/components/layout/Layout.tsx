@@ -26,7 +26,7 @@ import { useApp } from "../../store/AppContext";
 import { useAuth } from "../../store/AuthContext";
 import { canAccess, homePath, ROLE_LABEL, type Role } from "../../lib/roles";
 import { DemoBar } from "./DemoBar";
-import { Network, FileSignature } from "lucide-react";
+import { Network, FileSignature, Target } from "lucide-react";
 
 interface NavItem {
   to: string;
@@ -58,6 +58,7 @@ const SECTIONS: { heading: string; items: NavItem[] }[] = [
       { to: "/ledger", label: "Commission Ledger", icon: <BookOpenText className="h-4 w-4" /> },
       { to: "/payouts", label: "Payouts", icon: <Wallet className="h-4 w-4" /> },
       { to: "/reports", label: "Reports", icon: <BarChart3 className="h-4 w-4" /> },
+      { to: "/goals", label: "Goals & Milestones", icon: <Target className="h-4 w-4" /> },
     ],
   },
   {

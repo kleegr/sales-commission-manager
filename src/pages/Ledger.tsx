@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
-import { Download, BookOpen } from "lucide-react";
+import { Download, BookOpen, RefreshCw } from "lucide-react";
 import { useApp } from "../store/AppContext";
+import { useAuth } from "../store/AuthContext";
+import { ADMIN_ROLES } from "../lib/roles";
 import type { CommissionStatus } from "../types";
 import {
   PageHeader,
@@ -35,6 +37,7 @@ const STATUS_OPTIONS: (CommissionStatus | "all" | "real")[] = [
   "all",
   "real",
   "projected",
+  "held",
   "pending",
   "submitted",
   "approved",
@@ -44,7 +47,9 @@ const STATUS_OPTIONS: (CommissionStatus | "all" | "real")[] = [
 ];
 
 export default function Ledger() {
-  const { data } = useApp();
+  const { data, dispatch } = useApp();
+  const { user } = useAuth();
+  const canRelease = !!user && ADMIN_ROLES.includes(user.role);
   const [spFilter, setSpFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<CommissionStatus | "all" | "real">("all");
   const [range, setRange] = useState<DateRange>({ from: null, to: null });
@@ -68,6 +73,17 @@ export default function Ledger() {
   }, [ledger, spFilter, statusFilter, range]);
 
   const totals = useMemo(() => commissionTotals(rows), [rows]);
+  const heldTotal = useMemo(
+    () =>
+      rows
+        .filter((e) => displayStatus(e) === "held")
+        .reduce((s, e) => s + e.commissionAmount, 0),
+    [rows],
+  );
+
+  function releaseOne(id: string) {
+    dispatch({ type: "RELEASE_COMMISSION", ids: [id] });
+  }
 
   function exportCSV() {
     const header = [
@@ -81,7 +97,9 @@ export default function Ledger() {
       "Commission",
       "Status",
       "Due date",
+      "Release date",
       "Paid date",
+      "Hold / clawback reason",
     ];
     const body = rows.map((e) => [
       spName(e.salespersonId),
@@ -96,7 +114,9 @@ export default function Ledger() {
       e.commissionAmount,
       displayStatus(e),
       e.dueDate,
+      e.releaseDate ?? "",
       e.paidDate ?? "",
+      e.clawbackReason || e.holdReason || "",
     ]);
     downloadCSV("commission-ledger.csv", [header, ...body]);
   }
@@ -113,10 +133,11 @@ export default function Ledger() {
         }
       />
 
-      <div className="mb-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mb-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard label="Earned (real)" value={formatCurrency(totals.earned)} tone="green" />
         <StatCard label="Paid" value={formatCurrency(totals.paid)} tone="blue" />
         <StatCard label="Pending / owed" value={formatCurrency(totals.pending)} tone="amber" />
+        <StatCard label="Held" value={formatCurrency(heldTotal)} tone="violet" />
         <StatCard label="Projected (future)" value={formatCurrency(totals.projected)} tone="cyan" />
       </div>
 
@@ -174,6 +195,7 @@ export default function Ledger() {
                 <TH className="text-right">Rate</TH>
                 <TH className="text-right">Commission</TH>
                 <TH>Status</TH>
+                <TH>Release</TH>
                 <TH>Due</TH>
               </TR>
             </THead>
@@ -205,7 +227,27 @@ export default function Ledger() {
                     {formatCurrency(e.commissionAmount)}
                   </TD>
                   <TD>
-                    <CommissionBadge status={displayStatus(e)} />
+                    <div className="flex flex-col items-start gap-1">
+                      <CommissionBadge status={displayStatus(e)} />
+                      {(e.clawbackReason || e.holdReason) && (
+                        <span className="max-w-[220px] text-xs leading-snug text-slate-400">
+                          {e.clawbackReason || e.holdReason}
+                        </span>
+                      )}
+                      {canRelease && displayStatus(e) === "held" && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => releaseOne(e.id)}
+                          title="Release this commission for payout now"
+                        >
+                          <RefreshCw className="h-3 w-3" /> Release now
+                        </Button>
+                      )}
+                    </div>
+                  </TD>
+                  <TD className="whitespace-nowrap text-slate-500">
+                    {e.releaseDate ? formatDate(e.releaseDate) : "—"}
                   </TD>
                   <TD className="whitespace-nowrap text-slate-500">{formatDate(e.dueDate)}</TD>
                 </TR>
@@ -217,8 +259,12 @@ export default function Ledger() {
 
       <p className="mt-3 text-xs text-slate-400">
         Lines due in the future show as <span className="font-medium">Projected</span> until their
-        due date passes, when they become <span className="font-medium">Pending</span> and ready to
-        pay out. Submitting, approving, paying, or clawing back a line locks its status.
+        due date passes. A plan's timing rule can <span className="font-medium">Hold</span> a
+        commission (until a refund window or wait period passes, enough client payments arrive, the
+        client is active, or an admin approves it); it then becomes <span className="font-medium">Pending</span>
+        and ready to pay out. Commissions for clients who cancel inside the clawback window are
+        <span className="font-medium"> Clawed back</span>. Submitting, approving, paying, or clawing
+        back a line locks its status.
       </p>
     </div>
   );

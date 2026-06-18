@@ -24,6 +24,7 @@ import { fullLedger, displayStatus, clientLabel } from "../lib/ledger";
 import { commissionTotals, inRange } from "../lib/analytics";
 import { formatCurrency, formatDate, formatPercent } from "../lib/format";
 import { downloadCSV } from "../lib/export";
+import { releaseCommissions, recomputeLedger } from "../lib/resource-client";
 
 const PAYMENT_TYPE_LABEL: Record<string, string> = {
   setup_fee: "Setup fee",
@@ -47,9 +48,10 @@ const STATUS_OPTIONS: (CommissionStatus | "all" | "real")[] = [
 ];
 
 export default function Ledger() {
-  const { data, dispatch } = useApp();
+  const { data, dispatch, reload } = useApp();
   const { user } = useAuth();
   const canRelease = !!user && ADMIN_ROLES.includes(user.role);
+  const [recomputing, setRecomputing] = useState(false);
   const [spFilter, setSpFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<CommissionStatus | "all" | "real">("all");
   const [range, setRange] = useState<DateRange>({ from: null, to: null });
@@ -81,8 +83,28 @@ export default function Ledger() {
     [rows],
   );
 
-  function releaseOne(id: string) {
-    dispatch({ type: "RELEASE_COMMISSION", ids: [id] });
+  async function releaseOne(id: string) {
+    try {
+      // Real DB API: set the sticky release flag + recompute server-side, then
+      // reload. Falls back to the local store off the API.
+      await releaseCommissions([id]);
+      await reload();
+    } catch {
+      dispatch({ type: "RELEASE_COMMISSION", ids: [id] });
+    }
+  }
+
+  async function runRecompute() {
+    setRecomputing(true);
+    try {
+      await recomputeLedger();
+      await reload();
+    } catch {
+      // Local-store mode keeps the ledger recomputed on every change, so there
+      // is nothing to do when the API isn't reachable.
+    } finally {
+      setRecomputing(false);
+    }
   }
 
   function exportCSV() {
@@ -127,9 +149,17 @@ export default function Ledger() {
         title="Commission Ledger"
         subtitle="Every commission line — which rule fired, what it pays, and where it stands"
         actions={
-          <Button variant="secondary" onClick={exportCSV} disabled={rows.length === 0}>
-            <Download className="h-4 w-4" /> Export CSV
-          </Button>
+          <>
+            {canRelease && (
+              <Button variant="secondary" onClick={runRecompute} disabled={recomputing}>
+                <RefreshCw className={"h-4 w-4" + (recomputing ? " animate-spin" : "")} />
+                {recomputing ? "Recomputing…" : "Recompute"}
+              </Button>
+            )}
+            <Button variant="secondary" onClick={exportCSV} disabled={rows.length === 0}>
+              <Download className="h-4 w-4" /> Export CSV
+            </Button>
+          </>
         }
       />
 

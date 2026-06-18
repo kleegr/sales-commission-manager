@@ -23,6 +23,7 @@ import { ConfirmModal } from "../components/ui/Modal";
 import { ruleHeadline } from "../lib/commission-engine";
 import { timingHeadline } from "../lib/commission-timing";
 import { uid, todayISO, formatCurrency } from "../lib/format";
+import { duplicatePlan, deletePlan } from "../lib/resource-client";
 
 const TYPE_TONE = {
   setup_fee: "blue",
@@ -32,14 +33,14 @@ const TYPE_TONE = {
 } as const;
 
 export default function Plans() {
-  const { data, dispatch } = useApp();
+  const { data, dispatch, reload } = useApp();
   const navigate = useNavigate();
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   const assignedCount = (planId: string) =>
     data.salespeople.filter((s) => s.commissionPlanId === planId).length;
 
-  function duplicate(plan: CommissionPlan) {
+  async function duplicate(plan: CommissionPlan) {
     const copy: CommissionPlan = {
       ...plan,
       id: uid("plan"),
@@ -47,8 +48,26 @@ export default function Plans() {
       createdAt: todayISO(),
       rules: plan.rules.map((r) => ({ ...r, id: uid("rule") })),
     };
-    dispatch({ type: "PLAN_ADD", plan: copy });
-    navigate(`/plans/${copy.id}/edit`);
+    try {
+      const { id } = await duplicatePlan(plan.id);
+      await reload();
+      navigate(`/plans/${id}/edit`);
+    } catch {
+      dispatch({ type: "PLAN_ADD", plan: copy });
+      navigate(`/plans/${copy.id}/edit`);
+    }
+  }
+
+  async function confirmDelete() {
+    if (!deleteId) return;
+    const id = deleteId;
+    try {
+      await deletePlan(id);
+      await reload();
+    } catch {
+      dispatch({ type: "PLAN_DELETE", id });
+    }
+    setDeleteId(null);
   }
 
   return (
@@ -135,7 +154,7 @@ export default function Plans() {
       <ConfirmModal
         open={!!deleteId}
         onClose={() => setDeleteId(null)}
-        onConfirm={() => deleteId && dispatch({ type: "PLAN_DELETE", id: deleteId })}
+        onConfirm={confirmDelete}
         title="Delete plan?"
         message="Salespeople on this plan will be unassigned and their commissions recalculated. This cannot be undone."
       />

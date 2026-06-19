@@ -138,7 +138,7 @@ export default function ClientDetail() {
         date: p.date,
         icon: <Receipt className="h-3.5 w-3.5" />,
         title: `${PAYMENT_LABEL[p.type] ?? cap(p.type)} ${p.type === "refund" ? "issued" : "received"}`,
-        detail: formatCurrency(p.amount) + (p.notes ? ` \u00b7 ${p.notes}` : ""),
+        detail: formatCurrency(p.amount) + (p.notes ? ` · ${p.notes}` : ""),
         tone: p.type === "refund" ? "rose" : "green",
       });
     }
@@ -147,7 +147,7 @@ export default function ClientDetail() {
       items.push({
         date: stamp,
         icon: d.kind === "contract" ? <FileSignature className="h-3.5 w-3.5" /> : <FileText className="h-3.5 w-3.5" />,
-        title: `${cap(d.kind)} "${d.title}" \u00b7 ${cap(d.status)}`,
+        title: `${cap(d.kind)} "${d.title}" · ${cap(d.status)}`,
         detail: d.amount ? formatCurrency(d.amount) : undefined,
         tone: "violet",
       });
@@ -260,10 +260,10 @@ export default function ClientDetail() {
                     <TD className="whitespace-nowrap text-slate-500">{formatDate(p.date)}</TD>
                     <TD className="text-slate-600 dark:text-slate-300">
                       {PAYMENT_LABEL[p.type] ?? cap(p.type)}
-                      {p.paymentNumber ? <span className="text-slate-400"> \u00b7 #{p.paymentNumber}</span> : null}
+                      {p.paymentNumber ? <span className="text-slate-400"> · #{p.paymentNumber}</span> : null}
                     </TD>
                     <TD className={`text-right font-medium tabular-nums ${p.type === "refund" ? "text-rose-600" : "text-slate-800 dark:text-slate-100"}`}>
-                      {p.type === "refund" ? "\u2212" : ""}{formatCurrency(p.amount)}
+                      {p.type === "refund" ? "−" : ""}{formatCurrency(p.amount)}
                     </TD>
                   </TR>
                 ))}
@@ -313,7 +313,7 @@ export default function ClientDetail() {
         </div>
         <div className="px-5 pb-5">
           {docsState === "loading" ? (
-            <p className="text-sm text-slate-400">Loading documents\u2026</p>
+            <p className="text-sm text-slate-400">Loading documents…</p>
           ) : docsState === "unavailable" ? (
             <p className="text-sm text-slate-400">
               Documents are managed on the server and aren't available in local-storage mode.

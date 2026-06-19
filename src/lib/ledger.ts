@@ -36,6 +36,10 @@ const MANUAL: CommissionStatus[] = [
   "canceled",
 ];
 
+/** Payout-locked statuses whose commission FIGURES must never be re-priced by a
+ *  later plan/rule change (keeps payout history intact). */
+const LOCKED_PAYOUT: CommissionStatus[] = ["submitted", "approved", "paid"];
+
 /** Count a client's qualifying (monthly) payments on/before `asOf`. */
 function clientPaymentCount(
   data: AppData,
@@ -141,9 +145,22 @@ export function recomputePaymentCommissions(
 
   // Preserve human-set workflow status + admin release flag by a stable key.
   // Auto states (projected/pending/held/clawed_back) are re-derived by timing.
+  // For LOCKED payout rows (submitted/approved/paid) we additionally preserve
+  // the original commission FIGURES so a later plan/rule change can never
+  // re-price money that is already in (or through) the payout workflow — this
+  // mirrors the server-side recompute and keeps payout history intact even if a
+  // snapshot save runs after a rate change.
   const prior = new Map<
     string,
-    { status: CommissionStatus; paidDate: string | null; releasedOverride: boolean }
+    {
+      status: CommissionStatus;
+      paidDate: string | null;
+      releasedOverride: boolean;
+      commissionAmount: number;
+      commissionValue: number;
+      commissionValueType: CommissionEntry["commissionValueType"];
+      ruleLabel: string;
+    }
   >();
   for (const e of data.commissions) {
     if (e.paymentId) {
@@ -151,6 +168,10 @@ export function recomputePaymentCommissions(
         status: e.status,
         paidDate: e.paidDate,
         releasedOverride: Boolean(e.releasedOverride),
+        commissionAmount: e.commissionAmount,
+        commissionValue: e.commissionValue,
+        commissionValueType: e.commissionValueType,
+        ruleLabel: e.ruleLabel,
       });
     }
   }
@@ -170,6 +191,12 @@ export function recomputePaymentCommissions(
         if (MANUAL.includes(p.status)) e.status = p.status;
         e.paidDate = p.paidDate;
         e.releasedOverride = p.releasedOverride;
+        if (LOCKED_PAYOUT.includes(p.status)) {
+          e.commissionAmount = p.commissionAmount;
+          e.commissionValue = p.commissionValue;
+          e.commissionValueType = p.commissionValueType;
+          e.ruleLabel = p.ruleLabel;
+        }
       }
       fresh.push(stampTiming(e, data, today));
     }

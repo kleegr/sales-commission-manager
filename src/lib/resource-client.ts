@@ -478,3 +478,145 @@ export async function aiGenerate(input: AiGenerateInput): Promise<AiGenerateResu
   });
   return asJson(res);
 }
+
+// ===========================================================================
+// Commission Plans + Payments + Ledger  (real DB APIs; replace snapshot saving)
+//
+// The tenant + role come from the session on the server. Each call throws on a
+// non-2xx response (asJson) so the page can fall back to the local store in
+// dev / local-storage mode, and so a guarded error like
+// "has_locked_commissions" surfaces as the thrown Error's message.
+// ===========================================================================
+
+import type { CommissionEntry, CommissionPlan, Payment } from "../types";
+
+// ---- Commission plans ------------------------------------------------------
+
+/** The fields the plan create/replace endpoints accept. */
+export type PlanPayload = Pick<
+  CommissionPlan,
+  "name" | "description" | "sampleSetupFee" | "sampleMonthly" | "timing" | "rules"
+>;
+
+export async function listPlans(): Promise<CommissionPlan[]> {
+  const res = await fetch("/api/plans", { headers: { accept: "application/json" } });
+  const body = await asJson(res);
+  return (body.plans ?? []) as CommissionPlan[];
+}
+
+export async function createPlan(payload: PlanPayload): Promise<{ id: string }> {
+  const res = await fetch("/api/plans", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return asJson(res);
+}
+
+export async function updatePlan(id: string, payload: PlanPayload): Promise<void> {
+  const res = await fetch(`/api/plans?id=${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  await asJson(res);
+}
+
+export async function duplicatePlan(id: string): Promise<{ id: string }> {
+  const res = await fetch(`/api/plans?action=duplicate&id=${encodeURIComponent(id)}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+  });
+  return asJson(res);
+}
+
+export async function reorderPlans(orderedIds: string[]): Promise<void> {
+  const res = await fetch("/api/plans?action=reorder", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ orderedIds }),
+  });
+  await asJson(res);
+}
+
+/** Hard delete (unassigns salespeople + recomputes). Pass deactivate to soft-disable. */
+export async function deletePlan(id: string, opts: { deactivate?: boolean } = {}): Promise<void> {
+  const q = opts.deactivate ? `&deactivate=1` : "";
+  const res = await fetch(`/api/plans?id=${encodeURIComponent(id)}${q}`, { method: "DELETE" });
+  await asJson(res);
+}
+
+// ---- Payments --------------------------------------------------------------
+
+export type PaymentPayload = Pick<
+  Payment,
+  "clientId" | "date" | "type" | "amount" | "paymentNumber" | "notes"
+>;
+
+export async function listPayments(): Promise<Payment[]> {
+  const res = await fetch("/api/payments", { headers: { accept: "application/json" } });
+  const body = await asJson(res);
+  return (body.payments ?? []) as Payment[];
+}
+
+export async function createPayment(payload: PaymentPayload): Promise<{ id: string }> {
+  const res = await fetch("/api/payments", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return asJson(res);
+}
+
+export async function updatePayment(id: string, payload: Partial<PaymentPayload>): Promise<void> {
+  const res = await fetch(`/api/payments?id=${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  await asJson(res);
+}
+
+/** Delete a payment. Throws Error("has_locked_commissions") if it is locked. */
+export async function deletePayment(id: string): Promise<void> {
+  const res = await fetch(`/api/payments?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+  await asJson(res);
+}
+
+// ---- Ledger ----------------------------------------------------------------
+
+export interface LedgerQuery {
+  salespersonId?: string;
+  clientId?: string;
+  status?: string;
+  from?: string;
+  to?: string;
+}
+
+export async function listLedger(q: LedgerQuery = {}): Promise<CommissionEntry[]> {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(q)) if (v) params.set(k, String(v));
+  const qs = params.toString();
+  const res = await fetch(`/api/ledger${qs ? `?${qs}` : ""}`, { headers: { accept: "application/json" } });
+  const body = await asJson(res);
+  return (body.entries ?? []) as CommissionEntry[];
+}
+
+/** Admin: release held commissions for payout (sticky across recompute). */
+export async function releaseCommissions(ids: string[]): Promise<void> {
+  const res = await fetch("/api/ledger?action=release", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+  await asJson(res);
+}
+
+/** Admin: recompute the whole tenant's commission ledger from current data. */
+export async function recomputeLedger(): Promise<void> {
+  const res = await fetch("/api/ledger?action=recompute", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+  });
+  await asJson(res);
+}

@@ -1,46 +1,78 @@
 import { useMemo, useState } from "react";
-import type { CommissionPlan, ProjectionAssumptions } from "../../types";
+import type {
+  CommissionPlan,
+  ProjectionAssumptions,
+  Rule,
+} from "../../types";
 import {
   projectBook,
   projectPlanForClient,
 } from "../../lib/commission-engine";
+import { commissionByRuleType } from "../../lib/plan-analytics";
 import { ProjectionTable } from "./ProjectionTable";
-import { MoneyAreaChart, MoneyBarChart } from "../charts/Charts";
+import {
+  CategoryBarChart,
+  MoneyAreaChart,
+  MoneyBarChart,
+} from "../charts/Charts";
 import { Card, Button, SectionTitle } from "../ui/primitives";
-import { Field, NumberField } from "../ui/form";
+import { Field, NumberField, Checkbox } from "../ui/form";
 import { formatCurrency, classNames } from "../../lib/format";
 import { downloadCSV, printHTMLToPDF } from "../../lib/export";
-import { Download, FileText, User, Users } from "lucide-react";
+import { Download, FileText, Maximize2, User, Users } from "lucide-react";
 
 type Mode = "client" | "book";
+
+/** A plan with its salary rules removed, for the "exclude salary" toggle. */
+function withoutSalary(plan: CommissionPlan): CommissionPlan {
+  return { ...plan, rules: plan.rules.filter((r: Rule) => r.type !== "salary") };
+}
 
 export function ProjectionView({
   plan,
   initialAssumptions,
   defaultMode = "client",
+  onExpand,
+  compact = false,
 }: {
   plan: CommissionPlan;
   initialAssumptions: ProjectionAssumptions;
   defaultMode?: Mode;
+  /** When provided, shows a "Full screen" button that opens the big preview. */
+  onExpand?: () => void;
+  /** Hide the secondary rule-type chart in tight side-panel contexts. */
+  compact?: boolean;
 }) {
   const [mode, setMode] = useState<Mode>(defaultMode);
+  const [includeChurn, setIncludeChurn] = useState(true);
+  const [includeSalary, setIncludeSalary] = useState(true);
   const [a, setA] = useState<ProjectionAssumptions>({
     ...initialAssumptions,
     avgSetupFee: plan.sampleSetupFee || initialAssumptions.avgSetupFee,
     avgMonthly: plan.sampleMonthly || initialAssumptions.avgMonthly,
   });
 
+  const planHasSalary = plan.rules.some((r) => r.type === "salary");
+  const effectivePlan = includeSalary ? plan : withoutSalary(plan);
+  const bookAssumptions: ProjectionAssumptions = {
+    ...a,
+    monthlyChurnPct: includeChurn ? a.monthlyChurnPct : 0,
+  };
+
   const clientProjection = useMemo(
     () =>
-      projectPlanForClient(plan, {
+      projectPlanForClient(effectivePlan, {
         setupFee: a.avgSetupFee,
         monthlySubscription: a.avgMonthly,
         horizon: a.months,
       }),
-    [plan, a.avgSetupFee, a.avgMonthly, a.months],
+    [effectivePlan, a.avgSetupFee, a.avgMonthly, a.months],
   );
 
-  const book = useMemo(() => projectBook(plan, a), [plan, a]);
+  const book = useMemo(
+    () => projectBook(effectivePlan, bookAssumptions),
+    [effectivePlan, bookAssumptions],
+  );
 
   // Chart data
   const clientMonthly = clientProjection.months.map((m) => ({
@@ -58,6 +90,14 @@ export function ProjectionView({
     cumulative: m.cumulative,
     monthly: m.total,
   }));
+
+  // "Where the commission comes from" — split the per-client lifetime by rule.
+  const ruleSplit = useMemo(
+    () => commissionByRuleType(clientProjection),
+    [clientProjection],
+  );
+  const ruleSplitData = ruleSplit.map((s) => ({ label: s.label, amount: s.amount }));
+  const ruleSplitColors = ruleSplit.map((s) => s.color);
 
   function exportCSV() {
     if (mode === "client") {
@@ -175,7 +215,7 @@ export function ProjectionView({
         `<h1>${plan.name}</h1>
          <p class="muted">Book of business · ${a.closingsPerMonth} closings/mo · ${fmt(
            a.avgMonthly,
-         )}/mo · ${a.monthlyChurnPct}% churn · ${a.months} months</p>
+         )}/mo · ${bookAssumptions.monthlyChurnPct}% churn · ${a.months} months</p>
          <div class="cards">
            <div class="card"><div class="l">First 12 mo</div><div class="v">${fmt(
              book.total12,
@@ -206,6 +246,11 @@ export function ProjectionView({
           </ModeButton>
         </div>
         <div className="flex gap-2">
+          {onExpand && (
+            <Button variant="secondary" size="sm" onClick={onExpand}>
+              <Maximize2 className="h-4 w-4" /> Full screen
+            </Button>
+          )}
           <Button variant="secondary" size="sm" onClick={exportCSV}>
             <Download className="h-4 w-4" /> CSV
           </Button>
@@ -240,18 +285,35 @@ export function ProjectionView({
               suffix="%"
               min={0}
               max={100}
-              disabled={mode === "client"}
+              disabled={mode === "client" || !includeChurn}
             />
           </Field>
           <Field label="Horizon (months)">
             <NumberField value={a.months} onChange={(v) => setA({ ...a, months: v })} min={1} max={60} emptyValue={60} />
           </Field>
         </div>
-        {mode === "client" && (
-          <p className="mt-3 text-xs text-slate-500">
-            Per-client mode projects a single client. Switch to Book of business to model closings per month and churn.
-          </p>
-        )}
+
+        {/* Optional include/exclude switches */}
+        <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-slate-100 pt-3 dark:border-slate-800">
+          {mode === "book" && (
+            <Checkbox label="Include churn" checked={includeChurn} onChange={setIncludeChurn} />
+          )}
+          {planHasSalary && (
+            <Checkbox label="Include salary" checked={includeSalary} onChange={setIncludeSalary} />
+          )}
+          {mode === "client" ? (
+            <p className="text-xs text-slate-500">
+              Per-client mode projects a single client. Switch to Book of business to model
+              closings per month and churn.
+            </p>
+          ) : (
+            !includeChurn && (
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                Churn is off — every client stays forever (best-case book).
+              </p>
+            )
+          )}
+        </div>
       </Card>
 
       {/* Charts */}
@@ -293,6 +355,35 @@ export function ProjectionView({
             />
           </Card>
         </div>
+      )}
+
+      {/* Commission by rule type — one clear "where does it come from" chart */}
+      {!compact && ruleSplitData.length > 0 && (
+        <Card>
+          <SectionTitle>Commission by rule type (per client, lifetime)</SectionTitle>
+          <div className="mt-2 grid items-center gap-4 lg:grid-cols-[1.4fr_1fr]">
+            <CategoryBarChart
+              data={ruleSplitData}
+              xKey="label"
+              dataKey="amount"
+              colors={ruleSplitColors}
+              height={220}
+            />
+            <ul className="space-y-2">
+              {ruleSplit.map((s) => (
+                <li key={s.type} className="flex items-center justify-between text-sm">
+                  <span className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
+                    <span className="h-2.5 w-2.5 rounded-full" style={{ background: s.color }} />
+                    {s.label}
+                  </span>
+                  <span className="font-medium tabular-nums text-slate-900 dark:text-white">
+                    {formatCurrency(s.amount)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </Card>
       )}
 
       {/* Detail table */}

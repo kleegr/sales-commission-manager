@@ -175,7 +175,7 @@ export async function deleteMilestone(id: string): Promise<void> {
 // comes from the session. GET returns the full map; PUT (owner/admin) writes
 // overrides and returns the updated map.
 
-import type { FeatureFlags } from "./features";
+import type { FeatureFlags, FeatureKey } from "./features";
 
 export async function getFeatures(): Promise<Partial<FeatureFlags>> {
   const res = await fetch("/api/features", { headers: { accept: "application/json" } });
@@ -191,6 +191,81 @@ export async function saveFeatures(patch: Partial<FeatureFlags>): Promise<Featur
   });
   const body = await asJson(res);
   return body.features as FeatureFlags;
+}
+
+// ---- Agency overview -------------------------------------------------------
+// Cross-sub-account rollups for the agency / super-admin view. Server-owned and
+// access-controlled (owner/admin only; ALL tenants in review mode, otherwise
+// just the caller's own tenant). The client never sends a tenant id.
+
+interface PayoutBucket {
+  count: number;
+  amount: number;
+}
+
+export interface AgencyTenantRollup {
+  slug: string;
+  name: string;
+  status: string;
+  appEnabled: boolean;
+  ghlLocationId: string | null;
+  counts: {
+    salespeople: number;
+    activeSalespeople: number;
+    clients: number;
+    activeClients: number;
+    plans: number;
+    payments: number;
+    payouts: number;
+    documents: number;
+  };
+  revenue: { gross: number; refunds: number; net: number };
+  commissions: {
+    paid: number;
+    pending: number;
+    held: number;
+    clawedBack: number;
+    projected: number;
+    liability: number;
+  };
+  payouts: {
+    submitted: PayoutBucket;
+    approved: PayoutBucket;
+    paid: PayoutBucket;
+    rejected: PayoutBucket;
+    pendingAmount: number;
+  };
+  documents: { total: number; proposals: number; contracts: number; signed: number; sent: number; draft: number };
+  features: FeatureFlags;
+  disabledFeatures: FeatureKey[];
+  lastActivityAt: string | null;
+}
+
+export interface AgencySummary {
+  tenantCount: number;
+  activeTenants: number;
+  totalRevenue: number;
+  totalCommissionsPaid: number;
+  totalCommissionLiability: number;
+  totalSalespeople: number;
+  totalClients: number;
+  totalPayoutsPending: number;
+  totalDocuments: number;
+}
+
+export interface AgencyOverview {
+  scope: "agency" | "tenant";
+  demo: boolean;
+  viewer: { tenant: string; role: string };
+  summary: AgencySummary;
+  tenants: AgencyTenantRollup[];
+  generatedAt: string;
+}
+
+/** Fetch the agency overview. Throws on non-2xx (e.g. 503 in local-storage mode). */
+export async function getAgencyOverview(): Promise<AgencyOverview> {
+  const res = await fetch("/api/agency", { headers: { accept: "application/json" } });
+  return asJson(res);
 }
 
 // ---- AI Business Setup, Proposals & Contracts ------------------------------

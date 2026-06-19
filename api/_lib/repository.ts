@@ -15,7 +15,7 @@
 //
 // NOTE ON TENANT ISOLATION: every statement below filters / writes by
 // tenant_id. There is no query in this file that can read or mutate rows for a
-// tenant other than the one passed in \u2014 that is the multi-tenant guarantee for
+// tenant other than the one passed in — that is the multi-tenant guarantee for
 // this phase (see SECURITY in README for what real auth still needs to add).
 // ============================================================================
 
@@ -99,7 +99,7 @@ export async function getTenantBySlug(slug: string): Promise<TenantRow | null> {
   return rows[0] ?? null;
 }
 
-/** Per-tenant row counts \u2014 used by /api/health to prove data is really there. */
+/** Per-tenant row counts — used by /api/health to prove data is really there. */
 export async function tenantCounts(tenantId: string) {
   const tables = [
     "salespeople",
@@ -128,7 +128,7 @@ export async function tenantCounts(tenantId: string) {
 // the persisted rows. Tenant isolation holds because the caller (api/agency.ts)
 // only ever passes tenant ids the session is allowed to see; there is no query
 // here that can reach a tenant outside `tenantIds`. These intentionally do NOT
-// re-derive commission timing \u2014 the held/clawed_back/projected split is read
+// re-derive commission timing — the held/clawed_back/projected split is read
 // from the stored commission_ledger.status / .is_projection columns.
 // ---------------------------------------------------------------------------
 
@@ -554,7 +554,7 @@ export async function writeState(tenantId: string, data: AppData): Promise<void>
     //    no longer writes them, so their workflow state + audit history survive
     //    admin edits to other resources.
 
-    // 9. audit trail \u2014 every snapshot save is recorded (financial systems need this)
+    // 9. audit trail — every snapshot save is recorded (financial systems need this)
     await c.query(
       `INSERT INTO audit_logs (id, tenant_id, entity_type, action, after, created_at)
        VALUES ($1,$2,$3,$4,$5::jsonb, now())`,
@@ -583,7 +583,7 @@ export async function writeState(tenantId: string, data: AppData): Promise<void>
 const DEMO_AGENCY_ID = "agency_demo";
 
 export const DEMO_TENANTS = [
-  { id: "tenant_demo", slug: "demo", name: "Northwind Agency \u2014 Demo", company: "Northwind Agency", ghl: "ghl_loc_demo_001" },
+  { id: "tenant_demo", slug: "demo", name: "Northwind Agency — Demo", company: "Northwind Agency", ghl: "ghl_loc_demo_001" },
   { id: "tenant_acme", slug: "acme", name: "Acme Partners", company: "Acme Partners", ghl: "ghl_loc_acme_002" },
 ] as const;
 

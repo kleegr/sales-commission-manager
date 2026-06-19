@@ -401,5 +401,28 @@ const TODAY = "2025-06-15";
   ok("integration: fullLedger re-stamps timing fields", fresh?.releaseDate === "2025-06-24");
 }
 
+// locked payout figures are preserved across a recompute even if the plan rate
+// changes (payout history must never be re-priced).
+{
+  const plan = planWith("p_lock", timing({ trigger: "immediate" }));
+  const data = baseData(
+    [plan], [sp("s1", "p_lock")], [client("c1", "s1", "2025-01-01")],
+    [pay("pay_setup", "c1", "2025-01-01", "setup_fee", 2000, null)],
+  );
+  // First recompute, then mark the setup commission PAID at its current amount.
+  const initial = recomputePaymentCommissions(data, TODAY);
+  const paidAmount = initial[0].commissionAmount;
+  const lockedCommissions = initial.map((r) => ({ ...r, status: "paid" as const, paidDate: "2025-02-01" }));
+  // Now slash the plan's setup rate and recompute with the locked rows present.
+  // (The rule id stays stable, exactly as a real plan edit preserves it.)
+  const cheaperPlan = { ...plan, rules: [{ id: "p_lock_setup", type: "setup_fee" as const, mode: "percentage" as const, value: 1 }] };
+  const rows = recomputePaymentCommissions(
+    { ...data, plans: [cheaperPlan], commissions: lockedCommissions },
+    TODAY,
+  );
+  ok("integration: paid row keeps its status after rate change", rows.every((r) => r.status === "paid"));
+  ok("integration: paid row NOT re-priced after rate change", rows.every((r) => r.commissionAmount === paidAmount));
+}
+
 console.log(`\n========================\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);

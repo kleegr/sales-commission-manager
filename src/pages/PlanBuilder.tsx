@@ -8,6 +8,7 @@ import {
   Repeat,
   Wallet,
   ScrollText,
+  Maximize2,
 } from "lucide-react";
 import { useApp } from "../store/AppContext";
 import type {
@@ -33,6 +34,7 @@ import {
 import { RuleList } from "../components/plan/RuleList";
 import { RuleEditorModal, newRuleOfType } from "../components/plan/RuleEditorModal";
 import { ProjectionView } from "../components/plan/ProjectionView";
+import { PlanPreviewModal } from "../components/plan/PlanPreviewModal";
 import { suggestNextStartMonth } from "../lib/commission-engine";
 import {
   normalizeTiming,
@@ -77,6 +79,7 @@ export default function PlanBuilder() {
     existing ? clonePlan(existing) : freshPlan(),
   );
   const [editing, setEditing] = useState<Rule | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const seededFor = useRef<string | null>(existing ? existing.id : null);
 
   // Re-seed once the target plan becomes available after async hydration.
@@ -144,7 +147,7 @@ export default function PlanBuilder() {
   }
 
   return (
-    <div>
+    <div className="pb-24">
       <Link
         to="/plans"
         className="mb-3 inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
@@ -249,9 +252,21 @@ export default function PlanBuilder() {
 
         {/* ---- Right: live preview ---- */}
         <div className="space-y-3">
-          <SectionTitle>Live preview</SectionTitle>
+          <SectionTitle
+            right={
+              <Button variant="ghost" size="sm" onClick={() => setPreviewOpen(true)}>
+                <Maximize2 className="h-4 w-4" /> Full screen
+              </Button>
+            }
+          >
+            Live preview
+          </SectionTitle>
           <Card>
-            <ProjectionView plan={draft} initialAssumptions={data.settings.assumptions} />
+            <ProjectionView
+              plan={draft}
+              initialAssumptions={data.settings.assumptions}
+              onExpand={() => setPreviewOpen(true)}
+            />
           </Card>
         </div>
       </div>
@@ -264,6 +279,36 @@ export default function PlanBuilder() {
         onClose={() => setEditing(null)}
         onSave={handleRuleSave}
       />
+
+      <PlanPreviewModal
+        open={previewOpen}
+        plan={draft}
+        assumptions={data.settings.assumptions}
+        onClose={() => setPreviewOpen(false)}
+      />
+
+      {/* Sticky save bar — keeps Save/Cancel reachable on long forms */}
+      <div className="sticky bottom-0 z-20 -mx-4 mt-6 border-t border-slate-200 bg-white/90 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 dark:border-slate-800 dark:bg-slate-950/90">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0 text-sm text-slate-500 dark:text-slate-400">
+            <span className="font-medium text-slate-700 dark:text-slate-200">
+              {draft.name.trim() || "Untitled plan"}
+            </span>
+            <span className="hidden sm:inline">
+              {" · "}
+              {draft.rules.length} {draft.rules.length === 1 ? "rule" : "rules"}
+            </span>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button variant="secondary" onClick={() => navigate("/plans")}>
+              Cancel
+            </Button>
+            <Button onClick={savePlan}>
+              <Save className="h-4 w-4" /> Save plan
+            </Button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

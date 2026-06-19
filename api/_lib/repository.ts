@@ -15,7 +15,7 @@
 //
 // NOTE ON TENANT ISOLATION: every statement below filters / writes by
 // tenant_id. There is no query in this file that can read or mutate rows for a
-// tenant other than the one passed in — that is the multi-tenant guarantee for
+// tenant other than the one passed in \u2014 that is the multi-tenant guarantee for
 // this phase (see SECURITY in README for what real auth still needs to add).
 // ============================================================================
 
@@ -24,6 +24,7 @@ import { SCHEMA_SQL, TABLES_CHILD_FIRST } from "./schema.js";
 import { MIGRATIONS_SQL } from "./migrations.js";
 import { ensureAuthSeed } from "./auth-seed.js";
 import { ADMIN_ROLES } from "./auth.js";
+import { emptyAggregate, type RawTenantAggregate } from "./agency-core.js";
 import { buildDemoData } from "../../src/lib/demo-data.js";
 import {
   SCHEMA_VERSION,
@@ -98,7 +99,7 @@ export async function getTenantBySlug(slug: string): Promise<TenantRow | null> {
   return rows[0] ?? null;
 }
 
-/** Per-tenant row counts — used by /api/health to prove data is really there. */
+/** Per-tenant row counts \u2014 used by /api/health to prove data is really there. */
 export async function tenantCounts(tenantId: string) {
   const tables = [
     "salespeople",
@@ -118,6 +119,93 @@ export async function tenantCounts(tenantId: string) {
     out[t] = Number(rows[0]?.n ?? 0);
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Agency rollups: per-tenant aggregates for the agency / super-admin overview.
+//
+// Each metric is ONE grouped aggregate over the GIVEN tenant id set, read from
+// the persisted rows. Tenant isolation holds because the caller (api/agency.ts)
+// only ever passes tenant ids the session is allowed to see; there is no query
+// here that can reach a tenant outside `tenantIds`. These intentionally do NOT
+// re-derive commission timing \u2014 the held/clawed_back/projected split is read
+// from the stored commission_ledger.status / .is_projection columns.
+// ---------------------------------------------------------------------------
+
+export async function agencyAggregates(tenantIds: string[]): Promise<RawTenantAggregate[]> {
+  if (tenantIds.length === 0) return [];
+  const byId = new Map<string, RawTenantAggregate>();
+  for (const id of tenantIds) byId.set(id, emptyAggregate(id));
+  const ids = tenantIds;
+
+  const [sp, cl, pl, pay, led, po, doc, act] = await Promise.all([
+    query<any>(
+      `SELECT tenant_id, count(*)::int AS n, count(*) FILTER (WHERE status='active')::int AS active_n
+         FROM salespeople WHERE tenant_id = ANY($1::text[]) GROUP BY tenant_id`, [ids]),
+    query<any>(
+      `SELECT tenant_id, count(*)::int AS n, count(*) FILTER (WHERE status='active')::int AS active_n
+         FROM clients WHERE tenant_id = ANY($1::text[]) GROUP BY tenant_id`, [ids]),
+    query<any>(
+      `SELECT tenant_id, count(*)::int AS n
+         FROM commission_plans WHERE tenant_id = ANY($1::text[]) GROUP BY tenant_id`, [ids]),
+    query<any>(
+      `SELECT tenant_id, count(*)::int AS n,
+              COALESCE(SUM(amount) FILTER (WHERE payment_type <> 'refund'),0)::float8 AS gross,
+              COALESCE(SUM(amount) FILTER (WHERE payment_type =  'refund'),0)::float8 AS refunds
+         FROM payments WHERE tenant_id = ANY($1::text[]) GROUP BY tenant_id`, [ids]),
+    query<any>(
+      `SELECT tenant_id,
+              COALESCE(SUM(commission_amount) FILTER (WHERE NOT is_projection AND status='paid'),0)::float8 AS paid,
+              COALESCE(SUM(commission_amount) FILTER (WHERE NOT is_projection AND status IN ('pending','submitted','approved')),0)::float8 AS pending,
+              COALESCE(SUM(commission_amount) FILTER (WHERE NOT is_projection AND status='held'),0)::float8 AS held,
+              COALESCE(SUM(commission_amount) FILTER (WHERE NOT is_projection AND status='clawed_back'),0)::float8 AS clawed_back,
+              COALESCE(SUM(commission_amount) FILTER (WHERE is_projection),0)::float8 AS projected
+         FROM commission_ledger WHERE tenant_id = ANY($1::text[]) GROUP BY tenant_id`, [ids]),
+    query<any>(
+      `SELECT tenant_id, status, count(*)::int AS n, COALESCE(SUM(total_amount),0)::float8 AS amount
+         FROM payout_batches WHERE tenant_id = ANY($1::text[]) GROUP BY tenant_id, status`, [ids]),
+    query<any>(
+      `SELECT tenant_id, count(*)::int AS n,
+              count(*) FILTER (WHERE kind='proposal')::int AS proposals,
+              count(*) FILTER (WHERE kind='contract')::int AS contracts,
+              count(*) FILTER (WHERE status='signed')::int AS signed,
+              count(*) FILTER (WHERE status='sent')::int  AS sent,
+              count(*) FILTER (WHERE status='draft')::int AS draft
+         FROM documents WHERE tenant_id = ANY($1::text[]) GROUP BY tenant_id`, [ids]),
+    query<any>(
+      `SELECT tenant_id, max(created_at) AS last_at
+         FROM audit_logs WHERE tenant_id = ANY($1::text[]) GROUP BY tenant_id`, [ids]),
+  ]);
+
+  for (const r of sp.rows)  { const a = byId.get(r.tenant_id); if (a) { a.salespeople = r.n; a.activeSalespeople = r.active_n; } }
+  for (const r of cl.rows)  { const a = byId.get(r.tenant_id); if (a) { a.clients = r.n; a.activeClients = r.active_n; } }
+  for (const r of pl.rows)  { const a = byId.get(r.tenant_id); if (a) { a.plans = r.n; } }
+  for (const r of pay.rows) { const a = byId.get(r.tenant_id); if (a) { a.payments = r.n; a.grossRevenue = Number(r.gross); a.refunds = Number(r.refunds); } }
+  for (const r of led.rows) {
+    const a = byId.get(r.tenant_id); if (!a) continue;
+    a.commPaid = Number(r.paid); a.commPending = Number(r.pending); a.commHeld = Number(r.held);
+    a.commClawedBack = Number(r.clawed_back); a.commProjected = Number(r.projected);
+  }
+  for (const r of po.rows) {
+    const a = byId.get(r.tenant_id); if (!a) continue;
+    a.payouts += r.n;
+    const amt = Number(r.amount);
+    if (r.status === "submitted")      { a.payoutSubmittedN = r.n; a.payoutSubmittedAmt = amt; }
+    else if (r.status === "approved")  { a.payoutApprovedN  = r.n; a.payoutApprovedAmt  = amt; }
+    else if (r.status === "paid")      { a.payoutPaidN      = r.n; a.payoutPaidAmt      = amt; }
+    else if (r.status === "rejected")  { a.payoutRejectedN  = r.n; a.payoutRejectedAmt  = amt; }
+  }
+  for (const r of doc.rows) {
+    const a = byId.get(r.tenant_id); if (!a) continue;
+    a.documents = r.n; a.proposals = r.proposals; a.contracts = r.contracts;
+    a.docsSigned = r.signed; a.docsSent = r.sent; a.docsDraft = r.draft;
+  }
+  for (const r of act.rows) {
+    const a = byId.get(r.tenant_id); if (!a) continue;
+    a.lastActivityAt = r.last_at ? new Date(r.last_at).toISOString() : null;
+  }
+
+  return tenantIds.map((id) => byId.get(id)!); // preserve requested order
 }
 
 // ---------------------------------------------------------------------------
@@ -466,7 +554,7 @@ export async function writeState(tenantId: string, data: AppData): Promise<void>
     //    no longer writes them, so their workflow state + audit history survive
     //    admin edits to other resources.
 
-    // 9. audit trail — every snapshot save is recorded (financial systems need this)
+    // 9. audit trail \u2014 every snapshot save is recorded (financial systems need this)
     await c.query(
       `INSERT INTO audit_logs (id, tenant_id, entity_type, action, after, created_at)
        VALUES ($1,$2,$3,$4,$5::jsonb, now())`,
@@ -495,7 +583,7 @@ export async function writeState(tenantId: string, data: AppData): Promise<void>
 const DEMO_AGENCY_ID = "agency_demo";
 
 export const DEMO_TENANTS = [
-  { id: "tenant_demo", slug: "demo", name: "Northwind Agency — Demo", company: "Northwind Agency", ghl: "ghl_loc_demo_001" },
+  { id: "tenant_demo", slug: "demo", name: "Northwind Agency \u2014 Demo", company: "Northwind Agency", ghl: "ghl_loc_demo_001" },
   { id: "tenant_acme", slug: "acme", name: "Acme Partners", company: "Acme Partners", ghl: "ghl_loc_acme_002" },
 ] as const;
 

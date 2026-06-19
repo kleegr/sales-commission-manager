@@ -11,7 +11,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "tsx src/lib/commission-engine.test.ts && tsx src/lib/commission-timing.test.ts && tsx api/_lib/auth.test.ts && tsx api/_lib/handlers.test.ts && tsx src/lib/goals.test.ts && tsx api/_lib/documents-core.test.ts",
+    "test": "tsx src/lib/commission-engine.test.ts && tsx src/lib/commission-timing.test.ts && tsx api/_lib/auth.test.ts && tsx api/_lib/handlers.test.ts && tsx src/lib/goals.test.ts && tsx api/_lib/documents-core.test.ts && tsx api/_lib/agency-core.test.ts",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:seed": "tsx scripts/seed.ts"
   },

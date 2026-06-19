@@ -234,6 +234,26 @@ function DataSourceBadge() {
   );
 }
 
+function WorkspaceBadge() {
+  const { user } = useAuth();
+  if (!user) return null;
+  const name = user.tenantName || user.tenantSlug;
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <span className="flex h-7 w-7 flex-none items-center justify-center rounded-lg bg-brand-50 text-brand-600 dark:bg-brand-500/15 dark:text-brand-300">
+        <Building2 className="h-4 w-4" />
+      </span>
+      <div className="min-w-0 leading-tight">
+        <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">Sub-account</p>
+        <p className="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">{name}</p>
+      </div>
+      <span className="hidden flex-none rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-300 sm:inline">
+        {ROLE_LABEL[user.role]}
+      </span>
+    </div>
+  );
+}
+
 export function Layout({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
@@ -285,6 +305,7 @@ export function Layout({ children }: { children: ReactNode }) {
             >
               <Menu className="h-5 w-5" />
             </button>
+            <WorkspaceBadge />
             <div className="flex-1" />
             <ThemeToggle />
           </header>

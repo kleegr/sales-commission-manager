@@ -1,8 +1,13 @@
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Pencil, LineChart } from "lucide-react";
+import { ArrowLeft, Pencil, LineChart, Maximize2 } from "lucide-react";
 import { useApp } from "../store/AppContext";
 import { PageHeader, Button, Card, EmptyState, Badge } from "../components/ui";
 import { ProjectionView } from "../components/plan/ProjectionView";
+import { PlanPreviewModal } from "../components/plan/PlanPreviewModal";
+import { PlanAssignments } from "../components/plan/PlanAssignments";
+import { TimingExplainer } from "../components/plan/TimingExplainer";
+import { planTimingFlags } from "../lib/plan-analytics";
 import { ruleHeadline } from "../lib/commission-engine";
 import { formatCurrency } from "../lib/format";
 
@@ -18,6 +23,7 @@ export default function PlanProjection() {
   const { id } = useParams();
   const plan = data.plans.find((p) => p.id === id);
   const plansLoaded = data.plans.length > 0;
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   if (!plan) {
     if (!plansLoaded) return null;
@@ -50,11 +56,16 @@ export default function PlanProjection() {
         title={plan.name}
         subtitle={plan.description || "Month-by-month and year-by-year projection"}
         actions={
-          <Link to={`/plans/${plan.id}/edit`}>
-            <Button variant="secondary">
-              <Pencil className="h-4 w-4" /> Edit plan
+          <>
+            <Button variant="ghost" onClick={() => setPreviewOpen(true)}>
+              <Maximize2 className="h-4 w-4" /> Full screen
             </Button>
-          </Link>
+            <Link to={`/plans/${plan.id}/edit`}>
+              <Button variant="secondary">
+                <Pencil className="h-4 w-4" /> Edit plan
+              </Button>
+            </Link>
+          </>
         }
       />
 
@@ -82,7 +93,31 @@ export default function PlanProjection() {
         </p>
       </Card>
 
-      <ProjectionView plan={plan} initialAssumptions={data.settings.assumptions} />
+      {planTimingFlags(plan).hasTiming && (
+        <Card className="mb-6">
+          <p className="mb-3 text-xs font-medium uppercase tracking-wide text-slate-400">
+            When commissions are paid
+          </p>
+          <TimingExplainer plan={plan} />
+        </Card>
+      )}
+
+      <ProjectionView
+        plan={plan}
+        initialAssumptions={data.settings.assumptions}
+        onExpand={() => setPreviewOpen(true)}
+      />
+
+      <div className="mt-6">
+        <PlanAssignments plan={plan} />
+      </div>
+
+      <PlanPreviewModal
+        open={previewOpen}
+        plan={plan}
+        assumptions={data.settings.assumptions}
+        onClose={() => setPreviewOpen(false)}
+      />
     </div>
   );
 }

@@ -189,7 +189,7 @@ function UserCard() {
         <p className="truncate text-[12px] font-medium text-slate-700 dark:text-slate-200">{user.name}</p>
         <p className="truncate text-[10px] text-slate-400">
           {ROLE_LABEL[user.role]}
-          {demo ? " \u00b7 review mode" : ""}
+          {demo ? " · review mode" : ""}
         </p>
       </div>
       {!demo && (
@@ -224,10 +224,10 @@ function DataSourceBadge() {
       </span>
       <div className="min-w-0 leading-tight">
         <p className="truncate text-[11px] font-medium text-slate-600 dark:text-slate-300">
-          {detecting ? "Detecting\u2026" : onNeon ? "Neon Postgres" : "Browser storage"}
+          {detecting ? "Detecting…" : onNeon ? "Neon Postgres" : "Browser storage"}
         </p>
         <p className="truncate text-[10px] text-slate-400">
-          {onNeon ? `${tenant}${readOnly ? " \u00b7 read-only" : ""}` : "local fallback"}
+          {onNeon ? `${tenant}${readOnly ? " · read-only" : ""}` : "local fallback"}
         </p>
       </div>
     </div>

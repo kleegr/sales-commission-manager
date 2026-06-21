@@ -25,6 +25,7 @@ import Agency from "./pages/Agency";
 import Documents from "./pages/Documents";
 import Presentation from "./pages/Presentation";
 import Settings from "./pages/Settings";
+import KleegrIntegration from "./pages/KleegrIntegration";
 
 /** Route guard: redirect to the role's home if it may not see this path, or
  *  show a "feature turned off" notice if the tenant has the feature disabled.
@@ -84,6 +85,7 @@ export default function App() {
         <Route path="/portal" element={<Guard><Portal /></Guard>} />
         <Route path="/present" element={<Guard><Presentation /></Guard>} />
         <Route path="/settings" element={<Guard><Settings /></Guard>} />
+        <Route path="/settings/integrations/kleegr" element={<Guard><KleegrIntegration /></Guard>} />
         <Route path="*" element={<Navigate to={homePath(role)} replace />} />
       </Routes>
     </Layout>

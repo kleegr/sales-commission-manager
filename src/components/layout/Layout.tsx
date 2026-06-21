@@ -28,7 +28,7 @@ import { useFeatures } from "../../store/FeaturesContext";
 import { canAccess, homePath, ROLE_LABEL, type Role } from "../../lib/roles";
 import { featureAllowsPath } from "../../lib/features";
 import { DemoBar } from "./DemoBar";
-import { Network, FileSignature, Target } from "lucide-react";
+import { Network, FileSignature, Target, Plug } from "lucide-react";
 
 interface NavItem {
   to: string;
@@ -78,7 +78,10 @@ const SECTIONS: { heading: string; items: NavItem[] }[] = [
   },
   {
     heading: "System",
-    items: [{ to: "/settings", label: "Settings & Data", icon: <SettingsIcon className="h-4 w-4" /> }],
+    items: [
+      { to: "/settings", label: "Settings & Data", icon: <SettingsIcon className="h-4 w-4" /> },
+      { to: "/settings/integrations/kleegr", label: "Kleegr Integration", icon: <Plug className="h-4 w-4" /> },
+    ],
   },
 ];
 

@@ -12,7 +12,7 @@
     "build": "tsc -b && npm run typecheck:api && vite build",
     "preview": "vite preview",
     "typecheck:api": "tsc -p tsconfig.api.json --noEmit",
-    "test": "tsx src/lib/commission-engine.test.ts && tsx src/lib/commission-timing.test.ts && tsx api/_lib/auth.test.ts && tsx api/_lib/handlers.test.ts && tsx api/_lib/commission-handlers.test.ts && tsx api/_lib/recompute.test.ts && tsx src/lib/goals.test.ts && tsx api/_lib/documents-core.test.ts && tsx api/_lib/agency-core.test.ts && tsx src/lib/roles.test.ts",
+    "test": "tsx src/lib/commission-engine.test.ts && tsx src/lib/commission-timing.test.ts && tsx api/_lib/auth.test.ts && tsx api/_lib/handlers.test.ts && tsx api/_lib/commission-handlers.test.ts && tsx api/_lib/recompute.test.ts && tsx src/lib/goals.test.ts && tsx api/_lib/documents-core.test.ts && tsx api/_lib/agency-core.test.ts && tsx src/lib/roles.test.ts && tsx api/_lib/kleegr.test.ts",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:seed": "tsx scripts/seed.ts"
   },

@@ -1,0 +1,47 @@
+// ============================================================================
+// KLEEGR MANIFEST  (server-side copy)
+//
+// The canonical artifact Kleegr imports is /smart-productivity.app.json at the
+// repo root. Serverless functions can't reliably fs-read a root file from their
+// bundle, so the manifest is ALSO embedded here as a typed constant for the
+// /api/kleegr/* routes to use. kleegr.test.ts asserts the root JSON file is
+// byte-for-byte equal to this object, so the two can never silently drift.
+//
+// No secrets live here (or in the JSON). Only env-var NAMES are referenced in
+// setupInstructions.
+// ============================================================================
+
+export const KLEEGR_MANIFEST = {
+  appKey: "sales-commission-manager",
+  appName: "Sales Commission Manager",
+  appVersion: "1.0.0",
+  description:
+    "Commission tracking, payout management, sales plans, reports, and client commission visibility for Kleegr-powered GoHighLevel sub-accounts.",
+  icon: "BadgeDollarSign",
+  appType: "external",
+  category: "sales",
+  kind: "web",
+  launchUrl: "https://sales-commission-manager.vercel.app/kleegr/launch",
+  apiUrl: "https://sales-commission-manager.vercel.app/api/kleegr",
+  webhookUrl: "https://sales-commission-manager.vercel.app/api/kleegr/webhook",
+  webhookEvents: [
+    "app.installed",
+    "subaccount.connected",
+    "subaccount.disconnected",
+    "contact.created",
+    "contact.updated",
+    "opportunity.created",
+    "opportunity.updated",
+  ],
+  scopes: ["subaccount.readonly", "users.readonly", "contacts.readonly", "opportunities.readonly"],
+  requiredPermissions: [],
+  placements: ["agency", "live", "settings", "app_launcher"],
+  visibility: { agency: true, mobile: true, settings: true },
+  statusEndpoint: "https://sales-commission-manager.vercel.app/api/kleegr/status",
+  healthCheckEndpoint: "https://sales-commission-manager.vercel.app/api/health",
+  setupInstructions:
+    "Install the app from the Kleegr Agency Portal. Add KLEEGR_INTEGRATION_TOKEN and KLEEGR_WEBHOOK_SECRET as server-side environment variables in Vercel before launch. Open the app from a Kleegr sub-account to complete connection.",
+  allowedSubAccounts: [],
+} as const;
+
+export type KleegrManifest = typeof KLEEGR_MANIFEST;

@@ -242,4 +242,48 @@ CREATE INDEX IF NOT EXISTS idx_ai_content_sp     ON ai_generated_content(tenant_
 
 INSERT INTO schema_migrations (id) VALUES ('0009_ai_proposals_contracts')
 ON CONFLICT (id) DO NOTHING;
+
+-- 0010 — Kleegr Smart Productivity / GoHighLevel mapping ---------------------
+-- Sales Commission Manager integrates with GoHighLevel ONLY through Kleegr
+-- Smart Productivity. These nullable, tenant-scoped columns map our rows to
+-- their Kleegr (and underlying GHL) identifiers so a launch/sync can link data
+-- idempotently. Everything is additive and idempotent: existing demo/review
+-- data is untouched, and a row with no Kleegr ids behaves exactly as before.
+--
+-- NOTE: ghl_location_id (tenants) and ghl_contact_id / ghl_opportunity_id
+-- (clients) already existed from the original "GoHighLevel-ready" schema, so
+-- they are intentionally NOT re-added here.
+
+-- tenants == Kleegr sub-account == GoHighLevel location
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS kleegr_sub_account_id    TEXT;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS kleegr_connected_at      TIMESTAMPTZ;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS kleegr_connection_status TEXT;  -- connected | configuring | error | disconnected
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS kleegr_last_sync_at      TIMESTAMPTZ;
+-- one tenant per Kleegr sub-account (partial unique: ignores NULLs / demo rows)
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tenants_kleegr_sub_account
+  ON tenants(kleegr_sub_account_id) WHERE kleegr_sub_account_id IS NOT NULL;
+
+-- users (logins) carry their Kleegr Smart Productivity identity + role/permissions
+ALTER TABLE users ADD COLUMN IF NOT EXISTS kleegr_user_id     TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS kleegr_role        TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS kleegr_permissions JSONB;
+CREATE INDEX IF NOT EXISTS idx_users_kleegr_user ON users(tenant_id, kleegr_user_id);
+
+-- salespeople can also be linked to a Kleegr user (sales reps synced from GHL)
+ALTER TABLE salespeople ADD COLUMN IF NOT EXISTS kleegr_user_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_salespeople_kleegr_user ON salespeople(tenant_id, kleegr_user_id);
+
+-- clients == GHL contact (+ at most one linked opportunity, matching the
+-- existing "client = contact + opportunity" modeling of this schema)
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS kleegr_contact_id     TEXT;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS kleegr_source         TEXT;  -- manual | kleegr_imported | kleegr_linked
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS kleegr_opportunity_id TEXT;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS pipeline_id           TEXT;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS stage_id              TEXT;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS opportunity_status    TEXT;
+CREATE INDEX IF NOT EXISTS idx_clients_kleegr_contact     ON clients(tenant_id, kleegr_contact_id);
+CREATE INDEX IF NOT EXISTS idx_clients_kleegr_opportunity ON clients(tenant_id, kleegr_opportunity_id);
+
+INSERT INTO schema_migrations (id) VALUES ('0010_kleegr_integration')
+ON CONFLICT (id) DO NOTHING;
 `;

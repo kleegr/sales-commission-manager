@@ -181,10 +181,19 @@ export function readCookie(req: VercelRequest, name = COOKIE_NAME): string | nul
   return null;
 }
 
-export function setSessionCookie(res: VercelResponse, token: string): void {
+export function setSessionCookie(
+  res: VercelResponse,
+  token: string,
+  opts: { crossSite?: boolean } = {},
+): void {
   const maxAge = SESSION_TTL_DAYS * 86400;
+  // SameSite=Lax for normal logins. The Kleegr launch may open this app inside
+  // an iframe (cross-site), where a Lax cookie would not be sent on subsequent
+  // navigations — so the launch flow opts into SameSite=None; Secure, which is
+  // also sent on top-level cross-site navigations. None always requires Secure.
+  const sameSite = opts.crossSite ? "None" : "Lax";
   res.setHeader("Set-Cookie", [
-    `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${maxAge}`,
+    `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=${sameSite}; Secure; Max-Age=${maxAge}`,
   ]);
 }
 

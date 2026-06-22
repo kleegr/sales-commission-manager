@@ -24,6 +24,7 @@ import { SCHEMA_SQL, TABLES_CHILD_FIRST } from "./schema.js";
 import { MIGRATIONS_SQL } from "./migrations.js";
 import { ensureAuthSeed } from "./auth-seed.js";
 import { ADMIN_ROLES } from "./auth.js";
+import { preserveExternalMapping } from "./kleegr.js";
 import { emptyAggregate, type RawTenantAggregate } from "./agency-core.js";
 import { buildDemoData } from "../../src/lib/demo-data.js";
 import {
@@ -451,6 +452,32 @@ export async function writeState(tenantId: string, data: AppData): Promise<void>
   for (const po of data.payouts) for (const eid of po.commissionEntryIds) entryToPayout.set(eid, po.id);
 
   await withTransaction(async (c: PoolClient) => {
+    // 0. capture externally-owned Kleegr/GHL mapping BEFORE we clear the tenant.
+    //    The AppData snapshot does not carry these columns, so without this
+    //    capture+restore an admin save would wipe every Kleegr/GHL link. Rows
+    //    removed from the snapshot are intentionally NOT restored (their mapping
+    //    is gone with them). See preserveExternalMapping().
+    const { rows: capturedClientMap } = await c.query<{
+      id: string;
+      kleegr_contact_id: string | null;
+      ghl_contact_id: string | null;
+      kleegr_source: string | null;
+      kleegr_opportunity_id: string | null;
+      ghl_opportunity_id: string | null;
+      pipeline_id: string | null;
+      stage_id: string | null;
+      opportunity_status: string | null;
+    }>(
+      `SELECT id, kleegr_contact_id, ghl_contact_id, kleegr_source,
+              kleegr_opportunity_id, ghl_opportunity_id, pipeline_id, stage_id, opportunity_status
+         FROM clients WHERE tenant_id = $1`,
+      [tenantId],
+    );
+    const { rows: capturedSpMap } = await c.query<{ id: string; kleegr_user_id: string | null }>(
+      `SELECT id, kleegr_user_id FROM salespeople WHERE tenant_id = $1`,
+      [tenantId],
+    );
+
     // 1. clear this tenant's data (child-first); tenants row is preserved.
     //    NOTE: payout_batches / payout_batch_entries / payout_events are
     //    SERVER-OWNED (managed by /api/payouts) and are deliberately excluded
@@ -553,6 +580,33 @@ export async function writeState(tenantId: string, data: AppData): Promise<void>
     // 8. payout batches are SERVER-OWNED (see /api/payouts). The snapshot path
     //    no longer writes them, so their workflow state + audit history survive
     //    admin edits to other resources.
+
+    // 8b. restore the externally-owned Kleegr/GHL mapping captured in step 0,
+    //     but only onto rows that still exist after the replace-all. This keeps
+    //     a launched/synced tenant's GHL links intact across ordinary admin saves.
+    const survivingClientIds = data.clients.map((cl) => cl.id);
+    for (const m of preserveExternalMapping(capturedClientMap, survivingClientIds)) {
+      await c.query(
+        `UPDATE clients SET
+            kleegr_contact_id     = $2,
+            ghl_contact_id        = $3,
+            kleegr_source         = $4,
+            kleegr_opportunity_id = $5,
+            ghl_opportunity_id    = $6,
+            pipeline_id           = $7,
+            stage_id              = $8,
+            opportunity_status    = $9
+          WHERE id = $1 AND tenant_id = $10`,
+        [m.id, m.kleegr_contact_id, m.ghl_contact_id, m.kleegr_source, m.kleegr_opportunity_id,
+         m.ghl_opportunity_id, m.pipeline_id, m.stage_id, m.opportunity_status, tenantId],
+      );
+    }
+    const survivingSpIds = data.salespeople.map((s) => s.id);
+    for (const m of preserveExternalMapping(capturedSpMap, survivingSpIds)) {
+      if (m.kleegr_user_id == null) continue;
+      await c.query(`UPDATE salespeople SET kleegr_user_id = $2 WHERE id = $1 AND tenant_id = $3`,
+        [m.id, m.kleegr_user_id, tenantId]);
+    }
 
     // 9. audit trail — every snapshot save is recorded (financial systems need this)
     await c.query(

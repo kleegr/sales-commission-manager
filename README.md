@@ -242,6 +242,92 @@ remaining resources off the snapshot. The payout tables are server-owned and
 excluded from the snapshot replace so their workflow state + history survive
 admin edits elsewhere.
 
+## Kleegr Smart Productivity integration
+
+This app integrates with GoHighLevel **exclusively through Kleegr Smart
+Productivity** (a white-label bridge). There is **no direct GoHighLevel OAuth,
+API call, or webhook** anywhere in this codebase — Kleegr owns the GoHighLevel
+layer, and every server↔Kleegr call authenticates with the integration token by
+name only. All Kleegr secrets are read server-side from environment variables
+and are never logged, returned to the browser, or placed in the manifest.
+
+### Launch flow
+
+Kleegr opens the app at **`/kleegr/launch`** (rewritten to the
+`/api/kleegr/launch` serverless function) with a short-lived launch token. The
+handler verifies the token with Kleegr, validates the claims (`valid`,
+`aud = sales-commission-manager`, `exp`, `sp_user_id`, `sub_account_id`), maps
+the Kleegr role, upserts the tenant (sub-account) and the user, mints **our own**
+httpOnly session cookie, runs a small first sync, reports `connected` back to
+Kleegr, and redirects into the right workspace. The launch token is used **once**
+and is never cached, reused, persisted, or sent to the browser.
+
+### Role mapping
+
+| Kleegr role     | Context          | App role        |
+| --------------- | ---------------- | --------------- |
+| `agency_admin`  | agency placement | `owner`         |
+| `agency_admin`  | sub-account      | `admin`         |
+| `manager`       | —                | `sales_manager` |
+| `user`          | —                | `salesperson`   |
+| unknown / empty | —                | `salesperson`   |
+
+An unknown or missing role always maps to the most limited role (`salesperson`)
+— never `owner`.
+
+### Data mapping
+
+A Kleegr/GHL **contact** and its **opportunity** both map onto our existing
+`clients` table (a client already models contact + opportunity in this schema).
+Imported rows are labelled via `clients.kleegr_source` — `kleegr_imported` for
+rows the sync created, `kleegr_linked` for existing rows it matched. Every
+upsert is **idempotent**: rows are matched by their Kleegr/GHL ids, so a
+re-launch or a repeated webhook never duplicates data, and manually-entered
+business data is linked rather than overwritten. Because the `PUT /api/state`
+snapshot doesn't carry these external-id columns, `writeState` captures and
+restores them around its replace-all, so an admin save never wipes a tenant's
+Kleegr/GHL links.
+
+### Webhooks
+
+Kleegr posts events to **`/api/kleegr/webhook`**, signed with **HMAC-SHA256 over
+the raw request body** and sent as the `X-SP-Signature` header. Verification
+**fails closed**: a missing webhook secret is a server misconfiguration and
+returns **500**; a missing or invalid signature returns **401**; only a valid
+signature is processed (and events are recorded idempotently by delivery id).
+The handled events are `app.installed`, `subaccount.connected`,
+`subaccount.disconnected`, `contact.created`, `contact.updated`,
+`opportunity.created`, and `opportunity.updated`.
+
+### Manifest
+
+The manifest Kleegr imports is **`smart-productivity.app.json`** at the repo
+root. An identical, typed copy lives in `api/_lib/kleegr-manifest.ts` for the
+serverless routes to use, and a unit test asserts the two never drift. The
+manifest contains **no secrets** — only env-var names appear, in the setup
+instructions.
+
+### Settings UI
+
+**Settings → Kleegr Integration** (`/settings/integrations/kleegr`, owner/admin
+only) shows the connection status, the Kleegr sub-account and GoHighLevel
+location ids, the connected user and their role, the last sync time, the
+imported / linked / synced-user counts, and which server env vars are present.
+It also has buttons to **test the connection** (server-side token verify),
+**validate the manifest** (Kleegr dry-run import), and **report status** back to
+Kleegr.
+
+### Required Vercel env vars (server-side only)
+
+| Variable                   | Used for                                               |
+| -------------------------- | ------------------------------------------------------ |
+| `KLEEGR_API_BASE_URL`      | Base URL of the Kleegr Smart Productivity API          |
+| `KLEEGR_INTEGRATION_TOKEN` | Server↔Kleegr token (verify, status, manifest dry-run) |
+| `KLEEGR_WEBHOOK_SECRET`    | HMAC secret to verify inbound webhook signatures       |
+
+Set all three for **Production** and **Preview**. They are read by name only and
+must never be committed.
+
 ## Deploy
 
 The project is connected to Vercel and **auto-deploys on push to `main`**.
@@ -271,6 +357,9 @@ Done in this phase:
   excluded from the snapshot replace, so history survives admin edits.
 - **Reports** — revenue, commission liability/paid/pending/projected,
   salesperson & affiliate performance, top clients — all role/tenant scoped.
+- **Kleegr Smart Productivity integration** — launch/SSO, role mapping, a safe
+  idempotent sync, signed webhooks, status reporting, and a settings page, all
+  brokered through Kleegr (no direct GoHighLevel access).
 
 Next steps:
 - **Migrate remaining writes off the snapshot.** People/plans/clients/payments
@@ -278,9 +367,8 @@ Next steps:
   `/api/clients` and `/api/payouts` examples. Known limitation: editing the
   underlying payments/plans after a payout exists can stale that batch's exact
   line linkage (the batch + history + totals are preserved).
-- **GoHighLevel integration.** Schema is ready (`ghl_connections`,
-  `integration_events`, `ghl_*` id columns). Next: OAuth install flow + webhook
-  handlers + contact/payment/opportunity sync, per `ghl_location_id`.
+- **Deepen the Kleegr sync.** The first sync is intentionally small; add
+  pagination, conversations, and write-back as Kleegr exposes those resources.
 - **Password reset / user management UI**, session revocation, and rate limiting
   on login.
 - **Code-split** the bundle (currently one ~730 kB chunk).

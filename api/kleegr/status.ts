@@ -24,7 +24,7 @@ import { readKleegrStatusSummary } from "../_lib/kleegr-sync.js";
 /** Map manifest readonly scopes → the gateway resources we actually declare. */
 function declaredResources(): string[] {
   const map: Record<string, string> = {
-    "subaccount.readonly": "subaccount",
+    "locations.readonly": "subaccount",
     "users.readonly": "users",
     "contacts.readonly": "contacts",
     "opportunities.readonly": "opportunities",

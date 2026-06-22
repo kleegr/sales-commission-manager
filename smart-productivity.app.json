@@ -20,7 +20,7 @@
     "opportunity.updated"
   ],
   "scopes": [
-    "subaccount.readonly",
+    "locations.readonly",
     "users.readonly",
     "contacts.readonly",
     "opportunities.readonly"

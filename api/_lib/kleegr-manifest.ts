@@ -33,7 +33,7 @@ export const KLEEGR_MANIFEST = {
     "opportunity.created",
     "opportunity.updated",
   ],
-  scopes: ["subaccount.readonly", "users.readonly", "contacts.readonly", "opportunities.readonly"],
+  scopes: ["locations.readonly", "users.readonly", "contacts.readonly", "opportunities.readonly"],
   requiredPermissions: [],
   placements: ["agency", "live", "settings", "app_launcher"],
   visibility: { agency: true, mobile: true, settings: true },

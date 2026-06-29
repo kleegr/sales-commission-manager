@@ -92,6 +92,13 @@ async function main() {
   console.log("\n[Kleegr · role mapping]");
   ok("agency_admin + sub_account → admin", mapKleegrRole("agency_admin", "sub_account") === "admin");
   ok("agency_admin + agency → owner", mapKleegrRole("agency_admin", "agency") === "owner");
+  ok("admin + sub_account → admin (not salesperson)", mapKleegrRole("admin", "sub_account") === "admin");
+  ok("admin + agency → admin (never downgraded, never owner)", mapKleegrRole("admin", "agency") === "admin");
+  ok("account_admin → admin", mapKleegrRole("account_admin") === "admin");
+  ok("location_admin → admin", mapKleegrRole("location_admin") === "admin");
+  ok("agency_owner + agency → owner", mapKleegrRole("agency_owner", "agency") === "owner");
+  ok("owner + sub_account → admin", mapKleegrRole("owner", "sub_account") === "admin");
+  ok("admin is NEVER salesperson", mapKleegrRole("admin", "sub_account") !== "salesperson");
   ok("manager → sales_manager", mapKleegrRole("manager") === "sales_manager");
   ok("user → salesperson", mapKleegrRole("user") === "salesperson");
   ok("unknown role → salesperson (never owner)", mapKleegrRole("superuser") === "salesperson");

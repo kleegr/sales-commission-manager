@@ -333,10 +333,17 @@ export async function verifyLaunchToken(
 // Role mapping (Step 2)
 //
 // Kleegr role  →  Sales Commission Manager role
-//   agency_admin → owner (agency context) | admin (sub-account context)
+//   agency_admin / agency_owner / owner → owner (agency) | admin (sub-account)
+//   admin / account_admin / location_admin → admin   (sub-account workspace)
 //   manager      → sales_manager
 //   user         → salesperson
 //   <unknown>    → salesperson  (safest limited role — never owner)
+//
+// IMPORTANT: a bare "admin" (a sub-account/location administrator) must map to
+// `admin`, NOT fall through to the salesperson default. The earlier switch only
+// matched "agency_admin", so any agency/admin user whose Kleegr role string was
+// "admin" was silently downgraded to the limited Salesperson portal — the
+// regression behind the "owner saw a Salesperson/review view" report.
 //
 // `context` lets the launch flow choose owner vs admin for an agency admin:
 // an agency-level placement maps to `owner`; a sub-account placement maps to
@@ -350,8 +357,19 @@ export function mapKleegrRole(
   context: "agency" | "sub_account" = "sub_account",
 ): AppRole {
   switch ((kleegrRole ?? "").trim().toLowerCase()) {
+    // Agency-level identities: own the agency dashboard in an agency placement,
+    // administer the single sub-account when launched inside one.
     case "agency_admin":
+    case "agency_owner":
+    case "owner":
       return context === "agency" ? "owner" : "admin";
+    // Sub-account / location administrators: ALWAYS an admin workspace. Never
+    // silently downgraded to the salesperson portal, and never auto-promoted to
+    // the agency owner dashboard.
+    case "admin":
+    case "account_admin":
+    case "location_admin":
+      return "admin";
     case "manager":
       return "sales_manager";
     case "user":

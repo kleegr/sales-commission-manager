@@ -8,8 +8,10 @@ import {
   createSession,
   setSessionCookie,
   pruneSessions,
+  demoModeEnabled,
   type Role,
 } from "../_lib/auth.js";
+import { DEMO_PASSWORD } from "../_lib/auth-seed.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!hasDb()) return res.status(503).json({ error: "database_not_configured" });
@@ -20,7 +22,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     await ensureSchema();
-    await seedIfEmpty();
+    // Only plant the seeded demo tenants/users when demo/review mode is
+    // explicitly enabled. In production (demo mode OFF, the default) an empty
+    // database is NOT auto-populated with demo data on a login attempt, so the
+    // seeded demo tenants stay absent/unreachable. Real sub-accounts arrive via
+    // the Kleegr launch flow (which provisions its own tenant/user).
+    if (demoModeEnabled()) await seedIfEmpty();
     await pruneSessions();
 
     const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body ?? {};
@@ -30,6 +37,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (!email || !password) {
       return res.status(400).json({ error: "missing_credentials" });
+    }
+
+    // Defense-in-depth: with demo mode OFF (the default), the well-known seeded
+    // demo password must NEVER authenticate — even against a database that was
+    // previously seeded with it. This makes `demo1234` logins dead by default
+    // without requiring a re-seed or manual DB surgery. It never blocks a real,
+    // rotated password (no production account should carry the documented demo
+    // credential). The generic error avoids revealing the policy.
+    if (!demoModeEnabled() && password === DEMO_PASSWORD) {
+      return res.status(401).json({ error: "invalid_credentials" });
     }
 
     const { rows } = await query<any>(

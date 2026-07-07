@@ -12,14 +12,23 @@
 // Safe to run repeatedly: every write is an upsert / conditional update, and
 // passwords are only (re)set when missing, so it never clobbers a changed one.
 //
-// NOTE: these are DEMO credentials, intentionally documented in the handoff.
-// Rotate / disable them before any real production use.
+// NOTE: the well-known demo password is planted ONLY when demo/review mode is
+// explicitly enabled (DEMO_MODE=on). With demo mode OFF — the default — each
+// seeded demo user is created with a unique RANDOM password that is never
+// printed, so the seeded accounts are effectively disabled (dead by default)
+// until an admin sets a real password. Existing rotated/real passwords are
+// never overwritten by re-seeding.
 // ============================================================================
 
+import { randomBytes } from "node:crypto";
 import { query } from "./db.js";
-import { hashPassword } from "./auth.js";
+import { hashPassword, demoModeEnabled } from "./auth.js";
 import { listTenants } from "./repository.js";
 
+// The well-known review password. It is ONLY ever planted when demo/review mode
+// is explicitly enabled (see ensureAuthSeed). With demo mode OFF — the default —
+// each seeded demo user instead gets a unique, unknown random password, so these
+// accounts cannot be signed into with a documented credential.
 export const DEMO_PASSWORD = "demo1234";
 
 interface SeedUserSpec {
@@ -52,7 +61,10 @@ async function firstSalespersonId(tenantId: string, role: string): Promise<strin
 /** Ensure all role users exist (with passwords) for every tenant. */
 export async function ensureAuthSeed(): Promise<void> {
   const tenants = await listTenants();
-  const pwHash = hashPassword(DEMO_PASSWORD);
+  // Demo/review mode plants the well-known password so reviewers can sign in.
+  // With demo mode OFF (the default) we plant a unique, unknown RANDOM password
+  // per user, so seeded demo accounts are dead by default.
+  const plantKnownDemoPassword = demoModeEnabled();
 
   for (const t of tenants) {
     let managerUserId: string | null = null;
@@ -64,6 +76,13 @@ export async function ensureAuthSeed(): Promise<void> {
       const salespersonId = spec.linkSalespersonRole
         ? await firstSalespersonId(t.id, spec.linkSalespersonRole)
         : null;
+
+      // A fresh hash per user. In demo mode this is the well-known review
+      // password; with demo mode OFF it is a unique, unknown random password so
+      // the account cannot be signed into with a documented credential.
+      const pwHash = hashPassword(
+        plantKnownDemoPassword ? DEMO_PASSWORD : randomBytes(24).toString("base64url"),
+      );
 
       // Upsert the user. Only set the password when it is currently missing so
       // a rotated password is never overwritten by reseeding.

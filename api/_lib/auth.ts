@@ -52,11 +52,14 @@ const SESSION_TTL_DAYS = 7;
 //   - real password sessions still work and always take precedence;
 //   - the bypass only ever returns one of the demo users created by the seed
 //     (it cannot mint an arbitrary identity);
-//   - flip DEMO_MODE=off (or 0/false/disabled) in the environment to require
-//     real login again — no code change, nothing deleted.
+//   - it is a review convenience only — it is OFF unless explicitly turned on.
 //
-// Default is ON for this pre-GoHighLevel review phase so the live link opens
-// straight into the product. Lock it down before loading any real data.
+// Default is OFF (production-safe). Demo/review mode is EXPLICIT OPT-IN ONLY:
+// set DEMO_MODE to one of 1/true/on/enabled/yes to turn it on for a review
+// deployment. Any other value — including unset/empty — keeps it OFF, so the
+// login wall stays up and the seeded demo tenants/users cannot be assumed
+// without a password. Turning it on is intended for pre-GoHighLevel review
+// environments that hold NO real customer data.
 // ---------------------------------------------------------------------------
 
 const DEMO_COOKIE_TENANT = "scm_demo_tenant";
@@ -64,7 +67,10 @@ const DEMO_COOKIE_ROLE = "scm_demo_role";
 
 export function demoModeEnabled(): boolean {
   const v = (process.env.DEMO_MODE ?? "").trim().toLowerCase();
-  return !["0", "false", "off", "disabled", "no"].includes(v);
+  // Explicit opt-in ONLY. Unset/empty (and any non-affirmative value) ⇒ OFF,
+  // which is the production-safe default. Demo mode must be deliberately turned
+  // on for a review deployment; it can never be on by accident.
+  return ["1", "true", "on", "enabled", "yes"].includes(v);
 }
 
 /** Resolve a seeded demo user for the tenant+role chosen in the review bar. */

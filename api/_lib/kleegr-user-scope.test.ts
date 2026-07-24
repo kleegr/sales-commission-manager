@@ -12,6 +12,9 @@
 // DB that enforces the actual constraints (`users` PRIMARY KEY (id) and
 // UNIQUE (tenant_id, email)) and throws the exact Postgres error message. No
 // Neon connection, no production data, no Smart Productivity involvement.
+//
+// Expected ids are pinned LITERALLY rather than via buildKleegrUserId, so the
+// suite fails loudly if the id scheme is ever reverted to the global shape.
 
 import {
   upsertUserForClaims,
@@ -224,6 +227,9 @@ async function main() {
   const second = await upsertUserForClaims(TENANT_B, claims(SP_USER, "rep@example.com"), ROLE, db.query);
   ok("both tenants now have exactly one user each", db.forTenant(TENANT_A).length === 1 && db.forTenant(TENANT_B).length === 1);
   ok("the two rows have distinct primary keys", first.id !== second.id);
+  // Literal (non self-referential) expectations — these fail on the old global scheme.
+  ok("tenant A's id is user_k_<tenant>_<sp_user>", first.id === `user_k_${TENANT_A}_${SP_USER}`);
+  ok("tenant B's id is user_k_<tenant>_<sp_user>", second.id === `user_k_${TENANT_B}_${SP_USER}`);
   ok("tenant B's row is scoped to tenant B", second.tenant_id === TENANT_B);
   ok("same email in both tenants is fine (unique is per tenant)", db.rows.every((r) => r.email === "rep@example.com"));
   ok("both rows are linked back to the same Kleegr user", db.rows.every((r) => r.kleegr_user_id === SP_USER));
@@ -243,7 +249,7 @@ async function main() {
   const anonErr = await throws(() => upsertUserForClaims(TENANT_B, anon, ROLE, noEmail.query));
   ok("no-email launch in a second sub-account does not raise users_pkey", anonErr === null);
   ok("two rows, distinct ids", noEmail.rows.length === 2 && noEmail.rows[0].id !== noEmail.rows[1].id);
-  ok("first row keeps its tenant-scoped id", anonA.id === buildKleegrUserId(TENANT_A, "sp_user_2"));
+  ok("first row keeps its tenant-scoped id", anonA.id === `user_k_${TENANT_A}_sp_user_2`);
 
   // =========================================================================
   console.log("\n[SCM · legacy first-tenant users keep working]");
@@ -266,7 +272,7 @@ async function main() {
 
   const legacyCrossErr = await throws(() => upsertUserForClaims(TENANT_B, c, ROLE, legacyDb.query));
   ok("that same legacy user can now launch in a second sub-account", legacyCrossErr === null);
-  ok("the new row got a tenant-scoped id", !!legacyDb.byId(buildKleegrUserId(TENANT_B, SP_USER)));
+  ok("the new row got a tenant-scoped id", !!legacyDb.byId(`user_k_${TENANT_B}_${SP_USER}`));
   ok("the legacy row was left untouched", legacyDb.byId(legacyId)?.tenant_id === TENANT_A);
   ok("exactly two rows exist", legacyDb.rows.length === 2);
 

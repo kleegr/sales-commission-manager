@@ -12,6 +12,7 @@
 // the Kleegr gateway (kleegr.ts). The "first sync" is deliberately small.
 // ============================================================================
 
+import { createHash } from "node:crypto";
 import { query } from "./db.js";
 import {
   gatewaySubaccount,
@@ -37,6 +38,12 @@ function idSafe(s: string, max = 48): string {
 
 /** How many records the FIRST sync pulls per resource (kept intentionally small). */
 const SYNC_LIMIT = 50;
+
+/**
+ * Minimal shape of `db.query`. Injectable so the mapping logic below can be
+ * exercised against an in-memory fake in tests (no Neon connection required).
+ */
+export type QueryFn = <T = any>(text: string, params?: unknown[]) => Promise<{ rows: T[]; rowCount: number }>;
 
 // ---------------------------------------------------------------------------
 // Tenant (sub-account) mapping
@@ -162,27 +169,58 @@ export interface AppUserRow {
   salesperson_id: string | null;
 }
 
+const USER_COLS = "id, tenant_id, name, email, role, salesperson_id";
+
+/**
+ * Mint a NEW local user id for a launched Kleegr user — TENANT-SCOPED.
+ *
+ * This used to be `user_k_<sp_user_id>`, which is unique per GHL *user* but NOT
+ * per sub-account. The same GHL user is routinely a member of several
+ * sub-accounts, so the second launch tried to INSERT a users row whose id was
+ * already owned by the first tenant and blew up with
+ * `duplicate key value violates unique constraint "users_pkey"`.
+ *
+ * Ids are now scoped to (tenant, kleegr user). Nothing existing is rewritten:
+ * users are still resolved by (tenant_id, kleegr_user_id) and
+ * (tenant_id, email) first, so first-tenant users keep their legacy id — and
+ * with it their sessions, salesperson links and audit rows.
+ */
+export function buildKleegrUserId(tenantId: string, spUserId: string): string {
+  return `user_k_${idSafe(tenantId, 64)}_${idSafe(spUserId, 64)}`;
+}
+
+/** The pre-fix, globally-scoped id shape. Still RESOLVED, never minted again. */
+export function legacyKleegrUserId(spUserId: string): string {
+  return `user_k_${idSafe(spUserId)}`;
+}
+
 /**
  * Resolve (or create) the app user for a launched Kleegr user, idempotently.
- * Matches by kleegr_user_id, then by email within the tenant (link, don't dup).
+ * Matches by (tenant_id, kleegr_user_id), then by (tenant_id, email) — link,
+ * don't dup — and only then creates a row with a tenant-scoped id.
+ *
+ * `queryImpl` exists purely so this can be tested against a fake DB.
  */
 export async function upsertUserForClaims(
   tenantId: string,
   claims: LaunchClaims,
   mappedRole: AppRole,
+  queryImpl: QueryFn = query,
 ): Promise<AppUserRow> {
+  const q = queryImpl;
   const email = (claims.email ?? "").trim().toLowerCase();
   const name = email ? email.split("@")[0] : `Kleegr ${claims.sp_user_id}`;
   const permsJson = JSON.stringify(claims.permissions ?? []);
 
-  const byKleegr = await query<AppUserRow>(
-    `SELECT id, tenant_id, name, email, role, salesperson_id
+  // 1. already linked in THIS tenant (matches legacy ids too — never rewritten)
+  const byKleegr = await q<AppUserRow>(
+    `SELECT ${USER_COLS}
        FROM users WHERE tenant_id = $1 AND kleegr_user_id = $2 LIMIT 1`,
     [tenantId, claims.sp_user_id],
   );
   if (byKleegr.rows[0]) {
     const u = byKleegr.rows[0];
-    await query(
+    await q(
       `UPDATE users SET role = $2, kleegr_role = $3, kleegr_permissions = $4::jsonb,
           email = CASE WHEN $5 <> '' THEN $5 ELSE email END,
           last_login_at = now(), updated_at = now()
@@ -192,15 +230,16 @@ export async function upsertUserForClaims(
     return { ...u, role: mappedRole };
   }
 
+  // 2. same email inside THIS tenant → link the existing row
   if (email) {
-    const byEmail = await query<AppUserRow>(
-      `SELECT id, tenant_id, name, email, role, salesperson_id
+    const byEmail = await q<AppUserRow>(
+      `SELECT ${USER_COLS}
          FROM users WHERE tenant_id = $1 AND lower(email) = $2 LIMIT 1`,
       [tenantId, email],
     );
     if (byEmail.rows[0]) {
       const u = byEmail.rows[0];
-      await query(
+      await q(
         `UPDATE users SET kleegr_user_id = $2, kleegr_role = $3, kleegr_permissions = $4::jsonb,
             role = $5, last_login_at = now(), updated_at = now()
           WHERE id = $1`,
@@ -210,9 +249,30 @@ export async function upsertUserForClaims(
     }
   }
 
-  const id = `user_k_${idSafe(claims.sp_user_id)}`;
+  // 3. create — with a TENANT-SCOPED id (see buildKleegrUserId)
+  let id = buildKleegrUserId(tenantId, claims.sp_user_id);
+  const taken = await q<AppUserRow>(`SELECT ${USER_COLS} FROM users WHERE id = $1 LIMIT 1`, [id]);
+  if (taken.rows[0]) {
+    const u = taken.rows[0];
+    if (u.tenant_id === tenantId) {
+      // Same tenant + same Kleegr user but neither lookup matched (e.g. the
+      // row's email changed and kleegr_user_id was never set). Link it rather
+      // than INSERTing a duplicate primary key.
+      await q(
+        `UPDATE users SET kleegr_user_id = $2, kleegr_role = $3, kleegr_permissions = $4::jsonb,
+            role = $5, last_login_at = now(), updated_at = now()
+          WHERE id = $1`,
+        [u.id, claims.sp_user_id, claims.role ?? null, permsJson, mappedRole],
+      );
+      return { ...u, role: mappedRole };
+    }
+    // Belt-and-braces: never reuse an id owned by ANOTHER tenant. Deterministic
+    // so a retry of this same launch lands on the same row.
+    id = `user_k_${createHash("sha1").update(`${tenantId}|${claims.sp_user_id}`).digest("hex").slice(0, 32)}`;
+  }
+
   const safeEmail = email || `${idSafe(claims.sp_user_id)}@kleegr.local`;
-  await query(
+  await q(
     `INSERT INTO users
         (id, tenant_id, name, email, role, status, kleegr_user_id, kleegr_role,
          kleegr_permissions, last_login_at, created_at, updated_at)
@@ -223,8 +283,8 @@ export async function upsertUserForClaims(
         last_login_at = now(), updated_at = now()`,
     [id, tenantId, name, safeEmail, mappedRole, claims.sp_user_id, claims.role ?? null, permsJson],
   );
-  const created = await query<AppUserRow>(
-    `SELECT id, tenant_id, name, email, role, salesperson_id
+  const created = await q<AppUserRow>(
+    `SELECT ${USER_COLS}
        FROM users WHERE tenant_id = $1 AND lower(email) = $2 LIMIT 1`,
     [tenantId, safeEmail.toLowerCase()],
   );

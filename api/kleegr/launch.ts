@@ -22,11 +22,11 @@ import { ensureSchema } from "../_lib/repository.js";
 import { createSession, setSessionCookie } from "../_lib/auth.js";
 import {
   verifyLaunchToken,
-  mapKleegrRole,
   reportIntegrationStatus,
   readKleegrConfig,
   type AppRole,
 } from "../_lib/kleegr.js";
+import { mapLaunchTokenRole } from "../_lib/kleegr-roles.js";
 import { upsertTenantForSubAccount, upsertUserForClaims, runInitialSync } from "../_lib/kleegr-sync.js";
 
 function extractLaunchToken(req: VercelRequest): string | null {
@@ -89,11 +89,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const claims = verified.claims;
 
-    // 4. role mapping. An agency-level placement maps agency_admin → owner;
-    //    a sub-account placement maps it → admin. Default: sub-account.
+    // 4. role mapping. The launch token's `role` claim is a Smart Productivity
+    //    GLOBAL TIER key (agency_admin | subaccount_admin | manager | user |
+    //    viewer), NOT a raw GoHighLevel role string — so it is mapped with
+    //    mapLaunchTokenRole(), which knows that vocabulary. The previous code
+    //    used mapKleegrRole() here, which has no case for `subaccount_admin` or
+    //    `viewer`; both fell through to the salesperson default and a
+    //    sub-account administrator landed on the limited /portal workspace.
+    //    An agency-level placement maps agency_admin → owner; a sub-account
+    //    placement maps it → admin. Default: sub-account.
     const placement = String((req.query as any)?.placement ?? (claims.raw as any)?.placement ?? "").toLowerCase();
     const context = placement === "agency" ? "agency" : "sub_account";
-    const mappedRole = mapKleegrRole(claims.role, context);
+    const mappedRole = mapLaunchTokenRole(claims.role, context);
 
     // 5. upsert tenant + user, then mint our own session
     const tenant = await upsertTenantForSubAccount({

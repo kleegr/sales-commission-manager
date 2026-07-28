@@ -84,7 +84,10 @@ export function mapLaunchTokenRole(
 
     // Sub-account administrator. ALWAYS an admin workspace — never the limited
     // salesperson portal, and never auto-promoted to the agency owner dashboard.
+    // Both spellings are accepted because the tier is rendered as
+    // "Sub-Account Admin" in the Agency Portal UI.
     case "subaccount_admin":
+    case "sub_account_admin":
       return "admin";
 
     // Team-scoped: review, edit, approve, export.

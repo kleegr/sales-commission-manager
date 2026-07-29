@@ -17,14 +17,14 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { hasDb } from "../_lib/db.js";
 import { ensureSchema, seedIfEmpty } from "../_lib/repository.js";
 import { getSessionUser } from "../_lib/auth.js";
-import { readKleegrConfig, APP_KEY, APP_NAME, APP_VERSION } from "../_lib/kleegr.js";
+import { readKleegrConfig, subaccountGatewayResource, APP_KEY, APP_NAME, APP_VERSION } from "../_lib/kleegr.js";
 import { KLEEGR_MANIFEST } from "../_lib/kleegr-manifest.js";
 import { readKleegrStatusSummary } from "../_lib/kleegr-sync.js";
 
 /** Map manifest readonly scopes → the gateway resources we actually declare. */
 function declaredResources(): string[] {
   const map: Record<string, string> = {
-    "locations.readonly": "subaccount",
+    "locations.readonly": subaccountGatewayResource(),
     "users.readonly": "users",
     "contacts.readonly": "contacts",
     "opportunities.readonly": "opportunities",
@@ -77,7 +77,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       workspace: { tenantSlug: user.tenantSlug, tenantName: user.tenantName, role: user.role },
       connection: summary,
     });
-  } catch (err: any) {
-    return res.status(500).json({ ok: false, error: String(err?.message ?? err) });
+  } catch (err) {
+    console.error("[scm:error] kleegr-status:", err instanceof Error ? (err.stack ?? err.message) : String(err));
+    return res.status(500).json({ ok: false, error: "internal_error" });
   }
 }

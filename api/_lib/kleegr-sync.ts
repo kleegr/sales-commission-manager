@@ -40,6 +40,19 @@ function idSafe(s: string, max = 48): string {
 const SYNC_LIMIT = 50;
 
 /**
+ * Whether a launch / first-sync may IMPORT users, contacts, and opportunities.
+ * OFF by default (production-safe): a launch then only refreshes the sub-account
+ * profile and provisions the launching user's OWN session — it never
+ * auto-provisions other privileged users, and never writes imported
+ * contacts/opportunities into live commission data. Bulk import is an explicit,
+ * reviewed action, enabled with KLEEGR_SYNC_ENABLED set to 1/true/on/enabled/yes.
+ */
+export function syncImportEnabled(): boolean {
+  const v = (process.env.KLEEGR_SYNC_ENABLED ?? "").trim().toLowerCase();
+  return ["1", "true", "on", "enabled", "yes"].includes(v);
+}
+
+/**
  * Minimal shape of `db.query`. Injectable so the mapping logic below can be
  * exercised against an in-memory fake in tests (no Neon connection required).
  */
@@ -458,7 +471,7 @@ export async function upsertOpportunity(tenantId: string, o: NormOpp): Promise<"
 // Step 8 — safe, idempotent FIRST sync via the Kleegr gateway
 // ---------------------------------------------------------------------------
 
-export type ResourceOutcome = "ok" | "denied" | "unavailable" | "upstream_error" | "error";
+export type ResourceOutcome = "ok" | "denied" | "unavailable" | "upstream_error" | "error" | "gated";
 
 export interface SyncSummary {
   startedAt: string;
@@ -521,6 +534,21 @@ export async function runInitialSync(opts: {
   } catch (err) {
     summary.subaccount = outcomeFor(err);
     notes.push(`subaccount: ${err instanceof KleegrError ? err.code : "error"}`);
+  }
+
+  // Import is OFF by default (see syncImportEnabled). A launch only refreshes the
+  // sub-account profile (step 1) and provisions the launching user's own session
+  // (done by the launch flow). It NEVER auto-provisions other users or
+  // auto-imports contacts/opportunities into live data unless KLEEGR_SYNC_ENABLED
+  // is explicitly set — the safe posture until a reviewed staging/import flow exists.
+  if (!syncImportEnabled()) {
+    summary.users.outcome = "gated";
+    summary.contacts.outcome = "gated";
+    summary.opportunities.outcome = "gated";
+    notes.push("import_gated: users/contacts/opportunities skipped (set KLEEGR_SYNC_ENABLED to enable)");
+    await touchLastSync(tenantId);
+    summary.finishedAt = nowISO();
+    return summary;
   }
 
   // 2. users → upsert app users (best effort; sales roles only get a login)

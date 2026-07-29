@@ -302,7 +302,7 @@ export default function AffiliatePortal() {
           </Field>
           {error && <p className="text-sm text-rose-600 sm:col-span-2">{error}</p>}
           <p className="text-xs text-slate-400 sm:col-span-2">
-            Referrals are saved to the app database and assigned to you automatically. (GoHighLevel contact sync comes later.)
+            Referrals are saved to the app database and assigned to you automatically.
           </p>
         </div>
       </Modal>

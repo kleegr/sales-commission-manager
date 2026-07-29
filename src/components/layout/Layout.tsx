@@ -25,8 +25,9 @@ import { classNames } from "../../lib/format";
 import { useApp } from "../../store/AppContext";
 import { useAuth } from "../../store/AuthContext";
 import { useFeatures } from "../../store/FeaturesContext";
+import { useEmbedded } from "../../lib/useEmbedded";
 import { canAccess, homePath, ROLE_LABEL, type Role } from "../../lib/roles";
-import { featureAllowsPath } from "../../lib/features";
+import { featureAllowsPath, type FeatureFlags } from "../../lib/features";
 import { DemoBar } from "./DemoBar";
 import { Network, FileSignature, Target, Plug } from "lucide-react";
 
@@ -85,6 +86,22 @@ const SECTIONS: { heading: string; items: NavItem[] }[] = [
   },
 ];
 
+/**
+ * Whether a nav item is visible for the given role + feature flags.
+ *
+ * `embedded` layers ONE extra rule on top of the normal role/feature gating:
+ * inside a single Kleegr sub-account iframe the cross-sub-account "Agency"
+ * overview is confusing for everyone except the agency owner, so it is hidden
+ * there. In the standalone app `embedded` is always false, so this collapses to
+ * the original `canAccess && featureAllowsPath` gate and the nav is unchanged.
+ */
+function navItemVisible(item: NavItem, role: Role, features: FeatureFlags, embedded: boolean): boolean {
+  if (!canAccess(role, item.to)) return false;
+  if (!featureAllowsPath(item.to, role, features)) return false;
+  if (embedded && role !== "owner" && item.to === "/agency") return false;
+  return true;
+}
+
 function ThemeToggle() {
   const { data, dispatch } = useApp();
   const dark = data.settings.theme === "dark";
@@ -104,6 +121,7 @@ function NavContents({ onNavigate }: { onNavigate?: () => void }) {
   const { data } = useApp();
   const { user } = useAuth();
   const { features } = useFeatures();
+  const embedded = useEmbedded();
   const role = (user?.role ?? "salesperson") as Role;
 
   const pendingAffiliates = data.salespeople.filter(
@@ -112,9 +130,7 @@ function NavContents({ onNavigate }: { onNavigate?: () => void }) {
 
   const sections = SECTIONS.map((section) => ({
     ...section,
-    items: section.items.filter(
-      (item) => canAccess(role, item.to) && featureAllowsPath(item.to, role, features),
-    ),
+    items: section.items.filter((item) => navItemVisible(item, role, features, embedded)),
   })).filter((section) => section.items.length > 0);
 
   return (
@@ -257,9 +273,89 @@ function WorkspaceBadge() {
   );
 }
 
+/** Icon-only navigation rail for the embedded (Kleegr iframe) compact shell. */
+function EmbeddedNavRail() {
+  const { data } = useApp();
+  const { user } = useAuth();
+  const { features } = useFeatures();
+  const role = (user?.role ?? "salesperson") as Role;
+
+  const pendingAffiliates = data.salespeople.filter(
+    (s) => s.source === "affiliate_portal" && s.approvalStatus === "pending",
+  ).length;
+
+  // Flatten the sections into a single icon list; hide the Agency item here for
+  // non-owners (embedded === true) via the shared visibility rule.
+  const items = SECTIONS.flatMap((section) => section.items).filter((item) =>
+    navItemVisible(item, role, features, true),
+  );
+
+  return (
+    <nav className="flex flex-1 flex-col items-center gap-1 overflow-y-auto py-3">
+      {items.map((item) => (
+        <NavLink
+          key={item.to}
+          to={item.to}
+          end={item.end}
+          title={item.label}
+          aria-label={item.label}
+          className={({ isActive }) =>
+            classNames(
+              "relative flex h-10 w-10 flex-none items-center justify-center rounded-lg transition",
+              isActive
+                ? "bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-300"
+                : "text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white",
+            )
+          }
+        >
+          {item.icon}
+          {item.to === "/people" && pendingAffiliates > 0 && (
+            <span className="absolute right-1 top-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-violet-500 px-1 text-[9px] font-semibold leading-none text-white">
+              {pendingAffiliates}
+            </span>
+          )}
+        </NavLink>
+      ))}
+    </nav>
+  );
+}
+
 export function Layout({ children }: { children: ReactNode }) {
+  const embedded = useEmbedded();
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
+
+  // Embedded in the Kleegr / GoHighLevel iframe: render a COMPACT shell -- a
+  // narrow icon-only rail and NO tall header / agency-name block -- so the app
+  // does not stack a 256px sidebar + header on top of GHL's own chrome. The
+  // standalone layout below is returned unchanged.
+  if (embedded) {
+    return (
+      <div className="flex min-h-screen flex-col">
+        <DemoBar />
+        <div className="flex min-h-0 flex-1">
+          <aside className="flex w-14 flex-none flex-col items-center border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+            <span
+              className="mt-3 flex h-9 w-9 flex-none items-center justify-center rounded-lg bg-brand-600 text-white shadow-sm"
+              title="Commission Manager"
+            >
+              <Coins className="h-5 w-5" />
+            </span>
+            <EmbeddedNavRail />
+            <div className="mb-2 mt-1 flex-none">
+              <ThemeToggle />
+            </div>
+          </aside>
+
+          <div className="flex min-w-0 flex-1 flex-col">
+            <main key={location.pathname} className="mx-auto w-full max-w-7xl flex-1 px-4 py-5 lg:px-6">
+              {children}
+            </main>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen flex-col">

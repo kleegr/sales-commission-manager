@@ -3,12 +3,20 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { hasDb } from "./_lib/db.js";
 import { ensureSchema, seedIfEmpty, seedAll, listTenants } from "./_lib/repository.js";
+import { demoModeEnabled } from "./_lib/auth.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!hasDb()) return res.status(503).json({ error: "database_not_configured" });
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "method_not_allowed" });
+  }
+  // Seeding plants the demo/acme sample tenants. It is a demo/review action ONLY
+  // and must never run against a real production database, so it is disabled
+  // (404) unless demo mode is explicitly enabled — and demo mode is itself forced
+  // off in production (see demoModeEnabled()). This closes the public reseed vector.
+  if (!demoModeEnabled()) {
+    return res.status(404).json({ error: "not_found" });
   }
   try {
     await ensureSchema();
@@ -20,7 +28,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const tenants = await listTenants();
     return res.status(200).json({ ok: true, reset, tenants: tenants.map((t) => t.slug) });
-  } catch (err: any) {
-    return res.status(500).json({ error: String(err?.message ?? err) });
+  } catch (err) {
+    console.error("[scm:error] seed:", err instanceof Error ? err.stack : String(err));
+    return res.status(500).json({ error: "internal_error" });
   }
 }

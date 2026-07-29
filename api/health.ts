@@ -1,12 +1,16 @@
 // GET /api/health
-// Single source of truth for "is the database real and working?".
-//  - confirms a connection string is configured (and which env var held it)
-//  - ensures the schema exists (idempotent)
-//  - seeds the two demo tenants on first run (proves a WRITE)
-//  - returns Postgres version + per-tenant row counts (proves a READ)
+// A SAFE, public liveness probe: is the database configured and reachable?
+//
+// SECURITY: this endpoint is unauthenticated and MUST NOT expose any tenant /
+// customer data. It previously returned every tenant's slug, name, GHL location
+// id and per-table row counts — a public customer directory. It now returns only
+// coarse status. Per-tenant diagnostics are available ONLY to an authenticated
+// owner/admin, and ONLY for their OWN tenant (tenant isolation preserved), so
+// this can never be used to enumerate the customer base.
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { hasDb, connectionEnvVar, query } from "./_lib/db.js";
-import { ensureSchema, seedIfEmpty, listTenants, tenantCounts } from "./_lib/repository.js";
+import { ensureSchema, seedIfEmpty, getTenantBySlug, tenantCounts } from "./_lib/repository.js";
+import { getSessionUser, isAdminRole, demoModeEnabled } from "./_lib/auth.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!hasDb()) {
@@ -20,40 +24,46 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     await ensureSchema();
-    const seed = await seedIfEmpty();
-
-    const [{ rows: ver }, tenants] = await Promise.all([
-      query<{ version: string }>("SELECT version()"),
-      listTenants(),
-    ]);
-
-    const tenantReport = [];
-    for (const t of tenants) {
-      tenantReport.push({
-        slug: t.slug,
-        name: t.name,
-        ghlLocationId: t.ghl_location_id,
-        counts: await tenantCounts(t.id),
-      });
+    // Seeding plants the demo/acme sample tenants — a demo/review action ONLY.
+    // Never seed a real production database from a public health probe.
+    // (A follow-up also makes seedIfEmpty a no-op at the source when demo mode is
+    // off; gating here keeps this PR self-contained.)
+    let seededOnThisRequest = false;
+    if (demoModeEnabled()) {
+      const seed = await seedIfEmpty();
+      seededOnThisRequest = seed.seeded;
     }
 
-    return res.status(200).json({
+    const { rows: ver } = await query<{ version: string }>("SELECT version()");
+
+    const body: Record<string, unknown> = {
       ok: true,
       database: {
         configured: true,
         envVar: connectionEnvVar,
         engine: ver[0]?.version?.split(" on ")[0] ?? "postgres",
-        seededOnThisRequest: seed.seeded,
+        seededOnThisRequest,
       },
-      tenantCount: tenants.length,
-      tenants: tenantReport,
       generatedAt: new Date().toISOString(),
-    });
-  } catch (err: any) {
+    };
+
+    // Row-count diagnostics for the caller's OWN tenant only, admins only.
+    // Never a cross-tenant list — that is what leaked before.
+    const user = await getSessionUser(req);
+    if (user && isAdminRole(user.role)) {
+      const own = await getTenantBySlug(user.tenantSlug);
+      if (own) {
+        body.tenant = { slug: own.slug, name: own.name, counts: await tenantCounts(own.id) };
+      }
+    }
+
+    return res.status(200).json(body);
+  } catch (err) {
+    console.error("[scm:error] health:", err instanceof Error ? (err.stack ?? err.message) : String(err));
     return res.status(500).json({
       ok: false,
       database: { configured: true, envVar: connectionEnvVar },
-      error: String(err?.message ?? err),
+      error: "internal_error",
     });
   }
 }

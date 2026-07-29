@@ -65,12 +65,39 @@ const SESSION_TTL_DAYS = 7;
 const DEMO_COOKIE_TENANT = "scm_demo_tenant";
 const DEMO_COOKIE_ROLE = "scm_demo_role";
 
+// The ONLY tenant slugs the no-password demo bypass may ever resolve. A client
+// header/cookie can pick AMONG these, but can never name a real (e.g. Kleegr)
+// tenant slug, so demo mode can never be used to impersonate a real customer's
+// workspace. Keep in sync with DEMO_TENANTS in repository.ts.
+export const DEMO_TENANT_SLUGS = ["demo", "acme"] as const;
+export function isDemoSlug(slug: string): boolean {
+  return (DEMO_TENANT_SLUGS as readonly string[]).includes(slug);
+}
+
+const DEMO_AFFIRMATIVE = ["1", "true", "on", "enabled", "yes"];
+
+/** True only in a Vercel *production* deployment (VERCEL_ENV=production). */
+export function isProductionEnv(): boolean {
+  return (process.env.VERCEL_ENV ?? "").trim().toLowerCase() === "production";
+}
+
 export function demoModeEnabled(): boolean {
   const v = (process.env.DEMO_MODE ?? "").trim().toLowerCase();
   // Explicit opt-in ONLY. Unset/empty (and any non-affirmative value) ⇒ OFF,
   // which is the production-safe default. Demo mode must be deliberately turned
   // on for a review deployment; it can never be on by accident.
-  return ["1", "true", "on", "enabled", "yes"].includes(v);
+  if (!DEMO_AFFIRMATIVE.includes(v)) return false;
+
+  // Fail-safe HOST GUARD: the no-password demo bypass must be IMPOSSIBLE in a
+  // production deployment — even if DEMO_MODE is affirmatively set (e.g. a stray
+  // value left in the prod env) — UNLESS a second, explicit flag opts in for a
+  // deliberately public demo on a production URL. Making "demo in production" a
+  // two-key action means it can never be turned on by a single misconfigured env.
+  if (isProductionEnv()) {
+    const allow = (process.env.DEMO_MODE_ALLOW_IN_PRODUCTION ?? "").trim().toLowerCase();
+    if (!DEMO_AFFIRMATIVE.includes(allow)) return false;
+  }
+  return true;
 }
 
 /** Resolve a seeded demo user for the tenant+role chosen in the review bar. */
@@ -79,7 +106,9 @@ export async function getDemoUser(req: VercelRequest): Promise<SessionUser | nul
 
   const headerTenant = (req.headers["x-demo-tenant"] as string | undefined)?.trim();
   const headerRole = (req.headers["x-demo-role"] as string | undefined)?.trim();
-  const tenantSlug = headerTenant || readCookie(req, DEMO_COOKIE_TENANT) || "demo";
+  let tenantSlug = headerTenant || readCookie(req, DEMO_COOKIE_TENANT) || "demo";
+  // Never resolve a non-demo (real) tenant slug from a client header/cookie.
+  if (!isDemoSlug(tenantSlug)) tenantSlug = "demo";
   let role = (headerRole || readCookie(req, DEMO_COOKIE_ROLE) || "owner") as Role;
   if (!ROLES.includes(role)) role = "owner";
 

@@ -19,7 +19,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { hasDb } from "../_lib/db.js";
 import { ensureSchema } from "../_lib/repository.js";
-import { verifyWebhookSignature, isHandledWebhookEvent, KleegrError } from "../_lib/kleegr.js";
+import { verifyWebhookSignature, isHandledWebhookEvent, normalizeWebhookEvent, KleegrError } from "../_lib/kleegr.js";
 import { recordWebhookEvent, applyWebhookEvent, extractSubAccountId, resolveTenantBySubAccount } from "../_lib/kleegr-sync.js";
 
 // Disable Vercel's body parser so we can read the exact bytes Kleegr signed.
@@ -77,7 +77,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: "invalid_json" });
   }
 
-  const eventType = String(payload?.event ?? payload?.type ?? payload?.eventType ?? "").trim();
+  const eventTypeRaw = String(payload?.event ?? payload?.type ?? payload?.eventType ?? "").trim();
+  // Accept both `location.*` and the legacy `subaccount.*` webhook namings.
+  const eventType = normalizeWebhookEvent(eventTypeRaw);
   const deliveryId =
     typeof payload?.id === "string" ? payload.id :
     typeof payload?.eventId === "string" ? payload.eventId :
@@ -103,7 +105,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const result = await applyWebhookEvent(eventType, payload);
     return res.status(200).json({ ok: true, applied: result.applied, action: result.action, event: eventType });
-  } catch (err: any) {
-    return res.status(500).json({ error: String(err?.message ?? err) });
+  } catch (err) {
+    console.error("[scm:error] kleegr-webhook:", err instanceof Error ? (err.stack ?? err.message) : String(err));
+    return res.status(500).json({ error: "internal_error" });
   }
 }

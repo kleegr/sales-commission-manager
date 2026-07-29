@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
-import { BarChart3, DollarSign, Wallet, Clock, TrendingUp } from "lucide-react";
+import { BarChart3, DollarSign, Wallet, Clock, TrendingUp, Download, ChevronDown } from "lucide-react";
 import { useApp } from "../store/AppContext";
 import {
   PageHeader,
+  Button,
   StatCard,
   Card,
   SectionTitle,
@@ -24,6 +25,7 @@ import {
 } from "../lib/analytics";
 import { fullLedger, clientLabel } from "../lib/ledger";
 import { isoToDate, formatCurrency } from "../lib/format";
+import { downloadCSV } from "../lib/export";
 
 function monthKey(iso: string): string {
   const d = isoToDate(iso);
@@ -37,6 +39,7 @@ function monthLabel(key: string): string {
 export default function Reports() {
   const { data, role } = useApp();
   const [range, setRange] = useState<DateRange>({ from: null, to: null });
+  const [showRevenueRows, setShowRevenueRows] = useState(false);
 
   const ledger = useMemo(() => fullLedger(data, 24), [data]);
 
@@ -89,6 +92,29 @@ export default function Reports() {
       .slice(0, 10);
   }, [data.payments, data.clients, range]);
 
+  // CSV export of the rows behind each report section. Reuses the shared
+  // array->CSV util (src/lib/export.ts), same header + body pattern as Ledger.
+  function exportRevenueCSV() {
+    const header = ["Month", "Revenue"];
+    const body = revenueSeries.map((r) => [r.label, r.revenue]);
+    downloadCSV("revenue-by-month.csv", [header, ...body]);
+  }
+  function exportRepsCSV() {
+    const header = ["Name", "Clients", "Paid", "Pending"];
+    const body = reps.map((r) => [r.name, r.clients, r.paid, r.pending]);
+    downloadCSV("salesperson-performance.csv", [header, ...body]);
+  }
+  function exportPartnersCSV() {
+    const header = ["Name", "Referrals", "Paid", "Pending"];
+    const body = partners.map((r) => [r.name, r.clients, r.paid, r.pending]);
+    downloadCSV("affiliate-partner-performance.csv", [header, ...body]);
+  }
+  function exportClientsCSV() {
+    const header = ["Client", "Revenue"];
+    const body = clientRevenue.map((c) => [c.label, c.total]);
+    downloadCSV("top-clients-by-revenue.csv", [header, ...body]);
+  }
+
   const scopeNote =
     role === "sales_manager"
       ? "Figures cover your team only."
@@ -107,18 +133,67 @@ export default function Reports() {
         <StatCard label="Projected (next 24m)" value={formatCurrency(totals.projected)} icon={<TrendingUp className="h-5 w-5" />} tone="cyan" />
       </div>
 
-      <SectionTitle>Revenue by month</SectionTitle>
+      <SectionTitle
+        right={
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setShowRevenueRows((v) => !v)}
+              disabled={revenueSeries.length === 0}
+            >
+              <ChevronDown className={"h-4 w-4 transition-transform" + (showRevenueRows ? " rotate-180" : "")} />
+              {showRevenueRows ? "Hide rows" : "View rows"}
+            </Button>
+            <Button variant="secondary" size="sm" onClick={exportRevenueCSV} disabled={revenueSeries.length === 0}>
+              <Download className="h-4 w-4" /> Export CSV
+            </Button>
+          </div>
+        }
+      >
+        Revenue by month
+      </SectionTitle>
       <Card className="mb-6 mt-3">
         {revenueSeries.length === 0 ? (
           <EmptyState icon={<BarChart3 className="h-6 w-6" />} title="No revenue in range" description="Adjust the date range or record payments to see revenue here." />
         ) : (
-          <MoneyBarChart data={revenueSeries} xKey="label" series={[{ key: "revenue", name: "Revenue", color: "#16a34a" }]} />
+          <>
+            <MoneyBarChart data={revenueSeries} xKey="label" series={[{ key: "revenue", name: "Revenue", color: "#16a34a" }]} />
+            {showRevenueRows && (
+              <div className="mt-4 border-t border-slate-100 pt-4 dark:border-slate-800">
+                <Table>
+                  <THead>
+                    <TR>
+                      <TH>Month</TH>
+                      <TH className="text-right">Revenue</TH>
+                    </TR>
+                  </THead>
+                  <TBody>
+                    {revenueSeries.map((r) => (
+                      <TR key={r.label}>
+                        <TD className="font-medium text-slate-900 dark:text-white">{r.label}</TD>
+                        <TD className="text-right tabular-nums text-slate-700 dark:text-slate-200">{formatCurrency(r.revenue)}</TD>
+                      </TR>
+                    ))}
+                  </TBody>
+                </Table>
+              </div>
+            )}
+          </>
         )}
       </Card>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <div>
-          <SectionTitle>Salesperson performance</SectionTitle>
+          <SectionTitle
+            right={
+              <Button variant="secondary" size="sm" onClick={exportRepsCSV} disabled={reps.length === 0}>
+                <Download className="h-4 w-4" /> Export CSV
+              </Button>
+            }
+          >
+            Salesperson performance
+          </SectionTitle>
           <Card padded={false} className="mt-3 overflow-hidden">
             {reps.length === 0 ? (
               <div className="p-6"><EmptyState icon={<BarChart3 className="h-6 w-6" />} title="No salespeople" description="No sales reps in scope." /></div>
@@ -141,7 +216,15 @@ export default function Reports() {
         </div>
 
         <div>
-          <SectionTitle>Affiliate / partner performance</SectionTitle>
+          <SectionTitle
+            right={
+              <Button variant="secondary" size="sm" onClick={exportPartnersCSV} disabled={partners.length === 0}>
+                <Download className="h-4 w-4" /> Export CSV
+              </Button>
+            }
+          >
+            Affiliate / partner performance
+          </SectionTitle>
           <Card padded={false} className="mt-3 overflow-hidden">
             {partners.length === 0 ? (
               <div className="p-6"><EmptyState icon={<BarChart3 className="h-6 w-6" />} title="No affiliates" description="No affiliates or partners in scope." /></div>
@@ -164,7 +247,17 @@ export default function Reports() {
         </div>
       </div>
 
-      <div className="mt-6"><SectionTitle>Top clients by revenue</SectionTitle></div>
+      <div className="mt-6">
+        <SectionTitle
+          right={
+            <Button variant="secondary" size="sm" onClick={exportClientsCSV} disabled={clientRevenue.length === 0}>
+              <Download className="h-4 w-4" /> Export CSV
+            </Button>
+          }
+        >
+          Top clients by revenue
+        </SectionTitle>
+      </div>
       <Card padded={false} className="mt-3 overflow-hidden">
         {clientRevenue.length === 0 ? (
           <div className="p-6"><EmptyState icon={<BarChart3 className="h-6 w-6" />} title="No client revenue" description="No payments recorded in range." /></div>

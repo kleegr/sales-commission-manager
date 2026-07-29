@@ -113,9 +113,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const sessionToken = await createSession(user.id, tenant.id);
     setSessionCookie(res, sessionToken, { crossSite: true });
 
-    // 6. best-effort first sync (uses the launch token, then discards it) and
-    //    status report. Neither blocks the launch: failures are swallowed so a
-    //    transient gateway hiccup never prevents the user from entering the app.
+    // 6. best-effort profile sync + status report. By DEFAULT this only refreshes
+    //    the sub-account profile — it does NOT auto-import contacts/opportunities
+    //    or auto-provision other users (that import is gated behind
+    //    KLEEGR_SYNC_ENABLED; see runInitialSync). Neither blocks the launch:
+    //    failures are swallowed so a transient gateway hiccup never prevents the
+    //    user from entering the app.
     try {
       await runInitialSync({ launchToken, tenantId: tenant.id });
     } catch {

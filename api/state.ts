@@ -12,6 +12,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { hasDb } from "./_lib/db.js";
 import { ensureSchema, readScopedState, writeState, seedIfEmpty } from "./_lib/repository.js";
 import { getSessionUser, isAdminRole } from "./_lib/auth.js";
+import { csrfOk } from "./_lib/http.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!hasDb()) return res.status(503).json({ error: "database_not_configured" });
@@ -43,6 +44,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (req.method === "PUT" || req.method === "POST") {
+      if (!csrfOk(req)) return res.status(403).json({ error: "csrf_check_failed" });
       if (!isAdminRole(user.role)) {
         return res.status(403).json({ error: "forbidden", hint: "snapshot writes are owner/admin only" });
       }
@@ -57,7 +59,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     res.setHeader("Allow", "GET, PUT");
     return res.status(405).json({ error: "method_not_allowed" });
-  } catch (err: any) {
-    return res.status(500).json({ error: String(err?.message ?? err) });
+  } catch (err) {
+    console.error("[scm:error] state:", err instanceof Error ? (err.stack ?? err.message) : String(err));
+    return res.status(500).json({ error: "internal_error" });
   }
 }

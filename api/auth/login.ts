@@ -12,6 +12,8 @@ import {
   type Role,
 } from "../_lib/auth.js";
 import { DEMO_PASSWORD } from "../_lib/auth-seed.js";
+import { clientIp } from "../_lib/http.js";
+import { loginBlocked, recordLoginAttempt, LOGIN_WINDOW_MIN } from "../_lib/rate-limit.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!hasDb()) return res.status(503).json({ error: "database_not_configured" });
@@ -39,6 +41,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: "missing_credentials" });
     }
 
+    // Brute-force throttling (fail-open on any DB error): after too many recent
+    // failed attempts for this IP or email, reject with 429 until the window passes.
+    const ip = clientIp(req);
+    if (await loginBlocked(ip, email)) {
+      res.setHeader("Retry-After", String(LOGIN_WINDOW_MIN * 60));
+      return res.status(429).json({ error: "too_many_attempts" });
+    }
+
     // Defense-in-depth: with demo mode OFF (the default), the well-known seeded
     // demo password must NEVER authenticate — even against a database that was
     // previously seeded with it. This makes `demo1234` logins dead by default
@@ -46,6 +56,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // rotated password (no production account should carry the documented demo
     // credential). The generic error avoids revealing the policy.
     if (!demoModeEnabled() && password === DEMO_PASSWORD) {
+      await recordLoginAttempt(ip, email, false);
       return res.status(401).json({ error: "invalid_credentials" });
     }
 
@@ -68,11 +79,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const user = rows[0];
     // Constant-ish failure path; verifyPassword on a missing hash returns false.
     if (!user || user.status !== "active" || !verifyPassword(password, user.password_hash)) {
+      await recordLoginAttempt(ip, email, false);
       return res.status(401).json({ error: "invalid_credentials" });
     }
 
     const token = await createSession(user.id, user.tenant_id);
     setSessionCookie(res, token);
+    await recordLoginAttempt(ip, email, true);
     await query(`UPDATE users SET last_login_at = now() WHERE id = $1`, [user.id]);
 
     return res.status(200).json({
@@ -86,7 +99,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         salespersonId: user.salesperson_id ?? null,
       },
     });
-  } catch (err: any) {
-    return res.status(500).json({ error: String(err?.message ?? err) });
+  } catch (err) {
+    console.error("[scm:error] login:", err instanceof Error ? (err.stack ?? err.message) : String(err));
+    return res.status(500).json({ error: "internal_error" });
   }
 }

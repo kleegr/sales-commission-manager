@@ -11,6 +11,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { hasDb, query } from "./_lib/db.js";
 import { ensureSchema, seedIfEmpty } from "./_lib/repository.js";
 import { getSessionUser } from "./_lib/auth.js";
+import { csrfOk } from "./_lib/http.js";
 import { normalizeBusinessProfile, businessProfileColumns, rowToBusinessProfile, canManageBusinessProfile } from "./_lib/documents-core.js";
 
 const uid = (p: string) => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -29,6 +30,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (req.method === "PUT" || req.method === "PATCH") {
+      if (!csrfOk(req)) return res.status(403).json({ error: "csrf_check_failed" });
       if (!canManageBusinessProfile(user.role)) return res.status(403).json({ error: "forbidden" });
       const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body ?? {};
       const norm = normalizeBusinessProfile(body && typeof body === "object" ? body : {});
@@ -92,7 +94,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     res.setHeader("Allow", "GET, PUT, PATCH");
     return res.status(405).json({ error: "method_not_allowed" });
-  } catch (err: any) {
-    return res.status(500).json({ error: String(err?.message ?? err) });
+  } catch (err) {
+    console.error("[scm:error] business-profile:", err instanceof Error ? (err.stack ?? err.message) : String(err));
+    return res.status(500).json({ error: "internal_error" });
   }
 }

@@ -352,7 +352,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // payouts) be the real source of truth instead of the snapshot.
   const suppressPersist = useRef(false);
 
-  // Load once on mount; seed demo data if storage is empty.
+  // Load once on mount. If the store is empty we hydrate an EMPTY dataset and do
+  // NOT persist it, so the app never silently seeds sample/demo data. Seeding is
+  // reserved for the explicit "Reset to demo data" action (RESET_DEMO).
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -361,9 +363,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (loaded) {
         dispatch({ type: "HYDRATE", data: loaded });
       } else {
-        const demo = buildDemoData();
-        dispatch({ type: "HYDRATE", data: demo });
-        await store.save(demo);
+        // Skip the persist echo for this hydration so the empty dataset is not
+        // written back to the store.
+        suppressPersist.current = true;
+        dispatch({ type: "HYDRATE", data: emptyData() });
       }
       hydrated.current = true;
     })();

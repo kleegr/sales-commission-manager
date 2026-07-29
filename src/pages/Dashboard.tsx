@@ -11,7 +11,11 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { useApp } from "../store/AppContext";
+import { useAuth } from "../store/AuthContext";
+import { ADMIN_ROLES } from "../lib/roles";
 import { PageHeader, StatCard, Card, SectionTitle, Button, EmptyState } from "../components/ui";
+import { SetupChecklist } from "../components/SetupChecklist";
+import { NeedsAttention } from "../components/NeedsAttention";
 import { DateRangeFilter, type DateRange } from "../components/DateRangeFilter";
 import {
   CategoryBarChart,
@@ -29,6 +33,8 @@ import { formatCurrency, formatNumber } from "../lib/format";
 
 export default function Dashboard() {
   const { data } = useApp();
+  const { user } = useAuth();
+  const isAdmin = !!user && ADMIN_ROLES.includes(user.role);
   const [range, setRange] = useState<DateRange>({ from: null, to: null });
 
   const ledger = useMemo(() => fullLedger(data, 24), [data]);
@@ -104,6 +110,13 @@ export default function Dashboard() {
         <StatCard label="Total earned" value={formatCurrency(totals.earned)} sub="Pending + paid" icon={<Clock className="h-5 w-5" />} tone="blue" />
         <StatCard label="Commission plans" value={formatNumber(data.plans.length)} icon={<CircleDollarSign className="h-5 w-5" />} tone="green" />
       </div>
+
+      {isAdmin && (
+        <div className="mt-6 grid gap-4 lg:grid-cols-2">
+          <SetupChecklist />
+          <NeedsAttention />
+        </div>
+      )}
 
       <div className="mt-6 grid gap-4 lg:grid-cols-5">
         <Card className="lg:col-span-3">

@@ -384,7 +384,7 @@ export function mapKleegrRole(
 // Step 4 — Kleegr gateway client (server↔Kleegr, Bearer = launch token)
 // ---------------------------------------------------------------------------
 
-export type GatewayResource = "subaccount" | "users" | "opportunities" | "contacts" | "conversations";
+export type GatewayResource = "locations" | "subaccount" | "users" | "opportunities" | "contacts" | "conversations";
 
 export const GATEWAY_RESOURCES: GatewayResource[] = [
   "subaccount",
@@ -393,6 +393,29 @@ export const GATEWAY_RESOURCES: GatewayResource[] = [
   "contacts",
   "conversations",
 ];
+
+/**
+ * The gateway resource token for the sub-account / location profile read. The
+ * approved manifest scope is `locations.readonly`, so this DEFAULTS to
+ * "locations" (a `subaccount` read under a locations grant can be denied with
+ * gateway_denied). If the Kleegr gateway expects the legacy "subaccount" token,
+ * override with KLEEGR_GATEWAY_RESOURCE=subaccount. This is the single place the
+ * resource name is decided, so status/gateway/sync stay consistent. Resolve the
+ * exact token with the Kleegr team — see docs/KLEEGR_SETUP.md.
+ */
+export function subaccountGatewayResource(): GatewayResource {
+  const v = (process.env.KLEEGR_GATEWAY_RESOURCE ?? "").trim().toLowerCase();
+  return v === "subaccount" ? "subaccount" : "locations";
+}
+
+/**
+ * Normalize a webhook event name so the receiver handles BOTH namings Kleegr
+ * might send: `location.*` (matching the locations scope) and the legacy
+ * `subaccount.*`. Everything downstream keys on the `subaccount.*` form.
+ */
+export function normalizeWebhookEvent(name: string): string {
+  return name.startsWith("location.") ? name.replace(/^location\./, "subaccount.") : name;
+}
 
 /**
  * POST ${base}/api/plugins/gateway with the (short-lived) launch token.
@@ -424,7 +447,7 @@ export async function kleegrGateway<T = any>(
 
 /** Convenience: the sub-account profile. */
 export function gatewaySubaccount<T = any>(launchToken: string, fetchImpl?: typeof fetch): Promise<T> {
-  return kleegrGateway<T>(launchToken, "subaccount", {}, fetchImpl);
+  return kleegrGateway<T>(launchToken, subaccountGatewayResource(), {}, fetchImpl);
 }
 /** Convenience: users in the sub-account. */
 export function gatewayUsers<T = any>(launchToken: string, params: Record<string, unknown> = {}, fetchImpl?: typeof fetch): Promise<T> {

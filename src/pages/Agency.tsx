@@ -11,8 +11,9 @@
 // owner sees across them (revenue, commission liability vs paid, payouts,
 // documents, feature access, last activity); and each sub-account is its own
 // isolated workspace you can open. "Open workspace" switches the active
-// sub-account and drops into its admin product. The GoHighLevel card + the
-// per-tenant location id are foundation placeholders for the future OAuth phase.
+// sub-account and drops into its admin product (demo/review mode only; under
+// real auth a workspace is opened from its Kleegr sub-account). GoHighLevel
+// connectivity is provided through Kleegr Smart Productivity.
 //
 // Degrades gracefully: if /api/agency is unavailable (no database, or the
 // local-storage fallback backend) it falls back to the public /api/health
@@ -20,7 +21,7 @@
 // ============================================================================
 
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   Network,
   Building2,
@@ -175,7 +176,12 @@ export default function Agency() {
                     Tenant <span className="font-mono">{t.slug}</span>
                   </p>
                 </div>
-                <Button size="sm" onClick={() => void openWorkspace(t.slug)} disabled={opening === t.slug}>
+                <Button
+                  size="sm"
+                  onClick={() => void openWorkspace(t.slug)}
+                  disabled={opening === t.slug || !demo}
+                  title={demo ? undefined : "Open from the Kleegr sub-account"}
+                >
                   {opening === t.slug ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
                   Open workspace
                 </Button>
@@ -296,6 +302,7 @@ export default function Agency() {
           <TenantCard
             key={t.slug}
             t={t}
+            demo={demo}
             opening={opening === t.slug}
             onOpen={() => void openWorkspace(t.slug)}
           />
@@ -309,10 +316,12 @@ export default function Agency() {
 
 function TenantCard({
   t,
+  demo,
   opening,
   onOpen,
 }: {
   t: AgencyTenantRollup;
+  demo: boolean;
   opening: boolean;
   onOpen: () => void;
 }) {
@@ -348,7 +357,12 @@ function TenantCard({
             </span>
           </p>
         </div>
-        <Button size="sm" onClick={onOpen} disabled={opening}>
+        <Button
+          size="sm"
+          onClick={onOpen}
+          disabled={opening || !demo}
+          title={demo ? undefined : "Open from the Kleegr sub-account"}
+        >
           {opening ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
           Open workspace
         </Button>
@@ -413,13 +427,17 @@ function IntegrationsCard() {
             <Plug className="h-5 w-5" />
           </span>
           <div>
-            <p className="text-sm font-semibold text-slate-900 dark:text-white">Connect GoHighLevel</p>
+            <p className="text-sm font-semibold text-slate-900 dark:text-white">Kleegr integration</p>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Choose which GHL locations can use this app. OAuth install + webhook sync arrive in the next phase.
+              Sales Commission Manager connects to GoHighLevel through Kleegr Smart Productivity.
             </p>
           </div>
         </div>
-        <Badge tone="amber">Coming soon</Badge>
+        <Link to="/settings/integrations/kleegr">
+          <Button variant="secondary" size="sm">
+            <Plug className="h-4 w-4" /> Manage integration
+          </Button>
+        </Link>
       </Card>
     </div>
   );

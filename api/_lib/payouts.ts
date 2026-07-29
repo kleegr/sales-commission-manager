@@ -195,6 +195,48 @@ async function batchEntryIds(c: PoolClient, batchId: string): Promise<string[]> 
   return rows.map((r) => r.commission_entry_id);
 }
 
+// ---------------------------------------------------------------------------
+// Payout authorization (pure, unit-tested in payouts-authz.test.ts)
+// ---------------------------------------------------------------------------
+
+/** Coarse role gate: may this role perform this action at all? */
+export function roleMayTransition(action: Exclude<PayoutAction, "submit">, role: string): boolean {
+  const canApprove = ["owner", "admin", "sales_manager"].includes(role);
+  const canPayOrCancel = ["owner", "admin"].includes(role);
+  if (action === "approve" || action === "reject") return canApprove;
+  return canPayOrCancel; // mark_paid | cancel
+}
+
+/**
+ * Team scope (H-3): owner/admin act on any batch; a sales_manager may act ONLY
+ * on batches whose salesperson is on their team (`visible`). Anyone else is
+ * confined to their own visible set.
+ */
+export function mayActOnBatch(
+  role: string,
+  visible: Set<string> | "all",
+  batchSalespersonId: string,
+): boolean {
+  if (role === "owner" || role === "admin") return true;
+  if (visible === "all") return true;
+  return visible.has(batchSalespersonId);
+}
+
+/**
+ * Separation of duties: the person who APPROVES a batch must not be the person
+ * who submitted it. `owner` is exempt so a solo operator can still function.
+ */
+export function violatesSeparationOfDuties(
+  action: string,
+  role: string,
+  submitterUserId: string | null,
+  actorUserId: string,
+): boolean {
+  if (action !== "approve") return false;
+  if (role === "owner") return false;
+  return !!submitterUserId && submitterUserId === actorUserId;
+}
+
 /** Run an approve/reject/pay/cancel transition with role + state checks. */
 export async function transitionPayout(
   tenantId: string,
@@ -203,18 +245,42 @@ export async function transitionPayout(
   batchId: string,
   note: string,
 ): Promise<void> {
-  const canApprove = ["owner", "admin", "sales_manager"].includes(actor.role);
-  const canPayOrCancel = ["owner", "admin"].includes(actor.role);
-
-  if ((action === "approve" || action === "reject") && !canApprove) throw new PayoutError("forbidden", 403);
-  if ((action === "mark_paid" || action === "cancel") && !canPayOrCancel) throw new PayoutError("forbidden", 403);
+  if (!roleMayTransition(action, actor.role)) throw new PayoutError("forbidden", 403);
 
   await withTransaction(async (c) => {
     const batch = await loadBatch(c, tenantId, batchId);
     if (!batch) throw new PayoutError("not_found", 404);
+
+    // H-3 team scope: a sales_manager may only act on their OWN team's batches.
+    if (actor.role === "sales_manager") {
+      const visible = await visibleSalespeople(tenantId, actor, null);
+      if (!mayActOnBatch(actor.role, visible, batch.salesperson_id)) {
+        throw new PayoutError("forbidden", 403);
+      }
+    }
+
+    // Separation of duties: the approver must not be the submitter (owner exempt).
+    if (violatesSeparationOfDuties(action, actor.role, batch.created_by_user_id ?? null, actor.userId)) {
+      throw new PayoutError("separation_of_duties", 403);
+    }
+
     const ids = await batchEntryIds(c, batchId);
     const ts = nowISO();
     const from = batch.status as string;
+
+    // Reconcile the batch total against the sum of its entries before approving
+    // or paying, so a stale or edited total can never be approved or paid out.
+    if (action === "approve" || action === "mark_paid") {
+      const { rows: sumRows } = await c.query<{ s: string }>(
+        `SELECT COALESCE(SUM(commission_amount),0)::text AS s
+           FROM commission_ledger WHERE tenant_id = $1 AND id = ANY($2::text[])`,
+        [tenantId, ids],
+      );
+      const entriesTotal = Number(sumRows[0]?.s ?? 0);
+      if (Math.abs(entriesTotal - Number(batch.total_amount)) > 0.005) {
+        throw new PayoutError("batch_total_mismatch", 409);
+      }
+    }
 
     const setEntries = async (status: string, paid = false) => {
       if (ids.length === 0) return;

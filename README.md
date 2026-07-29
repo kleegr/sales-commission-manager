@@ -33,8 +33,13 @@ When enabled, a sticky top bar lets you switch **tenant** (Demo / Acme) and
 
 **How it works (and stays safe):**
 
-- Demo mode is controlled by the `DEMO_MODE` env var and is **ON by default**.
-  Set `DEMO_MODE=off` (or `0`/`false`/`disabled`/`no`) to require real login.
+- Demo mode is controlled by the `DEMO_MODE` env var and is **OFF by default**
+  (production-safe). Set `DEMO_MODE` to `1`/`true`/`on`/`enabled`/`yes` to turn it
+  on for a review deployment; any other value (including unset) keeps it off. In a
+  Vercel **production** deployment (`VERCEL_ENV=production`) the no-password bypass
+  is additionally **forced off** even if `DEMO_MODE` is set, unless
+  `DEMO_MODE_ALLOW_IN_PRODUCTION` is also explicitly set (a deliberate two-key
+  action).
 - The bypass only ever resolves to an **existing seeded demo user** for the
   chosen tenant + role — it never invents an identity. A real password session
   (cookie `scm_session`) always takes precedence over the demo bypass.
@@ -42,9 +47,32 @@ When enabled, a sticky top bar lets you switch **tenant** (Demo / Acme) and
   `scm_demo_role`; tenant + role still come from the server, and every query is
   filtered by `tenant_id`, so tenants remain fully data-isolated in demo mode.
 
-> ⚠️ **Security:** `DEMO_MODE` must be turned **off** before the app holds any
-> real customer data. While it is on, anyone with the URL can view any seeded
-> demo tenant without a password.
+> ⚠️ **Security:** demo mode must stay **off** wherever the app holds real
+> customer data — it is **off by default**, and additionally **forced off** in a
+> production deployment unless the two-key override above is set. While it is on,
+> anyone with the URL can view a seeded **demo/acme** tenant without a password.
+
+## Security posture
+
+Production hardening, with details in [`docs/`](docs/):
+
+- **Demo mode off in production** — off by default and force-off under
+  `VERCEL_ENV=production` unless a second key is set. See
+  [`docs/ENV.md`](docs/ENV.md) and [`docs/INCIDENT_RECOVERY.md`](docs/INCIDENT_RECOVERY.md).
+- **Tenant + agency isolation** — every row is `tenant_id`-scoped; the tenant is
+  fixed by the session, and roles further scope reads.
+- **Login rate limiting, CSRF, and httpOnly/Secure session cookies** — see the
+  security summary in [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
+- **Payout separation of duties** — approver ≠ submitter (owner exempt),
+  owner/admin-only pay/cancel, and append-only `payout_events` history.
+- **Kleegr / GoHighLevel access is server-side only** — no direct GHL OAuth;
+  secrets read by env-var name; webhooks verify an HMAC signature and fail closed.
+  See [`docs/KLEEGR_SETUP.md`](docs/KLEEGR_SETUP.md).
+
+Operational runbooks: [`docs/RUNBOOK.md`](docs/RUNBOOK.md) (day-2 ops, health,
+the deploy-time `scripts/migrate-financial.ts`) and
+[`docs/INCIDENT_RECOVERY.md`](docs/INCIDENT_RECOVERY.md) (disable sync, reverse a
+payout, bad imports, Neon PITR).
 
 ## Run it
 

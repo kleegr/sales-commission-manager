@@ -17,6 +17,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { hasDb, query, withTransaction } from "./_lib/db.js";
 import { ensureSchema, seedIfEmpty } from "./_lib/repository.js";
 import { getSessionUser, type SessionUser } from "./_lib/auth.js";
+import { csrfOk } from "./_lib/http.js";
 import {
   canReleaseCommission,
   canRecomputeLedger,
@@ -153,6 +154,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (req.method === "POST") {
+      if (!csrfOk(req)) return res.status(403).json({ error: "csrf_check_failed" });
       const action = String(req.query.action ?? "");
 
       // ---- release held commissions --------------------------------------
@@ -195,8 +197,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     res.setHeader("Allow", "GET, POST");
     return res.status(405).json({ error: "method_not_allowed" });
-  } catch (err: any) {
-    return res.status(500).json({ error: String(err?.message ?? err) });
+  } catch (err) {
+    console.error("[scm:error] ledger:", err instanceof Error ? (err.stack ?? err.message) : String(err));
+    return res.status(500).json({ error: "internal_error" });
   }
 }
 

@@ -15,6 +15,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { hasDb, query } from "./_lib/db.js";
 import { ensureSchema, seedIfEmpty } from "./_lib/repository.js";
 import { getSessionUser } from "./_lib/auth.js";
+import { csrfOk } from "./_lib/http.js";
 import { readTenantFlags } from "./_lib/feature-access.js";
 import {
   aiConfigured,
@@ -113,6 +114,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (req.method === "POST") {
+      if (!csrfOk(req)) return res.status(403).json({ error: "csrf_check_failed" });
       const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body ?? {};
       const op = String(body.op ?? "generate");
       if (op !== "generate") return res.status(400).json({ error: "unknown_op" });
@@ -199,8 +201,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     res.setHeader("Allow", "GET, POST");
     return res.status(405).json({ error: "method_not_allowed" });
-  } catch (err: any) {
-    return res.status(500).json({ error: String(err?.message ?? err) });
+  } catch (err) {
+    console.error("[scm:error] ai:", err instanceof Error ? (err.stack ?? err.message) : String(err));
+    return res.status(500).json({ error: "internal_error" });
   }
 }
 

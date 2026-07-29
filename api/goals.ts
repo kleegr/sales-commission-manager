@@ -17,6 +17,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { hasDb, query } from "./_lib/db.js";
 import { ensureSchema, seedIfEmpty, readState } from "./_lib/repository.js";
 import { getSessionUser, type SessionUser } from "./_lib/auth.js";
+import { csrfOk } from "./_lib/http.js";
 import {
   parseBody,
   uid,
@@ -150,6 +151,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (["POST", "PATCH", "DELETE"].includes(req.method ?? "") && !canManageGoals(user.role)) {
       return res.status(403).json({ error: "forbidden" });
     }
+    if (["POST", "PATCH", "DELETE"].includes(req.method ?? "") && !csrfOk(req)) {
+      return res.status(403).json({ error: "csrf_check_failed" });
+    }
 
     // ===================== milestones =====================================
     if (resource === "milestone") {
@@ -244,7 +248,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     res.setHeader("Allow", "GET, POST, PATCH, DELETE");
     return res.status(405).json({ error: "method_not_allowed" });
-  } catch (err: any) {
-    return res.status(500).json({ error: String(err?.message ?? err) });
+  } catch (err) {
+    console.error("[scm:error] goals:", err instanceof Error ? (err.stack ?? err.message) : String(err));
+    return res.status(500).json({ error: "internal_error" });
   }
 }

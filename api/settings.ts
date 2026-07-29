@@ -8,6 +8,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { hasDb, query } from "./_lib/db.js";
 import { ensureSchema, seedIfEmpty } from "./_lib/repository.js";
 import { getSessionUser } from "./_lib/auth.js";
+import { csrfOk } from "./_lib/http.js";
 import { parseBody, canEditSettings, normalizeSettingsInput } from "./_lib/handlers.js";
 
 const nowISO = () => new Date().toISOString();
@@ -50,6 +51,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (req.method === "PUT") {
+      if (!csrfOk(req)) return res.status(403).json({ error: "csrf_check_failed" });
       if (!canEditSettings(user.role)) return res.status(403).json({ error: "forbidden" });
       const parsed = normalizeSettingsInput(parseBody(req));
       if (!parsed.ok) return res.status(400).json({ error: parsed.error });
@@ -80,7 +82,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     res.setHeader("Allow", "GET, PUT");
     return res.status(405).json({ error: "method_not_allowed" });
-  } catch (err: any) {
-    return res.status(500).json({ error: String(err?.message ?? err) });
+  } catch (err) {
+    console.error("[scm:error] settings:", err instanceof Error ? (err.stack ?? err.message) : String(err));
+    return res.status(500).json({ error: "internal_error" });
   }
 }

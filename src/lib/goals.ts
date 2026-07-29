@@ -17,7 +17,7 @@ import type {
   GoalMetric,
   Milestone,
 } from "../types";
-import { projectPlanForClient } from "./commission-engine";
+import { projectPlanForClient } from "./commission-engine.js";
 
 // ---------------------------------------------------------------------------
 // Date helpers (string math on yyyy-mm-dd to avoid timezone drift)

@@ -335,8 +335,14 @@ export async function recomputeClientInTx(
   clientId: string,
   today = todayISO(),
 ): Promise<{ deleted: number; inserted: number; preserved: number }> {
+  // H-2 concurrency guard: FOR UPDATE serializes concurrent recomputes of the
+  // SAME client. A second recompute blocks until the first commits, so two racing
+  // recomputes can never both delete-then-insert and leave duplicate pending
+  // ledger rows (which could later be submitted and double-paid). The outer
+  // plan/tenant loops select client ids in a stable ORDER BY so these row locks
+  // are always acquired in the same order — no deadlock between concurrent runs.
   const { rows: clientRows } = await c.query<any>(
-    `SELECT * FROM clients WHERE tenant_id = $1 AND id = $2`,
+    `SELECT * FROM clients WHERE tenant_id = $1 AND id = $2 FOR UPDATE`,
     [tenantId, clientId],
   );
   const clientRow = clientRows[0];
@@ -408,7 +414,8 @@ export async function recomputePlanInTx(
     `SELECT cl.id
        FROM clients cl
        JOIN salespeople sp ON sp.id = cl.salesperson_id AND sp.tenant_id = cl.tenant_id
-      WHERE cl.tenant_id = $1 AND sp.commission_plan_id = $2`,
+      WHERE cl.tenant_id = $1 AND sp.commission_plan_id = $2
+      ORDER BY cl.id`,
     [tenantId, planId],
   );
   for (const r of rows) await recomputeClientInTx(c, tenantId, r.id, today);
@@ -422,7 +429,7 @@ export async function recomputeTenantInTx(
   today = todayISO(),
 ): Promise<{ clients: number }> {
   const { rows } = await c.query<{ id: string }>(
-    `SELECT id FROM clients WHERE tenant_id = $1`,
+    `SELECT id FROM clients WHERE tenant_id = $1 ORDER BY id`,
     [tenantId],
   );
   for (const r of rows) await recomputeClientInTx(c, tenantId, r.id, today);

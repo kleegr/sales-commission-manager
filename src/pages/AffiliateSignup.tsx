@@ -159,10 +159,6 @@ export default function AffiliateSignup() {
           </div>
         </Card>
       )}
-
-      <p className="mt-4 text-center text-xs text-slate-400">
-        This is a simulated public form. In production it would live on a separate public route.
-      </p>
     </div>
   );
 }

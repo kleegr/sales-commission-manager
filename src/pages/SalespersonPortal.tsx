@@ -12,7 +12,6 @@ import {
   StatusBadge,
   SectionTitle,
   Badge,
-  Select,
   Field,
   Input,
   Textarea,
@@ -61,8 +60,9 @@ const GOAL_PERIOD_LABEL: Record<string, string> = { monthly: "this month", quart
 
 export default function SalespersonPortal() {
   const { data, reload } = useApp();
-  const active = data.salespeople.filter((s) => s.approvalStatus !== "rejected");
-  const [spId, setSpId] = useState<string>("");
+  // Self-scoped: under real auth /api/state returns only the logged-in
+  // salesperson, so the portal always shows that single person's own data.
+  const sp = data.salespeople[0];
 
   const [leadOpen, setLeadOpen] = useState(false);
   const [lead, setLead] = useState<LeadDraft>(emptyLead());
@@ -95,12 +95,6 @@ export default function SalespersonPortal() {
       setSaving(false);
     }
   }
-
-  useEffect(() => {
-    if (!spId && active.length > 0) setSpId(active[0].id);
-  }, [active, spId]);
-
-  const sp = data.salespeople.find((s) => s.id === spId);
 
   const mine = useMemo(
     () => (sp ? fullLedger(data, 24).filter((e) => e.salespersonId === sp.id) : []),
@@ -177,14 +171,14 @@ export default function SalespersonPortal() {
     return projectedCommissionPerDeal(plan, a.avgSetupFee, a.avgMonthly);
   }, [sp, data.plans, data.settings.assumptions]);
 
-  if (active.length === 0) {
+  if (!sp) {
     return (
       <div>
         <PageHeader title="Salesperson portal" />
         <EmptyState
           icon={<UserRound className="h-6 w-6" />}
-          title="No people to view"
-          description="Add a salesperson, affiliate, or partner first."
+          title="No profile found"
+          description="This account isn't linked to a salesperson record yet."
         />
       </div>
     );
@@ -194,22 +188,11 @@ export default function SalespersonPortal() {
     <div>
       <PageHeader
         title="Salesperson portal"
-        subtitle="A simulated rep login — each person sees only their own clients and earnings"
+        subtitle="Your clients, commissions, and payouts"
         actions={
-          <div className="flex items-center gap-2">
-            <Field className="w-56">
-              <Select value={spId} onChange={(e) => setSpId(e.target.value)}>
-                {active.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Button onClick={() => setLeadOpen(true)}>
-              <Plus className="h-4 w-4" /> Add lead
-            </Button>
-          </div>
+          <Button onClick={() => setLeadOpen(true)}>
+            <Plus className="h-4 w-4" /> Add lead
+          </Button>
         }
       />
 
@@ -488,7 +471,7 @@ export default function SalespersonPortal() {
           </Field>
           {leadError && <p className="text-sm text-rose-600 sm:col-span-2">{leadError}</p>}
           <p className="text-xs text-slate-400 sm:col-span-2">
-            New leads are saved to the app database and assigned to you automatically. (GoHighLevel sync comes later.)
+            New leads are saved to the app database and assigned to you automatically.
           </p>
         </div>
       </Modal>

@@ -5,33 +5,40 @@
 // commission liability vs paid, payout status, document counts, feature access,
 // and last activity — plus a cross-tenant summary.
 //
-// ACCESS MODEL (tenant isolation preserved):
+// ACCESS MODEL (real agency principal — tenant isolation preserved):
 //   - Requires a session; ONLY owner/admin may read agency rollups (403 else).
-//   - In REVIEW/DEMO mode (the trusted, no-login review context) the response
-//     spans ALL tenants — the same cross-tenant visibility the review bar
-//     already grants by letting a reviewer hop between sub-accounts.
-//   - Under REAL auth there is no cross-tenant principal, so the response is
-//     scoped to the caller's OWN tenant only. Financial aggregates are never
-//     exposed across tenants outside trusted review mode; the public
-//     /api/health (counts only) remains the unauthenticated surface.
+//   - Cross-tenant visibility is derived from the caller's VERIFIED tenant's
+//     agency_id — never from demo mode. An OWNER whose tenant belongs to an
+//     agency sees every sub-account under THAT agency (filtered by agency_id);
+//     an admin, or an owner whose tenant has no agency, sees only their OWN
+//     tenant. There is no code path that returns every tenant in the database.
 //
 // The tenant id set is decided HERE; repository.agencyAggregates only ever sees
 // ids the caller is allowed to read, so there is no cross-tenant leak.
 // ============================================================================
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { hasDb } from "./_lib/db.js";
+import { hasDb, query } from "./_lib/db.js";
 import {
   ensureSchema,
-  seedIfEmpty,
-  listTenants,
   getTenantBySlug,
   agencyAggregates,
   type TenantRow,
 } from "./_lib/repository.js";
-import { getSessionUser, isAdminRole, demoModeEnabled } from "./_lib/auth.js";
+import { getSessionUser, isAdminRole } from "./_lib/auth.js";
 import { readTenantFlags } from "./_lib/feature-access.js";
 import { assembleRollup, summarizeAgency, type TenantMeta } from "./_lib/agency-core.js";
+import { resolveAgencyScope } from "./_lib/agency-scope.js";
+
+/** Every tenant under one agency (the ONLY cross-tenant query, always filtered). */
+async function tenantsForAgency(agencyId: string): Promise<TenantRow[]> {
+  const { rows } = await query<TenantRow>(
+    `SELECT id, name, slug, ghl_location_id, agency_id, status
+       FROM tenants WHERE agency_id = $1 ORDER BY created_at ASC, name ASC`,
+    [agencyId],
+  );
+  return rows;
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!hasDb()) return res.status(503).json({ error: "database_not_configured" });
@@ -42,7 +49,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     await ensureSchema();
-    await seedIfEmpty();
 
     const user = await getSessionUser(req);
     if (!user) return res.status(401).json({ error: "unauthorized" });
@@ -50,17 +56,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(403).json({ error: "forbidden", hint: "agency overview is owner/admin only" });
     }
 
-    const demo = demoModeEnabled();
+    // Resolve the caller's agency from their VERIFIED tenant, then decide scope.
+    const own = await getTenantBySlug(user.tenantSlug);
+    const agencyId = own?.agency_id ?? null;
+    const scope = resolveAgencyScope(user.role, agencyId);
 
-    // Decide the visible tenant set. All tenants only in trusted review mode;
-    // otherwise strictly the caller's own tenant.
-    let tenantRows: TenantRow[];
-    if (demo) {
-      tenantRows = await listTenants();
-    } else {
-      const own = await getTenantBySlug(user.tenantSlug);
-      tenantRows = own ? [own] : [];
-    }
+    const tenantRows: TenantRow[] =
+      scope === "agency" && agencyId
+        ? await tenantsForAgency(agencyId)
+        : own
+          ? [own]
+          : [];
 
     const tenantIds = tenantRows.map((t) => t.id);
     const [aggs, flags] = await Promise.all([
@@ -81,14 +87,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
 
     return res.status(200).json({
-      scope: demo ? "agency" : "tenant",
-      demo,
+      scope,
+      agencyId,
       viewer: { tenant: user.tenantSlug, role: user.role },
       summary: summarizeAgency(rollups),
       tenants: rollups,
       generatedAt: new Date().toISOString(),
     });
-  } catch (err: any) {
-    return res.status(500).json({ error: String(err?.message ?? err) });
+  } catch (err) {
+    console.error("[scm:error] agency:", err instanceof Error ? (err.stack ?? err.message) : String(err));
+    return res.status(500).json({ error: "internal_error" });
   }
 }

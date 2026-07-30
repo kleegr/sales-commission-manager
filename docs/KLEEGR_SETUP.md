@@ -47,11 +47,50 @@ serverless function by `vercel.json`) with a short-lived launch token
 3. Validates the claims: `valid === true`, `aud === "sales-commission-manager"`, not expired, `sp_user_id` present, `sub_account_id` present.
 4. Maps the Kleegr role to an SCM role (agency placement: `agency_admin` -> `owner`; sub-account placement: `agency_admin`/`admin` -> `admin`; `manager` -> `sales_manager`; `user` -> `salesperson`; unknown -> `salesperson`).
 5. Upserts the tenant (sub-account) and the user, then mints SCM's own httpOnly session cookie (`SameSite=None; Secure`, since the app may be embedded).
-6. Best-effort: runs a small first sync and reports `connected` back to Kleegr (neither blocks the launch).
-7. Redirects into the correct workspace (`/agency`, `/`, or `/portal`).
+6. Ensures the **salesperson link** for self-scoped roles (see below).
+7. Best-effort: runs a small first sync and reports `connected` back to Kleegr (neither blocks the launch).
+8. Redirects into the correct workspace (`/agency`, `/`, or `/portal`).
 
 The launch token is used **once** (verify plus the immediate gateway sync) and
 is never cached, reused, persisted, or sent to the browser.
+
+### The salesperson link (step 6)
+
+`/portal` renders **only** the `salespeople` row referenced by
+`users.salesperson_id`: `readScopedState()` reduces the dataset to
+`visibleSp = salespersonId ? {id} : {}` (`api/_lib/repository.ts`), so a NULL
+link yields an empty dataset and `SalespersonPortal.tsx` renders
+*"No profile found. This account isn't linked to a salesperson record yet."*
+
+The launch used to create the `users` row and stop there, so that link was
+always NULL and **every** salesperson/affiliate/partner launch hit that screen —
+not just the first one. `ensureSalespersonForUser()`
+(`api/_lib/kleegr-sync.ts`) closes it, idempotently and non-destructively:
+
+| Situation | Result |
+| --- | --- |
+| `users.salesperson_id` already set | left exactly as-is — an admin's deliberate link is never re-pointed |
+| a rep already carries this `kleegr_user_id` | linked to it |
+| a rep with the same email exists in this tenant | **adopted** (case-insensitive) and stamped with `kleegr_user_id` — never duplicated, and its name / plan / notes are untouched |
+| none of the above | a new rep row is created (`active` + `approved`, `source:'admin'`; provenance is carried by `kleegr_user_id`, so no new `source` enum value leaks into the UI) |
+
+Only the self-scoped roles (`salesperson`, `affiliate`, `partner`) get a record.
+`owner`/`admin` read the whole tenant and `sales_manager` reads their team via
+`salespeople.manager_user_id`, so inventing rep rows for them would pollute the
+roster and the commission reports.
+
+Rep ids are **tenant-scoped** (`sp_k_<tenant>_<kleegr user>`), for the same
+reason user ids are: one GHL user is routinely a member of several sub-accounts.
+
+**No migration or backfill is required.** The check runs on every launch and
+only short-circuits once the link exists, so a user who already hit the empty
+portal is repaired the next time they open the app. Failures are logged and
+swallowed — a link problem must never cost a user their launch.
+
+Covered by `api/_lib/kleegr-salesperson-link.test.ts`
+(`npm run test:kleegr-salesperson-link`), which drives the real
+`upsertUserForClaims` + `ensureSalespersonForUser` against an in-memory
+`users`/`salespeople` pair and reproduces `readScopedState`'s filter verbatim.
 
 ## Endpoints
 

@@ -305,6 +305,148 @@ export async function upsertUserForClaims(
 }
 
 // ---------------------------------------------------------------------------
+// Salesperson linking for a launched user
+//
+// WHY THIS EXISTS
+// ---------------
+// upsertUserForClaims() above creates the `users` row and nothing else, so
+// `users.salesperson_id` stayed NULL for every Kleegr launch. For a self-scoped
+// role that is not a cosmetic gap — it is the whole workspace:
+//
+//   launch.ts homePathFor('salesperson')      -> /portal
+//   state.ts  readScopedState({salespersonId}) -> repository.ts:413
+//             visibleSp = salespersonId ? {id} : {}   <- EMPTY when NULL
+//             filterAppData(full, {})                  -> salespeople: []
+//   SalespersonPortal.tsx  data.salespeople[0]         -> undefined
+//                          -> "No profile found. This account isn't linked to
+//                              a salesperson record yet."
+//
+// So a salesperson/affiliate/partner launching from Kleegr ALWAYS saw the empty
+// portal, on every launch, not just the first. This closes that link.
+// ---------------------------------------------------------------------------
+
+/**
+ * SCM roles whose workspace is scoped to a SINGLE `salespeople` row — the roles
+ * homePathFor() routes to /portal and readScopedState() filters down to
+ * `users.salesperson_id`. Mirrors SELF_ROLES in auth.ts, kept as a literal here
+ * so this module stays out of the auth/session import chain.
+ */
+export const SELF_SCOPED_ROLES = ["salesperson", "affiliate", "partner"] as const;
+export type SelfScopedRole = (typeof SELF_SCOPED_ROLES)[number];
+
+export function isSelfScopedRole(role: string): role is SelfScopedRole {
+  return (SELF_SCOPED_ROLES as readonly string[]).includes(role);
+}
+
+export type SalespersonLinkOutcome =
+  | "already_linked"
+  | "matched_by_kleegr_user"
+  | "matched_by_email"
+  | "created"
+  | "skipped_not_self_scoped";
+
+export interface SalespersonLink {
+  salespersonId: string | null;
+  outcome: SalespersonLinkOutcome;
+}
+
+/** Deterministic, TENANT-SCOPED rep id — same reasoning as buildKleegrUserId. */
+export function buildKleegrSalespersonId(tenantId: string, spUserId: string): string {
+  return `sp_k_${idSafe(tenantId, 64)}_${idSafe(spUserId, 64)}`;
+}
+
+/**
+ * Ensure the launched user has a `salespeople` record and that
+ * `users.salesperson_id` points at it. Idempotent and NON-DESTRUCTIVE:
+ *
+ *   0. the user is already linked            -> leave it exactly as it is
+ *   1. a rep with this kleegr_user_id        -> link to it
+ *   2. a rep with this email in this tenant  -> link (an existing manually
+ *                                               entered rep is adopted, never
+ *                                               duplicated) and stamp
+ *                                               kleegr_user_id
+ *   3. otherwise                             -> create one
+ *
+ * Only self-scoped roles get a record: an admin/owner reads the whole tenant and
+ * a sales_manager reads their team via salespeople.manager_user_id, so inventing
+ * rep rows for them would pollute the roster and the commission reports.
+ *
+ * `queryImpl` exists purely so this can be tested against a fake DB.
+ */
+export async function ensureSalespersonForUser(
+  tenantId: string,
+  user: AppUserRow,
+  claims: LaunchClaims,
+  mappedRole: AppRole,
+  queryImpl: QueryFn = query,
+): Promise<SalespersonLink> {
+  if (!isSelfScopedRole(mappedRole)) return { salespersonId: null, outcome: "skipped_not_self_scoped" };
+  // Never re-point an existing link: it is the rep's whole data scope, and an
+  // admin may have attached this login to a specific rep on purpose.
+  if (user.salesperson_id) return { salespersonId: user.salesperson_id, outcome: "already_linked" };
+
+  const q = queryImpl;
+  const ts = nowISO();
+  const email = (claims.email ?? "").trim().toLowerCase();
+
+  // 1. already imported/linked rep for this Kleegr user
+  const byKleegr = await q<{ id: string }>(
+    `SELECT id FROM salespeople WHERE tenant_id = $1 AND kleegr_user_id = $2 LIMIT 1`,
+    [tenantId, claims.sp_user_id],
+  );
+  let salespersonId: string | null = byKleegr.rows[0]?.id ?? null;
+  let outcome: SalespersonLinkOutcome = "matched_by_kleegr_user";
+
+  // 2. same email in this tenant -> adopt the existing rep rather than duplicate
+  if (!salespersonId && email) {
+    const byEmail = await q<{ id: string }>(
+      `SELECT id FROM salespeople
+         WHERE tenant_id = $1 AND lower(email) = $2
+         ORDER BY created_at ASC LIMIT 1`,
+      [tenantId, email],
+    );
+    if (byEmail.rows[0]) {
+      salespersonId = byEmail.rows[0].id;
+      outcome = "matched_by_email";
+      await q(
+        `UPDATE salespeople
+            SET kleegr_user_id = COALESCE(kleegr_user_id, $2), updated_at = $3
+          WHERE id = $1 AND tenant_id = $4`,
+        [salespersonId, claims.sp_user_id, ts, tenantId],
+      );
+    }
+  }
+
+  // 3. create. `source` stays within the documented union ('admin' |
+  //    'affiliate_portal') — provenance is carried by kleegr_user_id, so no new
+  //    enum value leaks into the UI or the AppData type.
+  if (!salespersonId) {
+    salespersonId = buildKleegrSalespersonId(tenantId, claims.sp_user_id);
+    await q(
+      `INSERT INTO salespeople
+          (id, tenant_id, name, email, phone, role, referral_code, status, approval_status,
+           source, commission_plan_id, notes, kleegr_user_id, created_at, updated_at)
+        VALUES ($1,$2,$3,$4,'',$5,'','active','approved','admin',NULL,'',$6,$7,$7)
+        ON CONFLICT (id) DO UPDATE SET
+          kleegr_user_id = COALESCE(salespeople.kleegr_user_id, EXCLUDED.kleegr_user_id),
+          updated_at = EXCLUDED.updated_at`,
+      [salespersonId, tenantId, user.name, email, mappedRole, claims.sp_user_id, ts],
+    );
+    outcome = "created";
+  }
+
+  // 4. link the user -> rep. COALESCE so a concurrent launch that linked first
+  //    wins and this one is a no-op rather than a silent re-point.
+  await q(
+    `UPDATE users SET salesperson_id = COALESCE(salesperson_id, $2), updated_at = now()
+      WHERE id = $1 AND tenant_id = $3`,
+    [user.id, salespersonId, tenantId],
+  );
+
+  return { salespersonId, outcome };
+}
+
+// ---------------------------------------------------------------------------
 // Defensive normalizers for gateway / webhook payloads
 // ---------------------------------------------------------------------------
 

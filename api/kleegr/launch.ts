@@ -27,7 +27,12 @@ import {
   type AppRole,
 } from "../_lib/kleegr.js";
 import { mapLaunchTokenRole } from "../_lib/kleegr-roles.js";
-import { upsertTenantForSubAccount, upsertUserForClaims, runInitialSync } from "../_lib/kleegr-sync.js";
+import {
+  upsertTenantForSubAccount,
+  upsertUserForClaims,
+  ensureSalespersonForUser,
+  runInitialSync,
+} from "../_lib/kleegr-sync.js";
 
 function extractLaunchToken(req: VercelRequest): string | null {
   const q = (req.query as Record<string, unknown> | undefined)?.token;
@@ -109,6 +114,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       name: null,
     });
     const user = await upsertUserForClaims(tenant.id, claims, mappedRole);
+
+    // 5b. A self-scoped role (salesperson/affiliate/partner) is sent to /portal by
+    //     homePathFor() below, and that workspace renders ONLY the salespeople row
+    //     referenced by users.salesperson_id. Creating the users row was never
+    //     enough: the link stayed NULL, readScopedState() filtered the dataset to
+    //     the empty set, and the portal rendered "No profile found" on EVERY
+    //     launch. Ensure + link the rep record here.
+    //
+    //     Best effort by design — a failure must not cost the user their launch.
+    //     Admin/owner/manager roles are skipped inside (they are not rep-scoped),
+    //     so for them this is a no-op.
+    try {
+      await ensureSalespersonForUser(tenant.id, user, claims, mappedRole);
+    } catch (err) {
+      console.error(
+        "[scm:error] launch salesperson link:",
+        err instanceof Error ? (err.stack ?? err.message) : String(err),
+      );
+    }
 
     const sessionToken = await createSession(user.id, tenant.id);
     setSessionCookie(res, sessionToken, { crossSite: true });

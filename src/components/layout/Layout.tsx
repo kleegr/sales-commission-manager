@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -20,12 +21,15 @@ import {
   Database,
   HardDrive,
   LogOut,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { classNames } from "../../lib/format";
 import { useApp } from "../../store/AppContext";
 import { useAuth } from "../../store/AuthContext";
 import { useFeatures } from "../../store/FeaturesContext";
 import { useEmbedded } from "../../lib/useEmbedded";
+import { browserPrefStore, readSidebarPref, writeSidebarPref } from "../../lib/sidebar-pref";
 import { canAccess, homePath, ROLE_LABEL, type Role } from "../../lib/roles";
 import { featureAllowsPath, type FeatureFlags } from "../../lib/features";
 import { DemoBar } from "./DemoBar";
@@ -273,8 +277,140 @@ function WorkspaceBadge() {
   );
 }
 
-/** Icon-only navigation rail for the embedded (Kleegr iframe) compact shell. */
-function EmbeddedNavRail() {
+/** Shared pending-affiliate badge for the embedded rail (both density modes). */
+function PendingBadge({ count, compact }: { count: number; compact: boolean }) {
+  if (count <= 0) return null;
+  return (
+    <span
+      className={classNames(
+        "flex items-center justify-center rounded-full bg-violet-500 font-semibold leading-none text-white",
+        compact
+          ? "absolute right-1 top-1 h-4 min-w-[16px] px-1 text-[9px]"
+          : "h-4 min-w-[16px] flex-none px-1 text-[10px]",
+      )}
+    >
+      {count}
+    </span>
+  );
+}
+
+/**
+ * Collapsed rail item: an icon plus an INSTANT flyout label on hover/focus.
+ *
+ * The label is portalled to <body> and positioned `fixed` rather than being an
+ * absolutely-positioned child of the link. That is not gold-plating: the rail's
+ * <nav> is a scroll container (`overflow-y-auto`), and per CSS overflow rules a
+ * non-visible value on one axis forces the other axis to compute to `auto` too
+ * -- so an in-flow flyout would be clipped at the 56px rail edge (or, worse,
+ * introduce a horizontal scrollbar). Portalling escapes the clip and every
+ * ancestor stacking context in one move.
+ *
+ * Replaces the native `title` attribute, whose ~1s delay and unstyled chrome
+ * made the rail read as though it had no labels at all. `aria-label` stays, so
+ * the accessible name is unchanged for screen readers.
+ */
+function RailIconLink({ item, pending }: { item: NavItem; pending: number }) {
+  const ref = useRef<HTMLAnchorElement | null>(null);
+  const [tip, setTip] = useState<{ top: number; left: number } | null>(null);
+
+  const hide = useCallback(() => setTip(null), []);
+  const show = useCallback(() => {
+    const r = ref.current?.getBoundingClientRect();
+    if (r) setTip({ top: r.top + r.height / 2, left: r.right + 8 });
+  }, []);
+
+  // Coordinates are captured at hover time, so anything that moves the anchor
+  // afterwards (rail scroll, iframe resize) would leave the flyout stranded.
+  // Dismiss instead of tracking -- the pointer is about to leave anyway.
+  useEffect(() => {
+    if (!tip) return;
+    window.addEventListener("scroll", hide, true);
+    window.addEventListener("resize", hide);
+    return () => {
+      window.removeEventListener("scroll", hide, true);
+      window.removeEventListener("resize", hide);
+    };
+  }, [tip, hide]);
+
+  return (
+    <>
+      <NavLink
+        ref={ref}
+        to={item.to}
+        end={item.end}
+        aria-label={item.label}
+        onMouseEnter={show}
+        onMouseLeave={hide}
+        onFocus={show}
+        onBlur={hide}
+        onClick={hide}
+        className={({ isActive }) =>
+          classNames(
+            "relative flex h-10 w-10 flex-none items-center justify-center rounded-lg transition",
+            isActive
+              ? "bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-300"
+              : "text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white",
+          )
+        }
+      >
+        {item.icon}
+        {item.to === "/people" && <PendingBadge count={pending} compact />}
+      </NavLink>
+      {tip &&
+        createPortal(
+          <span
+            role="tooltip"
+            style={{ top: tip.top, left: tip.left }}
+            className="pointer-events-none fixed z-[70] -translate-y-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg dark:bg-slate-700"
+          >
+            {item.label}
+          </span>,
+          document.body,
+        )}
+    </>
+  );
+}
+
+/** Expanded rail item: icon + full text label, matching the standalone sidebar. */
+function RailWideLink({
+  item,
+  pending,
+  onNavigate,
+}: {
+  item: NavItem;
+  pending: number;
+  onNavigate?: () => void;
+}) {
+  return (
+    <NavLink
+      to={item.to}
+      end={item.end}
+      onClick={onNavigate}
+      className={({ isActive }) =>
+        classNames(
+          "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium transition",
+          isActive
+            ? "bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-300"
+            : "text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white",
+        )
+      }
+    >
+      <span className="flex-none">{item.icon}</span>
+      <span className="min-w-0 flex-1 truncate">{item.label}</span>
+      {item.to === "/people" && <PendingBadge count={pending} compact={false} />}
+    </NavLink>
+  );
+}
+
+/**
+ * Navigation for the embedded (Kleegr iframe) shell, in two densities.
+ *
+ * Collapsed keeps the original flat icon list (with flyout labels). Expanded
+ * restores the section headings the flat list had to drop, so the six groups
+ * -- Overview / Manage / Commissions / Documents / Portal / System -- are
+ * legible again without leaving the iframe.
+ */
+function EmbeddedNavRail({ expanded, onNavigate }: { expanded: boolean; onNavigate?: () => void }) {
   const { data } = useApp();
   const { user } = useAuth();
   const { features } = useFeatures();
@@ -284,39 +420,204 @@ function EmbeddedNavRail() {
     (s) => s.source === "affiliate_portal" && s.approvalStatus === "pending",
   ).length;
 
-  // Flatten the sections into a single icon list; hide the Agency item here for
-  // non-owners (embedded === true) via the shared visibility rule.
-  const items = SECTIONS.flatMap((section) => section.items).filter((item) =>
-    navItemVisible(item, role, features, true),
-  );
+  // Hide the Agency item here for non-owners (embedded === true) via the shared
+  // visibility rule, then either group by section or flatten to a single list.
+  const sections = SECTIONS.map((section) => ({
+    ...section,
+    items: section.items.filter((item) => navItemVisible(item, role, features, true)),
+  })).filter((section) => section.items.length > 0);
+
+  if (!expanded) {
+    return (
+      <nav className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto py-3">
+        {sections
+          .flatMap((section) => section.items)
+          .map((item) => (
+            <RailIconLink key={item.to} item={item} pending={pendingAffiliates} />
+          ))}
+      </nav>
+    );
+  }
 
   return (
-    <nav className="flex flex-1 flex-col items-center gap-1 overflow-y-auto py-3">
-      {items.map((item) => (
-        <NavLink
-          key={item.to}
-          to={item.to}
-          end={item.end}
-          title={item.label}
-          aria-label={item.label}
-          className={({ isActive }) =>
-            classNames(
-              "relative flex h-10 w-10 flex-none items-center justify-center rounded-lg transition",
-              isActive
-                ? "bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-300"
-                : "text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white",
-            )
-          }
-        >
-          {item.icon}
-          {item.to === "/people" && pendingAffiliates > 0 && (
-            <span className="absolute right-1 top-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-violet-500 px-1 text-[9px] font-semibold leading-none text-white">
-              {pendingAffiliates}
-            </span>
-          )}
-        </NavLink>
+    <nav className="min-h-0 flex-1 space-y-4 overflow-y-auto px-2 py-3">
+      {sections.map((section) => (
+        <div key={section.heading}>
+          <p className="mb-1 px-2.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+            {section.heading}
+          </p>
+          <ul className="space-y-0.5">
+            {section.items.map((item) => (
+              <li key={item.to}>
+                <RailWideLink item={item} pending={pendingAffiliates} onNavigate={onNavigate} />
+              </li>
+            ))}
+          </ul>
+        </div>
       ))}
     </nav>
+  );
+}
+
+/** Expand/collapse control for the embedded rail. */
+function RailToggle({ expanded, onToggle }: { expanded: boolean; onToggle: () => void }) {
+  return (
+    <button
+      onClick={onToggle}
+      aria-expanded={expanded}
+      aria-label={expanded ? "Collapse sidebar" : "Expand sidebar"}
+      title={expanded ? "Collapse sidebar" : "Expand sidebar"}
+      className="inline-flex h-9 w-9 flex-none items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+    >
+      {expanded ? <PanelLeftClose className="h-5 w-5" /> : <PanelLeftOpen className="h-5 w-5" />}
+    </button>
+  );
+}
+
+/** Width below which an expanded rail overlays the content instead of pushing it. */
+const RAIL_OVERLAY_BELOW = 640;
+
+/**
+ * Tracks whether the app shell is too narrow to give up 224px to an expanded
+ * rail.
+ *
+ * Measures the ELEMENT, not the viewport: inside GHL the iframe is only a slice
+ * of the window, so Tailwind's `sm:`/`lg:` breakpoints (which resolve against
+ * the viewport) would report a roomy desktop while the frame itself is 420px
+ * wide. A ResizeObserver on the shell is the only reading that matches what the
+ * user actually sees.
+ */
+function useNarrowShell(ref: RefObject<HTMLElement>): boolean {
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const measure = () => setNarrow(el.getBoundingClientRect().width < RAIL_OVERLAY_BELOW);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+  return narrow;
+}
+
+/**
+ * Compact shell for the Kleegr / GoHighLevel iframe: a narrow rail and NO tall
+ * header / agency-name block, so the app does not stack a 256px sidebar +
+ * header on top of GHL's own chrome.
+ *
+ * The rail has two densities. It still DEFAULTS to the 56px icon-only mode --
+ * unchanged for anyone who never touches the toggle -- but the user can now
+ * expand it to 224px with labels, and that choice is remembered in
+ * localStorage across reloads and sub-account switches. On a frame too narrow
+ * to spare the width, expanding overlays the content rather than squeezing it.
+ */
+function EmbeddedShell({ children }: { children: ReactNode }) {
+  const { data } = useApp();
+  const location = useLocation();
+  const shellRef = useRef<HTMLDivElement>(null);
+  const narrow = useNarrowShell(shellRef);
+  const [expanded, setExpanded] = useState(() => readSidebarPref(browserPrefStore(), false));
+
+  const setAndRemember = useCallback((next: boolean) => {
+    setExpanded(next);
+    writeSidebarPref(browserPrefStore(), next);
+  }, []);
+  const collapse = useCallback(() => setAndRemember(false), [setAndRemember]);
+
+  // Expanded + too narrow to give up the width: float the rail over the content
+  // instead of pushing it into a sliver.
+  const overlay = expanded && narrow;
+
+  // While floating, the rail behaves like a drawer: Escape, a backdrop click,
+  // or picking a destination all dismiss it. Dismissal goes through the same
+  // persisted setter as the toggle, so "collapsed" means one thing everywhere.
+  useEffect(() => {
+    if (!overlay) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") collapse();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [overlay, collapse]);
+
+  return (
+    <div className="flex min-h-screen flex-col">
+      <DemoBar />
+      <div ref={shellRef} className="relative flex min-h-0 flex-1">
+        {overlay && (
+          <>
+            <div
+              onClick={collapse}
+              aria-hidden
+              className="fixed inset-0 z-30 bg-slate-900/40 backdrop-blur-sm"
+            />
+            {/* Holds the content column still while the rail floats above it. */}
+            <div className="w-14 flex-none" aria-hidden />
+          </>
+        )}
+
+        {/*
+          The rail is viewport-bounded, not content-bounded. The shell is
+          `min-h-screen`, so a long page would otherwise stretch the rail to the
+          full document height and drag the toggle below the fold -- unreachable
+          without scrolling to the bottom of the page. `sticky top-0` +
+          `max-h-screen` keeps it in view, and the nav's `min-h-0` lets the link
+          list scroll inside it so the footer controls stay pinned.
+
+          Exactly ONE position utility is emitted: Tailwind ships `sticky` and
+          `fixed` in the same layer, so which one wins is decided by stylesheet
+          order, not by the order we concatenate class names.
+        */}
+        <aside
+          className={classNames(
+            "z-40 flex flex-none flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900",
+            expanded ? "w-56" : "w-14 items-center",
+            overlay ? "fixed inset-y-0 left-0 shadow-xl" : "sticky top-0 max-h-screen",
+          )}
+        >
+          <div
+            className={classNames(
+              "flex flex-none items-center py-3",
+              expanded ? "gap-2 px-3" : "justify-center",
+            )}
+          >
+            <span
+              className="flex h-9 w-9 flex-none items-center justify-center rounded-lg bg-brand-600 text-white shadow-sm"
+              title="Commission Manager"
+            >
+              <Coins className="h-5 w-5" />
+            </span>
+            {expanded && (
+              <div className="min-w-0">
+                <p className="truncate text-[13px] font-semibold text-slate-900 dark:text-white">
+                  {data.settings.companyName || "Commission Manager"}
+                </p>
+                <p className="truncate text-[10px] text-slate-400">Commission Manager</p>
+              </div>
+            )}
+          </div>
+
+          <EmbeddedNavRail expanded={expanded} onNavigate={overlay ? collapse : undefined} />
+
+          <div
+            className={classNames(
+              "mb-2 mt-1 flex flex-none gap-1",
+              expanded ? "items-center justify-end px-2" : "flex-col items-center",
+            )}
+          >
+            <ThemeToggle />
+            <RailToggle expanded={expanded} onToggle={() => setAndRemember(!expanded)} />
+          </div>
+        </aside>
+
+        <div className="flex min-w-0 flex-1 flex-col">
+          <main key={location.pathname} className="mx-auto w-full max-w-7xl flex-1 px-4 py-5 lg:px-6">
+            {children}
+          </main>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -325,37 +626,9 @@ export function Layout({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
 
-  // Embedded in the Kleegr / GoHighLevel iframe: render a COMPACT shell -- a
-  // narrow icon-only rail and NO tall header / agency-name block -- so the app
-  // does not stack a 256px sidebar + header on top of GHL's own chrome. The
-  // standalone layout below is returned unchanged.
-  if (embedded) {
-    return (
-      <div className="flex min-h-screen flex-col">
-        <DemoBar />
-        <div className="flex min-h-0 flex-1">
-          <aside className="flex w-14 flex-none flex-col items-center border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-            <span
-              className="mt-3 flex h-9 w-9 flex-none items-center justify-center rounded-lg bg-brand-600 text-white shadow-sm"
-              title="Commission Manager"
-            >
-              <Coins className="h-5 w-5" />
-            </span>
-            <EmbeddedNavRail />
-            <div className="mb-2 mt-1 flex-none">
-              <ThemeToggle />
-            </div>
-          </aside>
-
-          <div className="flex min-w-0 flex-1 flex-col">
-            <main key={location.pathname} className="mx-auto w-full max-w-7xl flex-1 px-4 py-5 lg:px-6">
-              {children}
-            </main>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // Embedded in the Kleegr / GoHighLevel iframe: compact shell. The standalone
+  // layout below is returned unchanged.
+  if (embedded) return <EmbeddedShell>{children}</EmbeddedShell>;
 
   return (
     <div className="flex min-h-screen flex-col">

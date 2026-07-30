@@ -92,6 +92,50 @@ Covered by `api/_lib/kleegr-salesperson-link.test.ts`
 `upsertUserForClaims` + `ensureSalespersonForUser` against an in-memory
 `users`/`salespeople` pair and reproduces `readScopedState`'s filter verbatim.
 
+## Embedding (`frame-ancestors`)
+
+SCM is framed **two levels deep**: the GoHighLevel host frames Smart
+Productivity, which frames SCM. CSP checks `frame-ancestors` against **every**
+ancestor in that chain, so *both* the GHL host origin and Smart Productivity's
+origin must be listed — allowing only the immediate parent is still refused.
+
+The single source of these origins is the `headers` block in `vercel.json`
+(there is no middleware and no `X-Frame-Options` anywhere; adding one would
+override this CSP in Chrome and must not be reintroduced):
+
+```
+frame-ancestors 'self'
+  https://*.gohighlevel.com https://*.leadconnectorhq.com https://*.msgsndr.com
+  https://smart-productivity-pied.vercel.app
+  https://crm.kleegr.com https://*.kleegr.com
+```
+
+`crm.kleegr.com` is the agency's **white-label GoHighLevel domain**. A
+white-labelled agency portal is served from its own domain, so `*.gohighlevel.com`
+never matches and the frame is refused even though the integration is otherwise
+healthy. Any new agency on its own domain needs its origin added here.
+
+### Diagnosing "refused to connect"
+
+Chrome renders *"…refused to connect"* (es: *"rechazó la conexión"*) for a framed
+document in two very different situations, and they need opposite fixes:
+
+```
+curl -sSI https://sales-commission-manager.vercel.app/kleegr/launch \
+  | grep -iE '^HTTP|x-frame-options|content-security-policy'
+```
+
+- `200` + a CSP whose `frame-ancestors` omits the embedding origin → add the
+  origin above.
+- `401` (plus a `_vercel_sso_nonce` cookie) → this is **Vercel Deployment
+  Protection**, not a header problem. Its interstitial sends
+  `X-Frame-Options: DENY`, which refuses inside an iframe while a top-level tab
+  succeeds for anyone already signed in to Vercel. Disable protection for the
+  project, or add a bypass.
+
+Note that *missing* framing headers **permit** framing — so "the CSP has not
+deployed yet" can never be the explanation for a refusal.
+
 ## Endpoints
 
 | Route | Method | Auth | Purpose |

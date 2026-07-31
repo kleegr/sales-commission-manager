@@ -8,9 +8,10 @@
 // assigned to this affiliate (they cannot file against anyone else).
 // ============================================================================
 
-import { useMemo, useState } from "react";
-import { Handshake, Copy, Check, Plus, Link2, Loader2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Handshake, Copy, Check, Plus, Link2, Loader2, RefreshCw } from "lucide-react";
 import { useApp } from "../store/AppContext";
+import { useAuth } from "../store/AuthContext";
 import {
   PageHeader,
   Card,
@@ -33,6 +34,8 @@ import {
   TD,
 } from "../components/ui";
 import { Modal } from "../components/ui/Modal";
+import { PortalSkeleton } from "../components/PortalSkeleton";
+import { portalView } from "../lib/portal-state";
 import { fullLedger, displayStatus, clientLabel } from "../lib/ledger";
 import { commissionTotals } from "../lib/analytics";
 import { formatCurrency, formatDate } from "../lib/format";
@@ -52,7 +55,8 @@ function emptyLead(): LeadDraft {
 }
 
 export default function AffiliatePortal() {
-  const { data, reload, role } = useApp();
+  const { data, reload, role, hydrating } = useApp();
+  const { user } = useAuth();
   const me = data.salespeople[0]; // self-scoped: the only person is this user
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<LeadDraft>(emptyLead());
@@ -112,7 +116,55 @@ export default function AffiliatePortal() {
     }
   }
 
-  if (!me) {
+  // --- launch/loading gate ---------------------------------------------------
+  // Same rule as the salesperson portal: `data` is empty until /api/state lands,
+  // so `me` is undefined on first paint for EVERY user. The session's
+  // salespersonId (from /api/auth/me, resolved before this mounts) is what tells
+  // a genuinely unlinked account apart from one that is merely still loading.
+  const linkedSalespersonId = user?.salespersonId ?? null;
+  const [retryExhausted, setRetryExhausted] = useState(false);
+  const retried = useRef(false);
+
+  useEffect(() => {
+    if (hydrating || me || !linkedSalespersonId || retried.current) return;
+    retried.current = true;
+    // See SalespersonPortal: no `alive` guard, or StrictMode's double-invoke
+    // would swallow the result and strand the skeleton.
+    void reload()
+      .catch(() => {
+        /* the store falls back on its own; the retry simply didn't help */
+      })
+      .finally(() => setRetryExhausted(true));
+  }, [hydrating, me, linkedSalespersonId, reload]);
+
+  const view = portalView({
+    hydrating,
+    hasProfile: !!me,
+    linkedSalespersonId,
+    retryExhausted,
+  });
+
+  if (view === "loading") return <PortalSkeleton title={`${roleLabel} Portal`} />;
+
+  if (view === "unavailable") {
+    return (
+      <div>
+        <PageHeader title={`${roleLabel} Portal`} />
+        <EmptyState
+          icon={<Handshake className="h-6 w-6" />}
+          title="Couldn't load your profile"
+          description={`Your account is linked to a ${roleLabel.toLowerCase()} record, but we couldn't load it just now. This is usually a temporary connection problem.`}
+          action={
+            <Button variant="secondary" onClick={() => void reload()}>
+              <RefreshCw className="h-4 w-4" /> Try again
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
+  if (view === "unlinked") {
     return (
       <div>
         <PageHeader title={`${roleLabel} Portal`} />

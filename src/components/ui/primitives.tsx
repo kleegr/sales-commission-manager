@@ -293,6 +293,30 @@ export function EmptyState({
   );
 }
 
+// ----------------------------------------------------------------------------
+// Skeleton
+//
+// A placeholder block for content that is still loading. Use this instead of an
+// empty state whenever "we have nothing yet" might just mean "the fetch hasn't
+// come back" — an empty state that turns out to be wrong reads as a bug to the
+// user (see the "No profile found" flash on portal launch).
+//
+// aria-hidden because the shapes carry no meaning; announce the wait once on the
+// wrapper (role="status" + aria-busy) rather than on every bar.
+// ----------------------------------------------------------------------------
+
+export function Skeleton({ className }: { className?: string }) {
+  return (
+    <div
+      aria-hidden="true"
+      className={classNames(
+        "animate-pulse rounded-md bg-slate-200/80 dark:bg-slate-800",
+        className,
+      )}
+    />
+  );
+}
+
 export function SectionTitle({
   children,
   right,

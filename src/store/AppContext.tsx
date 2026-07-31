@@ -10,11 +10,13 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
   useReducer,
   useRef,
+  useState,
   type ReactNode,
 } from "react";
 import type {
@@ -315,6 +317,19 @@ interface Ctx {
   role: string;
   readOnly: boolean;
   reload: () => Promise<void>;
+  /**
+   * True from mount until the FIRST store.load() settles (success or failure).
+   *
+   * `data` starts out as emptyData() — an empty dataset that is indistinguishable
+   * from "this tenant genuinely has no rows". Without this flag a consumer can
+   * only guess, and pages guessed wrong: the salesperson portal rendered its
+   * "No profile found" empty state for the ~1-2s the /api/state round trip takes,
+   * then swapped to the real portal. Gate any "nothing here" UI on this.
+   *
+   * Deliberately NOT set by reload(): a post-write refresh must not blank a page
+   * that is already showing good data.
+   */
+  hydrating: boolean;
 }
 
 const AppCtx = createContext<Ctx | null>(null);
@@ -346,6 +361,9 @@ function emptyData(): AppData {
 export function AppProvider({ children }: { children: ReactNode }) {
   const [data, dispatch] = useReducer(reducer, undefined, emptyData);
   const hydrated = useRef(false);
+  // Render-visible twin of `hydrated` (a ref deliberately does not re-render).
+  // Consumers read this to tell "still fetching" from "genuinely empty".
+  const [hydrating, setHydrating] = useState(true);
   // When true, the next persist effect is skipped. Set by reload(): re-pulling
   // authoritative server data should not be echoed straight back as a snapshot
   // write. This is what lets per-resource API writes (salespeople, settings,
@@ -358,7 +376,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const loaded = await store.load();
+      let loaded: AppData | null = null;
+      try {
+        loaded = await store.load();
+      } catch {
+        /* the store already falls back to localStorage; treat a hard failure as
+           "no data" so the UI leaves its loading state instead of hanging. */
+      }
       if (cancelled) return;
       if (loaded) {
         dispatch({ type: "HYDRATE", data: loaded });
@@ -369,6 +393,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "HYDRATE", data: emptyData() });
       }
       hydrated.current = true;
+      // Always clear, success or failure: a page stuck on a spinner is worse
+      // than one showing an honest empty state.
+      setHydrating(false);
     })();
     return () => {
       cancelled = true;
@@ -404,13 +431,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Re-pull the authoritative dataset from the server. Used after server-side
   // workflow actions (e.g. payout transitions, salespeople/settings writes)
   // that change rows directly.
-  async function reload(): Promise<void> {
+  // Stable identity (store/dispatch/refs are all stable) so consumers can put
+  // it in an effect dependency list without re-running the effect every render.
+  const reload = useCallback(async (): Promise<void> => {
     const loaded = await store.load();
     if (loaded) {
       suppressPersist.current = true;
       dispatch({ type: "HYDRATE", data: loaded });
     }
-  }
+  }, []);
 
   const { user } = useAuth();
   const value = useMemo(() => {
@@ -424,8 +453,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       role: user?.role ?? "",
       readOnly: info.readOnly,
       reload,
+      hydrating,
     };
-  }, [data, user]);
+  }, [data, user, reload, hydrating]);
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>;
 }

@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
-import { UserRound, Building2, Plus, Loader2, Flag } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { UserRound, Building2, Plus, Loader2, Flag, RefreshCw } from "lucide-react";
 import { useApp } from "../store/AppContext";
+import { useAuth } from "../store/AuthContext";
 import {
   PageHeader,
   Card,
@@ -24,6 +25,8 @@ import {
   TD,
 } from "../components/ui";
 import { Modal } from "../components/ui/Modal";
+import { PortalSkeleton } from "../components/PortalSkeleton";
+import { portalView } from "../lib/portal-state";
 import { MoneyBarChart } from "../components/charts/Charts";
 import { fullLedger, displayStatus, clientLabel } from "../lib/ledger";
 import { commissionTotals, monthlySeries } from "../lib/analytics";
@@ -59,7 +62,8 @@ const GOAL_METRIC_NOUN: Record<string, string> = {
 const GOAL_PERIOD_LABEL: Record<string, string> = { monthly: "this month", quarterly: "this quarter", custom: "this period" };
 
 export default function SalespersonPortal() {
-  const { data, reload } = useApp();
+  const { data, reload, hydrating } = useApp();
+  const { user } = useAuth();
   // Self-scoped: under real auth /api/state returns only the logged-in
   // salesperson, so the portal always shows that single person's own data.
   const sp = data.salespeople[0];
@@ -171,7 +175,61 @@ export default function SalespersonPortal() {
     return projectedCommissionPerDeal(plan, a.avgSetupFee, a.avgMonthly);
   }, [sp, data.plans, data.settings.assumptions]);
 
-  if (!sp) {
+  // --- launch/loading gate ---------------------------------------------------
+  // `data` starts as an EMPTY dataset and is only replaced when /api/state comes
+  // back (~1-2s on a cold serverless start), so `sp` is undefined on first paint
+  // for everyone. Rendering "No profile found" off that was the launch flash.
+  // The session already knows the answer: /api/auth/me carries salespersonId and
+  // resolves before this component ever mounts.
+  const linkedSalespersonId = user?.salespersonId ?? null;
+  const [retryExhausted, setRetryExhausted] = useState(false);
+  const retried = useRef(false);
+
+  // One-shot re-pull for the narrow case where the session says this account IS
+  // linked but the dataset came back without the row — a stale localStorage
+  // fallback (see HybridStore.load) or a read that raced the link write. One
+  // retry only; never a poll loop.
+  useEffect(() => {
+    if (hydrating || sp || !linkedSalespersonId || retried.current) return;
+    retried.current = true;
+    // No cleanup guard on the setter: under StrictMode's mount/cleanup/mount the
+    // ref already blocks the second run, so gating on an `alive` flag would drop
+    // the only result we get and leave the skeleton up forever.
+    void reload()
+      .catch(() => {
+        /* the store falls back on its own; the retry simply didn't help */
+      })
+      .finally(() => setRetryExhausted(true));
+  }, [hydrating, sp, linkedSalespersonId, reload]);
+
+  const view = portalView({
+    hydrating,
+    hasProfile: !!sp,
+    linkedSalespersonId,
+    retryExhausted,
+  });
+
+  if (view === "loading") return <PortalSkeleton title="Salesperson portal" />;
+
+  if (view === "unavailable") {
+    return (
+      <div>
+        <PageHeader title="Salesperson portal" />
+        <EmptyState
+          icon={<UserRound className="h-6 w-6" />}
+          title="Couldn't load your profile"
+          description="Your account is linked to a salesperson record, but we couldn't load it just now. This is usually a temporary connection problem."
+          action={
+            <Button variant="secondary" onClick={() => void reload()}>
+              <RefreshCw className="h-4 w-4" /> Try again
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
+  if (view === "unlinked") {
     return (
       <div>
         <PageHeader title="Salesperson portal" />

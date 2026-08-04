@@ -12,7 +12,7 @@ const ERROR_TEXT: Record<string, string> = {
 };
 
 export default function Login() {
-  const { login } = useAuth();
+  const { login, expired } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [tenant, setTenant] = useState("");
@@ -44,6 +44,15 @@ export default function Login() {
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          {/* The server rejected the session mid-use (see sessionExpired() in
+              AuthContext). Say why they are back here — landing on a bare login
+              form with no explanation reads as the app having lost their work. */}
+          {expired && !error && (
+            <p className="mb-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-500/10 dark:text-amber-300">
+              Your session expired. Please sign in again to continue.
+            </p>
+          )}
+
           <form onSubmit={submit} className="space-y-4">
             <Field label="Email">
               <Input

@@ -9,17 +9,23 @@
 //   4. map the Kleegr role → our role
 //   5. upsert the tenant (sub-account) + user, then create OUR OWN session
 //   6. (best effort) run a small first sync + report 'connected' to Kleegr
-//   7. redirect into the correct workspace
+//   7. hand off into the correct workspace
 //
-// The launch token is used ONCE (verify + the immediate gateway sync) and is
-// NEVER cached, reused, persisted, or sent to the browser. We mint our own
-// short cookie session instead.
+// The KLEEGR LAUNCH TOKEN is used ONCE (verify + the immediate gateway sync)
+// and is NEVER cached, reused, persisted, or sent to the browser. We mint our
+// OWN short session and hand that to the browser instead.
+//
+// Step 7 is a client-side handoff rather than a 302 because mobile WebViews
+// block third-party cookies inside the Smart Productivity iframe: the session
+// is delivered BOTH as a Set-Cookie (direct web browsing) and via localStorage
+// + `Authorization: Bearer` (embedded/mobile). See _lib/launch-handoff.ts.
 // ============================================================================
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { hasDb } from "../_lib/db.js";
 import { ensureSchema } from "../_lib/repository.js";
 import { createSession, setSessionCookie } from "../_lib/auth.js";
+import { renderLaunchHandoff } from "../_lib/launch-handoff.js";
 import {
   verifyLaunchToken,
   reportIntegrationStatus,
@@ -154,10 +160,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       /* status reporting is best-effort */
     }
 
-    // 7. redirect into the correct workspace for this role
+    // 7. hand off into the correct workspace for this role.
+    //
+    //    NOT a 302. Smart Productivity frames this app on mobile, where iOS
+    //    WebKit / Android WebView block third-party cookies: the Set-Cookie
+    //    above is silently dropped inside the iframe, and a plain redirect
+    //    would land on a dashboard with no credential at all — which is
+    //    exactly why the manual "Sign in to your workspace" screen kept
+    //    appearing after a successful launch.
+    //
+    //    Instead we return a one-shot HTML handoff that puts the session token
+    //    in localStorage (first-party to THIS origin, so a WebView cannot block
+    //    it) and then location.replace()s into the workspace. The client
+    //    replays it as `Authorization: Bearer …` on every /api call; see
+    //    src/lib/api-auth.ts and getSessionTokens() in api/_lib/auth.ts.
+    //
+    //    The cookie is still set for direct (non-framed) browsing, so nothing
+    //    about the standard web login path changes.
     const target = `${homePathFor(mappedRole)}?kleegr=connected`;
-    res.status(302).setHeader("Location", target);
-    return res.end();
+    res.status(200);
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    // The body carries a live session token — it must never be cached by a
+    // CDN, a WebView, or the back/forward cache.
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    return res.send(renderLaunchHandoff(target, sessionToken));
   } catch (err: any) {
     return sendLaunchError(res, 500, String(err?.message ?? err).slice(0, 120));
   }

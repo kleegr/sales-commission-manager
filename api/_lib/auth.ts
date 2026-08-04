@@ -238,12 +238,57 @@ export function clearSessionCookie(res: VercelResponse): void {
   ]);
 }
 
+// ---------------------------------------------------------------------------
+// Session TRANSPORT: Authorization: Bearer … first, then the cookie
+//
+// Mobile WebViews (iOS WebKit, Android WebView) block THIRD-PARTY cookies
+// outright. When Smart Productivity frames this app, our own `scm_session`
+// cookie is third-party inside that iframe, so it is never stored and never
+// sent back — every subsequent request looked unauthenticated and the user was
+// bounced to the manual login screen even though the launch had succeeded.
+//
+// The fix is a second transport that a WebView cannot block: the Kleegr launch
+// hands the session token to the framed document (see api/kleegr/launch.ts),
+// which keeps it in localStorage — FIRST-party to this origin, iframe or not —
+// and replays it as `Authorization: Bearer <token>` on every /api call.
+//
+// Both transports carry the SAME opaque session token and are validated by the
+// exact same `sessions` row lookup, so a Bearer session is neither more nor
+// less privileged than a cookie session. Candidates are tried in order and the
+// first one that resolves to a live session wins, so a stale Bearer token can
+// never shadow a valid cookie (and vice versa).
+// ---------------------------------------------------------------------------
+
+/** The raw token from `Authorization: Bearer <token>`, if present. */
+export function readBearerToken(req: VercelRequest): string | null {
+  const header = req.headers.authorization;
+  if (!header || typeof header !== "string") return null;
+  if (!header.toLowerCase().startsWith("bearer ")) return null;
+  const token = header.slice(7).trim();
+  return token || null;
+}
+
+/**
+ * Every session token this request offers, most specific first:
+ * the Bearer header (the embedded/mobile transport), then the cookie.
+ * Deduplicated, so the common case costs a single lookup.
+ */
+export function getSessionTokens(req: VercelRequest): string[] {
+  const tokens: string[] = [];
+  const bearer = readBearerToken(req);
+  if (bearer) tokens.push(bearer);
+  const cookie = readCookie(req);
+  if (cookie && cookie !== bearer) tokens.push(cookie);
+  return tokens;
+}
+
+/** The primary session token for this request (Bearer header, else cookie). */
 export function getSessionToken(req: VercelRequest): string | null {
-  return readCookie(req);
+  return getSessionTokens(req)[0] ?? null;
 }
 
 // ---------------------------------------------------------------------------
-// Resolve the current user from the request cookie (the auth gate)
+// Resolve the current user from the request (the auth gate)
 // ---------------------------------------------------------------------------
 
 export async function getSessionUser(req: VercelRequest): Promise<SessionUser | null> {
@@ -254,9 +299,8 @@ export async function getSessionUser(req: VercelRequest): Promise<SessionUser | 
   return getDemoUser(req);
 }
 
-/** The real, cookie-backed session lookup (no demo fallback). */
-export async function getRealSessionUser(req: VercelRequest): Promise<SessionUser | null> {
-  const token = getSessionToken(req);
+/** Look one raw session token up in `sessions`. Expired rows are swept. */
+export async function getSessionUserForToken(token: string): Promise<SessionUser | null> {
   if (!token) return null;
   const { rows } = await query<any>(
     `SELECT u.id, u.tenant_id, u.name, u.email, u.role, u.salesperson_id,
@@ -283,6 +327,20 @@ export async function getRealSessionUser(req: VercelRequest): Promise<SessionUse
     role: row.role as Role,
     salespersonId: row.salesperson_id ?? null,
   };
+}
+
+/**
+ * The real, session-backed lookup (no demo fallback). Tries the Bearer header
+ * then the cookie; an unusable candidate (expired, revoked, or — on
+ * /api/kleegr/sync — a Kleegr launch token that is not one of ours at all)
+ * simply falls through to the next one.
+ */
+export async function getRealSessionUser(req: VercelRequest): Promise<SessionUser | null> {
+  for (const token of getSessionTokens(req)) {
+    const user = await getSessionUserForToken(token);
+    if (user) return user;
+  }
+  return null;
 }
 
 /** Convenience guard for endpoints. Returns the user or sends 401 and null. */

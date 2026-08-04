@@ -8,6 +8,7 @@ import {
   readBearerToken,
   getSessionTokens,
   getSessionToken,
+  isEmbeddedClient,
 } from "./auth.js";
 import type { VercelRequest } from "@vercel/node";
 
@@ -120,6 +121,27 @@ ok("cookie value is URL-decoded", getSessionTokens(encoded).join() === "a+b/c=")
 // Only OUR cookie counts — a same-named-prefix cookie must not be picked up.
 const decoy = req({ cookie: "scm_session_other=nope; scm_session=real" });
 ok("a decoy cookie name is not mistaken for the session", getSessionToken(decoy) === "real");
+
+// ---------------------------------------------------------------------------
+// Embedded-client declaration (decides whether a login response carries the
+// raw session token, the transport a WebView cannot block).
+// ---------------------------------------------------------------------------
+
+console.log("\n[Login handoff · only an EMBEDDED client is handed the token]");
+
+ok("boolean true", isEmbeddedClient(true));
+ok('string "true" (JSON round-trip)', isEmbeddedClient("true"));
+ok('string "1"', isEmbeddedClient("1"));
+ok("number 1", isEmbeddedClient(1));
+
+ok("boolean false", !isEmbeddedClient(false));
+ok('string "false"', !isEmbeddedClient("false"));
+ok("absent/undefined ⇒ plain browser login stays cookie-only", !isEmbeddedClient(undefined));
+ok("null", !isEmbeddedClient(null));
+ok("empty string", !isEmbeddedClient(""));
+ok("0", !isEmbeddedClient(0));
+ok("an arbitrary string is not a yes", !isEmbeddedClient("yes please"));
+ok("an object is not a yes", !isEmbeddedClient({ embedded: true }));
 
 console.log(`\n========================\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);

@@ -48,8 +48,14 @@ function embeddedFlag(): boolean {
   }
 }
 
-/** Synchronous one-shot check (also latches the ?kleegr=connected flag). */
-function detectEmbedded(): boolean {
+/**
+ * Synchronous one-shot check (also latches the ?kleegr=connected flag).
+ *
+ * Exported because auth needs the answer OUTSIDE the React tree: a login must
+ * tell the server it is framed so the session comes back as a Bearer token as
+ * well as a cookie (see src/store/AuthContext.tsx and api/auth/login.ts).
+ */
+export function detectEmbedded(): boolean {
   return inIframe() || embeddedFlag();
 }
 

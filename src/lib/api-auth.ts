@@ -3,7 +3,12 @@
 //
 // Attaches `Authorization: Bearer <session token>` to every same-origin /api
 // call the app makes, using the token the Kleegr launch stored in localStorage
-// (see session-token.ts and api/_lib/launch-handoff.ts).
+// (see session-token.ts and api/_lib/launch-handoff.ts) or that an embedded
+// login handed back (see api/auth/login.ts).
+//
+// It also replays the review-mode tenant/role selection as the `x-demo-*`
+// headers the server accepts (see demo-prefs.ts) — for the same reason: the
+// cookies that used to carry it are third-party inside the iframe.
 //
 // WHY A GLOBAL fetch WRAPPER, not a shared client:
 // this app has ~47 `fetch("/api/…")` call sites spread across the stores, the
@@ -25,6 +30,7 @@
 // ============================================================================
 
 import { readSessionToken } from "./session-token";
+import { readDemoPrefs } from "./demo-prefs";
 
 /**
  * Endpoints where `Authorization: Bearer …` already means something else — a
@@ -87,21 +93,32 @@ export function installApiAuthInterceptor(): void {
     init?: RequestInit,
   ): Promise<Response> {
     let token: string | null = null;
+    let demoTenant: string | null = null;
+    let demoRole: string | null = null;
     try {
-      if (!hasAuthHeader(input, init) && shouldAttachBearer(urlOf(input), window.location.origin)) {
-        token = readSessionToken();
+      if (shouldAttachBearer(urlOf(input), window.location.origin)) {
+        if (!hasAuthHeader(input, init)) token = readSessionToken();
+        // Review mode: the same choice the scm_demo_* cookies carry, replayed
+        // as headers because those cookies are blocked inside the iframe.
+        const prefs = readDemoPrefs();
+        demoTenant = prefs.tenantSlug;
+        demoRole = prefs.role;
       }
     } catch {
       token = null;
+      demoTenant = null;
+      demoRole = null;
     }
-    if (!token) return nativeFetch(input as RequestInfo, init);
+    if (!token && !demoTenant && !demoRole) return nativeFetch(input as RequestInfo, init);
 
     try {
       const isRequest = typeof input !== "string" && !(input instanceof URL);
       // Seed from whichever object actually carries the headers, so nothing the
       // caller set (content-type, accept, …) is lost when we add ours.
       const headers = new Headers(init?.headers ?? (isRequest ? input.headers : {}));
-      headers.set("Authorization", `Bearer ${token}`);
+      if (token) headers.set("Authorization", `Bearer ${token}`);
+      if (demoTenant) headers.set("x-demo-tenant", demoTenant);
+      if (demoRole) headers.set("x-demo-role", demoRole);
 
       // fetch(Request) with no init: rebuild the Request so its method, body,
       // mode and credentials survive and only the header set changes.

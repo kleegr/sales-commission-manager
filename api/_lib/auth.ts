@@ -287,6 +287,21 @@ export function getSessionToken(req: VercelRequest): string | null {
   return getSessionTokens(req)[0] ?? null;
 }
 
+/**
+ * Did the caller declare itself EMBEDDED (running inside the Kleegr/GHL
+ * iframe)? Only such a client is handed the raw session token in a login
+ * response, because only such a client cannot rely on the cookie: inside a
+ * mobile WebView our `scm_session` cookie is third-party and is dropped.
+ *
+ * A plain browser login stays cookie-only — the token never reaches JS there,
+ * so the httpOnly protection is preserved for the standalone web app.
+ *
+ * Pure (value in, boolean out) so the rule is unit-testable — see auth.test.ts.
+ */
+export function isEmbeddedClient(value: unknown): boolean {
+  return value === true || value === "true" || value === "1" || value === 1;
+}
+
 // ---------------------------------------------------------------------------
 // Resolve the current user from the request (the auth gate)
 // ---------------------------------------------------------------------------

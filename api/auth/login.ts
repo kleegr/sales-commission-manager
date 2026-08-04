@@ -1,5 +1,14 @@
-// POST /api/auth/login   { email, password, tenant? }
+// POST /api/auth/login   { email, password, tenant?, embedded? }
 // Verifies credentials, opens a server session, sets the httpOnly cookie.
+//
+// EMBEDDED CLIENTS additionally get the raw session token back in the response
+// body. Inside the Kleegr/GHL iframe on a phone, the cookie this endpoint sets
+// is THIRD-PARTY and iOS WebKit / Android WebView drop it, so a login there
+// used to leave the app with no usable credential at all: the shell mounted
+// off the response body while every later /api call was unauthenticated. The
+// Kleegr *launch* already solves this by handing the token to localStorage
+// (see _lib/launch-handoff.ts); a manual login needs the same handoff.
+// See the transport notes in _lib/auth.ts.
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { hasDb, query } from "../_lib/db.js";
 import { ensureSchema, seedIfEmpty } from "../_lib/repository.js";
@@ -9,6 +18,7 @@ import {
   setSessionCookie,
   pruneSessions,
   demoModeEnabled,
+  isEmbeddedClient,
   type Role,
 } from "../_lib/auth.js";
 import { DEMO_PASSWORD } from "../_lib/auth-seed.js";
@@ -36,6 +46,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const email = String(body.email ?? "").trim().toLowerCase();
     const password = String(body.password ?? "");
     const tenant = body.tenant ? String(body.tenant).trim() : null;
+    // Set by the client when it is running framed (see src/lib/useEmbedded.ts).
+    const embedded = isEmbeddedClient(body.embedded);
 
     if (!email || !password) {
       return res.status(400).json({ error: "missing_credentials" });
@@ -84,7 +96,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const token = await createSession(user.id, user.tenant_id);
-    setSessionCookie(res, token);
+    // A framed login needs SameSite=None so the cookie is at least *eligible*
+    // to be sent cross-site (desktop embeds, where third-party cookies are
+    // still allowed, keep working off it). Where the WebView blocks it anyway,
+    // the token below is what carries the session.
+    setSessionCookie(res, token, { crossSite: embedded });
     await recordLoginAttempt(ip, email, true);
     await query(`UPDATE users SET last_login_at = now() WHERE id = $1`, [user.id]);
 
@@ -98,6 +114,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         tenantName: user.tenant_name,
         salespersonId: user.salesperson_id ?? null,
       },
+      // Embedded clients ONLY. A standalone browser login is unchanged and
+      // never sees the token, so it stays httpOnly-cookie-only there.
+      ...(embedded ? { token } : {}),
     });
   } catch (err) {
     console.error("[scm:error] login:", err instanceof Error ? (err.stack ?? err.message) : String(err));

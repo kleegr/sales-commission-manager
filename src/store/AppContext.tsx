@@ -33,6 +33,7 @@ import { SCHEMA_VERSION } from "../types";
 import {
   store,
   getBackendInfo,
+  isAuthError,
   type Backend,
 } from "../lib/storage/apiStore";
 import { useAuth } from "./AuthContext";
@@ -318,6 +319,12 @@ interface Ctx {
   readOnly: boolean;
   reload: () => Promise<void>;
   /**
+   * True when `data` came from the localStorage cache because /api/state was
+   * unreachable (network failure or 5xx), rather than from the server. Show it:
+   * the numbers on screen are a snapshot, not live.
+   */
+  isOfflineData: boolean;
+  /**
    * True from mount until the FIRST store.load() settles (success or failure).
    *
    * `data` starts out as emptyData() — an empty dataset that is indistinguishable
@@ -359,6 +366,7 @@ function emptyData(): AppData {
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
+  const { user, sessionExpired } = useAuth();
   const [data, dispatch] = useReducer(reducer, undefined, emptyData);
   const hydrated = useRef(false);
   // Render-visible twin of `hydrated` (a ref deliberately does not re-render).
@@ -370,6 +378,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // payouts) be the real source of truth instead of the snapshot.
   const suppressPersist = useRef(false);
 
+  /**
+   * store.load(), with the one failure the app must not ignore handled once
+   * here rather than at each call site: a 401/403 means this session is over,
+   * so hand it to AuthContext (which drops the token and shows the login
+   * screen) and report "no data" instead of leaving the UI on stale cache.
+   * Every other failure — including the outage path, which store.load()
+   * answers from the cache — is passed through to the caller unchanged.
+   */
+  const loadState = useCallback(async (): Promise<AppData | null> => {
+    try {
+      return await store.load();
+    } catch (err) {
+      if (isAuthError(err)) {
+        sessionExpired();
+        return null;
+      }
+      throw err;
+    }
+  }, [sessionExpired]);
+
   // Load once on mount. If the store is empty we hydrate an EMPTY dataset and do
   // NOT persist it, so the app never silently seeds sample/demo data. Seeding is
   // reserved for the explicit "Reset to demo data" action (RESET_DEMO).
@@ -378,10 +406,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     (async () => {
       let loaded: AppData | null = null;
       try {
-        loaded = await store.load();
+        loaded = await loadState();
       } catch {
-        /* the store already falls back to localStorage; treat a hard failure as
-           "no data" so the UI leaves its loading state instead of hanging. */
+        /* An outage is already answered from the cache inside the store, and a
+           dead session is handled by loadState(). Whatever is left is a real
+           error with nothing to show for it — treat it as "no data" so the UI
+           leaves its loading state instead of hanging. */
       }
       if (cancelled) return;
       if (loaded) {
@@ -434,14 +464,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Stable identity (store/dispatch/refs are all stable) so consumers can put
   // it in an effect dependency list without re-running the effect every render.
   const reload = useCallback(async (): Promise<void> => {
-    const loaded = await store.load();
+    const loaded = await loadState();
     if (loaded) {
       suppressPersist.current = true;
       dispatch({ type: "HYDRATE", data: loaded });
     }
-  }, []);
+  }, [loadState]);
 
-  const { user } = useAuth();
   const value = useMemo(() => {
     const info = getBackendInfo();
     return {
@@ -454,6 +483,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       readOnly: info.readOnly,
       reload,
       hydrating,
+      isOfflineData: info.isOfflineData,
     };
   }, [data, user, reload, hydrating]);
 

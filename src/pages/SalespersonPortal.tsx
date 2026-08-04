@@ -220,7 +220,7 @@ export default function SalespersonPortal() {
           title="Couldn't load your profile"
           description="Your account is linked to a salesperson record, but we couldn't load it just now. This is usually a temporary connection problem."
           action={
-            <Button variant="secondary" onClick={() => void reload()}>
+            <Button variant="secondary" onClick={() => void reload().catch(() => {})}>
               <RefreshCw className="h-4 w-4" /> Try again
             </Button>
           }

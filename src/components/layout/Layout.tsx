@@ -230,7 +230,7 @@ function UserCard() {
 }
 
 function DataSourceBadge() {
-  const { backend, tenant, readOnly } = useApp();
+  const { backend, tenant, readOnly, isOfflineData } = useApp();
   const onNeon = backend === "neon";
   const detecting = backend === "unknown";
   return (
@@ -247,10 +247,16 @@ function DataSourceBadge() {
       </span>
       <div className="min-w-0 leading-tight">
         <p className="truncate text-[11px] font-medium text-slate-600 dark:text-slate-300">
-          {detecting ? "Detecting…" : onNeon ? "Neon Postgres" : "Browser storage"}
+          {detecting ? "Detecting…" : onNeon ? "Neon Postgres" : isOfflineData ? "Offline" : "Browser storage"}
         </p>
         <p className="truncate text-[10px] text-slate-400">
-          {onNeon ? `${tenant}${readOnly ? " · read-only" : ""}` : "local fallback"}
+          {onNeon
+            ? `${tenant}${readOnly ? " · read-only" : ""}`
+            : // The server was unreachable, so these numbers are a cached
+              // snapshot rather than live data — say so, don't imply otherwise.
+              isOfflineData
+              ? "showing cached data"
+              : "local fallback"}
         </p>
       </div>
     </div>

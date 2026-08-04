@@ -31,6 +31,15 @@ interface AuthCtx {
   logout: () => Promise<void>;
   /** Re-fetch the current user from the server. */
   refresh: () => Promise<void>;
+  /**
+   * The server rejected this session on a data request (401/403 from
+   * /api/state — see HybridStore.load()). Drops the dead credential and
+   * returns the app to the login screen with an explanation, instead of
+   * leaving the user on a page quietly backed by stale cached data.
+   */
+  sessionExpired: () => void;
+  /** True when the last sign-out was an expiry rather than a deliberate logout. */
+  expired: boolean;
   /** Review mode: switch the viewed tenant + role, then reload the session. */
   setDemo: (tenantSlug: string, role: Role) => Promise<void>;
 }
@@ -45,6 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [demo, setDemoFlag] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [expired, setExpired] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -52,6 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const body = await res.json().catch(() => ({}));
       setDemoFlag(!!body?.demo);
       if (res.ok) {
+        setExpired(false);
         setUser(body.user as AuthUser);
       } else {
         // The server rejected everything this request offered. If a launch
@@ -71,6 +82,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Stable identity: AppContext puts this in a useCallback dependency list.
+  const sessionExpired = useCallback(() => {
+    clearSessionToken();
+    setExpired(true);
+    setUser(null);
+  }, []);
 
   const setDemo = useCallback<AuthCtx["setDemo"]>(
     async (tenantSlug, role) => {
@@ -106,6 +124,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const token = typeof body.token === "string" ? body.token.trim() : "";
         if (token) storeSessionToken(token);
         else clearSessionToken();
+        setExpired(false);
         setUser(body.user as AuthUser);
         return { ok: true };
       }
@@ -125,10 +144,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     clearSessionToken();
     clearDemoPrefs();
+    setExpired(false);
     setUser(null);
   }, []);
 
-  return <Ctx.Provider value={{ user, loading, demo, login, logout, refresh, setDemo }}>{children}</Ctx.Provider>;
+  return (
+    <Ctx.Provider
+      value={{ user, loading, demo, expired, login, logout, refresh, setDemo, sessionExpired }}
+    >
+      {children}
+    </Ctx.Provider>
+  );
 }
 
 export function useAuth(): AuthCtx {

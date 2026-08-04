@@ -8,7 +8,9 @@
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import type { Role } from "../lib/roles";
-import { clearSessionToken, readSessionToken } from "../lib/session-token";
+import { clearSessionToken, readSessionToken, storeSessionToken } from "../lib/session-token";
+import { detectEmbedded } from "../lib/useEmbedded";
+import { clearDemoPrefs, storeDemoPrefs } from "../lib/demo-prefs";
 
 export interface AuthUser {
   id: string;
@@ -74,6 +76,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async (tenantSlug, role) => {
       setDemoCookie("scm_demo_tenant", tenantSlug);
       setDemoCookie("scm_demo_role", role);
+      // Mirror into localStorage so the choice survives inside the iframe,
+      // where those cookies are third-party and get blocked; api-auth.ts
+      // replays it as the x-demo-* headers the server also accepts.
+      storeDemoPrefs(tenantSlug, role);
       await refresh();
     },
     [refresh],
@@ -81,17 +87,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback<AuthCtx["login"]>(async (email, password, tenant) => {
     try {
+      // Tell the server when we are framed: inside the Kleegr/GHL iframe on a
+      // phone the cookie it sets is third-party and the WebView drops it, so
+      // the response has to carry the session token as well or every later
+      // /api call is unauthenticated (Documents/Goals 401, and /api/state 401
+      // masked by the local-storage fallback on the Dashboard).
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email, password, tenant }),
+        body: JSON.stringify({ email, password, tenant, embedded: detectEmbedded() }),
       });
       const body = await res.json().catch(() => ({}));
       if (res.ok) {
-        // A manual login authenticates via the cookie it just set. Retire any
-        // token left over from an earlier Kleegr launch so the two transports
-        // cannot disagree about who is signed in.
-        clearSessionToken();
+        // Adopt the fresh token when the server handed one over (embedded
+        // login); otherwise this login rides the cookie it just set, so retire
+        // any token left from an earlier Kleegr launch — the two transports
+        // must never disagree about who is signed in.
+        const token = typeof body.token === "string" ? body.token.trim() : "";
+        if (token) storeSessionToken(token);
+        else clearSessionToken();
         setUser(body.user as AuthUser);
         return { ok: true };
       }
@@ -110,6 +124,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       /* ignore */
     }
     clearSessionToken();
+    clearDemoPrefs();
     setUser(null);
   }, []);
 

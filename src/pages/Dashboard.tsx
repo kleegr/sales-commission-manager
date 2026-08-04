@@ -75,7 +75,7 @@ export default function Dashboard() {
         actions={<DateRangeFilter value={range} onChange={setRange} />}
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
         <StatCard
           label="Total revenue"
           value={formatCurrency(revenue)}
@@ -104,7 +104,7 @@ export default function Dashboard() {
         />
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
         <StatCard label="Active salespeople" value={formatNumber(activeSalespeople)} icon={<Users className="h-5 w-5" />} tone="indigo" />
         <StatCard label="Active clients" value={formatNumber(activeClients)} icon={<Building2 className="h-5 w-5" />} tone="violet" />
         <StatCard label="Total earned" value={formatCurrency(totals.earned)} sub="Pending + paid" icon={<Clock className="h-5 w-5" />} tone="blue" />

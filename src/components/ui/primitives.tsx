@@ -208,8 +208,8 @@ export function StatCard({
   tone?: Tone;
 }) {
   return (
-    <Card className="flex items-start justify-between">
-      <div className="min-w-0">
+    <div className="flex items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-5">
+      <div className="min-w-0 flex-1">
         <p className="text-sm font-medium text-slate-500 dark:text-slate-400">
           {label}
         </p>
@@ -221,14 +221,14 @@ export function StatCard({
       {icon && (
         <span
           className={classNames(
-            "flex h-10 w-10 flex-none items-center justify-center rounded-lg",
+            "flex h-10 w-10 shrink-0 flex-none items-center justify-center rounded-lg",
             tones[tone],
           )}
         >
           {icon}
         </span>
       )}
-    </Card>
+    </div>
   );
 }
 

@@ -286,9 +286,42 @@ Kleegr opens the app at **`/kleegr/launch`** (rewritten to the
 handler verifies the token with Kleegr, validates the claims (`valid`,
 `aud = sales-commission-manager`, `exp`, `sp_user_id`, `sub_account_id`), maps
 the Kleegr role, upserts the tenant (sub-account) and the user, mints **our own**
-httpOnly session cookie, runs a small first sync, reports `connected` back to
-Kleegr, and redirects into the right workspace. The launch token is used **once**
-and is never cached, reused, persisted, or sent to the browser.
+session, runs a small first sync, reports `connected` back to Kleegr, and hands
+off into the right workspace. The Kleegr launch token is used **once** and is
+never cached, reused, persisted, or sent to the browser.
+
+#### Session transport (mobile WebViews)
+
+The launch does **not** finish with a 302. Smart Productivity frames this app,
+and inside that iframe our `scm_session` cookie is *third-party* — iOS WebKit
+and Android WebView block third-party cookies outright, so the cookie set on a
+redirect response was dropped and the user landed on the manual
+"Sign in to your workspace" screen despite a successful launch.
+
+The session is therefore delivered over **two transports**:
+
+| Transport                                    | Set by                     | Used for                        |
+| -------------------------------------------- | -------------------------- | ------------------------------- |
+| `scm_session` httpOnly cookie                | `setSessionCookie()`       | direct (non-framed) web browsing |
+| `Authorization: Bearer <token>`              | client, from localStorage  | the embedded / mobile iframe     |
+
+The launch returns a small HTML handoff document
+(`api/_lib/launch-handoff.ts`) that writes the session token to
+`localStorage["scm_session_token"]` — *first-party* to this origin, so a WebView
+allows it — and then `location.replace()`s into the workspace. The cookie is
+still set on that same response, so nothing about standard web login changes.
+
+On the client, `src/lib/api-auth.ts` patches `window.fetch` once at boot and
+attaches the Bearer header to every **same-origin `/api/*`** request (never
+cross-origin, never over a caller's own `Authorization` header, and never on
+`/api/kleegr/launch` or `/api/kleegr/sync`, where a Bearer header means a Kleegr
+launch token instead).
+
+On the server, `getSessionTokens()` in `api/_lib/auth.ts` offers the Bearer
+token first and the cookie second; both are validated by the *same* `sessions`
+row lookup, so a Bearer session is neither more nor less privileged than a
+cookie session, and a stale token in either transport simply falls through to
+the other. Logout revokes both.
 
 ### Role mapping
 

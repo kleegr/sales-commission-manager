@@ -1,6 +1,15 @@
 // Minimal, dependency-free tests for the auth password primitives.
 // Run via `tsx api/_lib/auth.test.ts` (wired into `npm test`).
-import { hashPassword, verifyPassword, demoModeEnabled, isDemoSlug } from "./auth.js";
+import {
+  hashPassword,
+  verifyPassword,
+  demoModeEnabled,
+  isDemoSlug,
+  readBearerToken,
+  getSessionTokens,
+  getSessionToken,
+} from "./auth.js";
+import type { VercelRequest } from "@vercel/node";
 
 let passed = 0;
 let failed = 0;
@@ -63,6 +72,54 @@ ok("demo slug 'demo' is allowed", isDemoSlug("demo") === true);
 ok("demo slug 'acme' is allowed", isDemoSlug("acme") === true);
 ok("a real Kleegr slug is NOT a demo slug", isDemoSlug("k-ygsxkbj2ezscgrlxh6tr") === false);
 ok("empty slug is NOT a demo slug", isDemoSlug("") === false);
+
+// ---------------------------------------------------------------------------
+// Session transport: Authorization: Bearer … first, cookie second.
+//
+// This is the mobile-WebView fix. Inside the Smart Productivity iframe the
+// `scm_session` cookie is third-party and is blocked outright by iOS WebKit /
+// Android WebView, so the embedded client replays the session token as a
+// Bearer header instead. Both candidates must be offered to the session
+// lookup, in that order, and neither may be dropped.
+// ---------------------------------------------------------------------------
+
+console.log("\n[Auth · session transport (Bearer + cookie)]");
+
+const req = (headers: Record<string, string>) => ({ headers }) as unknown as VercelRequest;
+
+ok("no credentials at all → no candidates", getSessionTokens(req({})).length === 0);
+
+const cookieOnly = req({ cookie: "scm_session=cookie-token; other=x" });
+ok("cookie only → the cookie token", getSessionTokens(cookieOnly).join() === "cookie-token");
+ok("cookie only → getSessionToken agrees", getSessionToken(cookieOnly) === "cookie-token");
+
+const bearerOnly = req({ authorization: "Bearer bearer-token" });
+ok("Bearer only → the bearer token", getSessionTokens(bearerOnly).join() === "bearer-token");
+ok("Bearer only → getSessionToken agrees", getSessionToken(bearerOnly) === "bearer-token");
+
+const both = req({ authorization: "Bearer bearer-token", cookie: "scm_session=cookie-token" });
+ok("both → Bearer is tried FIRST", getSessionTokens(both)[0] === "bearer-token");
+ok("both → the cookie is still offered as a fallback", getSessionTokens(both)[1] === "cookie-token");
+ok("both → exactly two candidates", getSessionTokens(both).length === 2);
+
+const same = req({ authorization: "Bearer same-token", cookie: "scm_session=same-token" });
+ok("identical Bearer + cookie are deduplicated", getSessionTokens(same).length === 1);
+
+ok("scheme is case-insensitive", readBearerToken(req({ authorization: "bearer tok" })) === "tok");
+ok("BEARER uppercase accepted", readBearerToken(req({ authorization: "BEARER tok" })) === "tok");
+ok("surrounding whitespace trimmed", readBearerToken(req({ authorization: "Bearer  tok  " })) === "tok");
+ok("a Basic header is NOT a session token", readBearerToken(req({ authorization: "Basic abc" })) === null);
+ok("an empty Bearer value is null", readBearerToken(req({ authorization: "Bearer " })) === null);
+ok("a bare token with no scheme is ignored", readBearerToken(req({ authorization: "tok" })) === null);
+ok("a missing header is null", readBearerToken(req({})) === null);
+
+// A URL-encoded cookie value must decode identically to what setSessionCookie wrote.
+const encoded = req({ cookie: "scm_session=a%2Bb%2Fc%3D" });
+ok("cookie value is URL-decoded", getSessionTokens(encoded).join() === "a+b/c=");
+
+// Only OUR cookie counts — a same-named-prefix cookie must not be picked up.
+const decoy = req({ cookie: "scm_session_other=nope; scm_session=real" });
+ok("a decoy cookie name is not mistaken for the session", getSessionToken(decoy) === "real");
 
 console.log(`\n========================\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);

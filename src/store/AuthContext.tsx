@@ -8,6 +8,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import type { Role } from "../lib/roles";
+import { clearSessionToken, readSessionToken } from "../lib/session-token";
 
 export interface AuthUser {
   id: string;
@@ -51,6 +52,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (res.ok) {
         setUser(body.user as AuthUser);
       } else {
+        // The server rejected everything this request offered. If a launch
+        // token is sitting in localStorage it is dead (expired or revoked) —
+        // drop it, so it stops being replayed on every later request and can
+        // never shadow a fresh cookie session established by a manual login.
+        if (res.status === 401 && readSessionToken()) clearSessionToken();
         setUser(null);
       }
     } catch {
@@ -82,6 +88,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
       const body = await res.json().catch(() => ({}));
       if (res.ok) {
+        // A manual login authenticates via the cookie it just set. Retire any
+        // token left over from an earlier Kleegr launch so the two transports
+        // cannot disagree about who is signed in.
+        clearSessionToken();
         setUser(body.user as AuthUser);
         return { ok: true };
       }
@@ -93,10 +103,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     try {
+      // The interceptor still attaches the Bearer token here, so the server can
+      // revoke the embedded session as well as the cookie one.
       await fetch("/api/auth/logout", { method: "POST" });
     } catch {
       /* ignore */
     }
+    clearSessionToken();
     setUser(null);
   }, []);
 

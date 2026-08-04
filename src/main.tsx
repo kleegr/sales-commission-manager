@@ -6,7 +6,15 @@ import Login from "./pages/Login";
 import { AppProvider } from "./store/AppContext";
 import { AuthProvider, useAuth } from "./store/AuthContext";
 import { FeaturesProvider } from "./store/FeaturesContext";
+import { installApiAuthInterceptor } from "./lib/api-auth";
 import "./index.css";
+
+// Install the Bearer-token transport BEFORE anything renders, so the very first
+// request the app makes (AuthProvider's /api/auth/me) already carries the
+// session handed over by the Kleegr launch. Inside a mobile WebView that header
+// is the only credential that survives — the session cookie is third-party
+// there and is blocked. See src/lib/api-auth.ts.
+installApiAuthInterceptor();
 
 /** Decides between the login screen and the authenticated app shell. */
 function Root() {

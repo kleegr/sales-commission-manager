@@ -3,7 +3,7 @@ import { Download, BookOpen, RefreshCw } from "lucide-react";
 import { useApp } from "../store/AppContext";
 import { useAuth } from "../store/AuthContext";
 import { ADMIN_ROLES } from "../lib/roles";
-import type { CommissionStatus } from "../types";
+import type { CommissionEntry, CommissionStatus } from "../types";
 import {
   PageHeader,
   Button,
@@ -27,6 +27,7 @@ import { formatCurrency, formatDate, formatPercent } from "../lib/format";
 import { downloadCSV } from "../lib/export";
 import { releaseCommissions, recomputeLedger } from "../lib/resource-client";
 import { errorMessage } from "../lib/api-errors";
+import { CommissionBreakdownModal } from "../components/CommissionBreakdownModal";
 
 const PAYMENT_TYPE_LABEL: Record<string, string> = {
   setup_fee: "Setup fee",
@@ -58,6 +59,7 @@ export default function Ledger() {
   const [statusFilter, setStatusFilter] = useState<CommissionStatus | "all" | "real">("all");
   const [range, setRange] = useState<DateRange>({ from: null, to: null });
   const [error, setError] = useState<string | null>(null);
+  const [breakdownOf, setBreakdownOf] = useState<CommissionEntry | null>(null);
 
   const ledger = useMemo(() => fullLedger(data, 24), [data]);
   const spName = (id: string) => data.salespeople.find((s) => s.id === id)?.name ?? "—";
@@ -263,7 +265,16 @@ export default function Ledger() {
                       : formatCurrency(e.commissionValue)}
                   </TD>
                   <TD className="text-right font-semibold tabular-nums text-slate-900 dark:text-white">
-                    {formatCurrency(e.commissionAmount)}
+                    {/* Every amount is traceable: open the arithmetic that
+                        produced it rather than asking the rep to trust it. */}
+                    <button
+                      type="button"
+                      onClick={() => setBreakdownOf(e)}
+                      title="Show how this was calculated"
+                      className="rounded underline decoration-dotted decoration-slate-300 underline-offset-4 transition hover:text-brand-600 hover:decoration-brand-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 dark:decoration-slate-600"
+                    >
+                      {formatCurrency(e.commissionAmount)}
+                    </button>
                   </TD>
                   <TD>
                     <div className="flex flex-col items-start gap-1">
@@ -303,8 +314,29 @@ export default function Ledger() {
         client is active, or an admin approves it); it then becomes <span className="font-medium">Pending</span>
         and ready to pay out. Commissions for clients who cancel inside the clawback window are
         <span className="font-medium"> Clawed back</span>. Submitting, approving, paying, or clawing
-        back a line locks its status.
+        back a line locks its status. Select any commission amount to see the exact arithmetic that
+        produced it.
       </p>
+
+      <CommissionBreakdownModal
+        entry={breakdownOf}
+        plan={
+          breakdownOf
+            ? data.plans.find(
+                (pl) =>
+                  pl.id ===
+                  data.salespeople.find((sp) => sp.id === breakdownOf.salespersonId)
+                    ?.commissionPlanId,
+              )
+            : undefined
+        }
+        client={
+          breakdownOf?.clientId
+            ? data.clients.find((c) => c.id === breakdownOf.clientId)
+            : undefined
+        }
+        onClose={() => setBreakdownOf(null)}
+      />
     </div>
   );
 }

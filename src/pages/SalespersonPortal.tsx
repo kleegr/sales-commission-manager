@@ -27,13 +27,15 @@ import {
 import { Modal } from "../components/ui/Modal";
 import { PortalSkeleton } from "../components/PortalSkeleton";
 import { WithdrawalCard } from "../components/portal/WithdrawalCard";
+import { EarningsPlanner } from "../components/portal/EarningsPlanner";
+import { CommissionBreakdownModal } from "../components/CommissionBreakdownModal";
 import { portalView } from "../lib/portal-state";
 import { MoneyBarChart } from "../components/charts/Charts";
 import { fullLedger, displayStatus, clientLabel } from "../lib/ledger";
 import { commissionTotals, monthlySeries } from "../lib/analytics";
 import { formatCurrency, formatDate, formatNumber, todayISO } from "../lib/format";
 import { listGoals } from "../lib/resource-client";
-import type { Goal, Milestone } from "../types";
+import type { CommissionEntry, Goal, Milestone } from "../types";
 import { goalProgress, paceProjection, resolveGoalPeriod, nextMilestone, projectedCommissionPerDeal } from "../lib/goals";
 
 interface LeadDraft {
@@ -70,6 +72,7 @@ export default function SalespersonPortal() {
   const sp = data.salespeople[0];
 
   const [leadOpen, setLeadOpen] = useState(false);
+  const [breakdownOf, setBreakdownOf] = useState<CommissionEntry | null>(null);
   const [lead, setLead] = useState<LeadDraft>(emptyLead());
   const [saving, setSaving] = useState(false);
   const [leadError, setLeadError] = useState<string | null>(null);
@@ -281,8 +284,13 @@ export default function SalespersonPortal() {
           </div>
 
           {/* What you can actually be paid, and a button to ask for it. */}
-          <div className="mb-5">
+          <div className="mb-5 grid gap-5 lg:grid-cols-2">
             <WithdrawalCard canRequest={serverAuthoritative} onRequested={reload} />
+            {/* And what closing more deals would be worth, on the same engine. */}
+            <EarningsPlanner
+              plan={data.plans.find((pl) => pl.id === sp.commissionPlanId)}
+              defaults={data.settings.assumptions}
+            />
           </div>
 
           {myGoals.length > 0 && (
@@ -480,7 +488,16 @@ export default function SalespersonPortal() {
                       <TD className="max-w-[220px] text-slate-600 dark:text-slate-300">{e.ruleLabel}</TD>
                       <TD className="whitespace-nowrap text-slate-500">{formatDate(e.dueDate)}</TD>
                       <TD className="text-right font-semibold tabular-nums text-slate-900 dark:text-white">
-                        {formatCurrency(e.commissionAmount)}
+                        {/* The rep is the person most entitled to check the
+                            math, so the amount opens the full breakdown. */}
+                        <button
+                          type="button"
+                          onClick={() => setBreakdownOf(e)}
+                          title="Show how this was calculated"
+                          className="rounded underline decoration-dotted decoration-slate-300 underline-offset-4 transition hover:text-brand-600 hover:decoration-brand-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 dark:decoration-slate-600"
+                        >
+                          {formatCurrency(e.commissionAmount)}
+                        </button>
                       </TD>
                       <TD>
                         <CommissionBadge status={displayStatus(e)} />
@@ -539,6 +556,17 @@ export default function SalespersonPortal() {
           </p>
         </div>
       </Modal>
+
+      <CommissionBreakdownModal
+        entry={breakdownOf}
+        plan={data.plans.find((pl) => pl.id === sp?.commissionPlanId)}
+        client={
+          breakdownOf?.clientId
+            ? data.clients.find((c) => c.id === breakdownOf.clientId)
+            : undefined
+        }
+        onClose={() => setBreakdownOf(null)}
+      />
     </div>
   );
 }

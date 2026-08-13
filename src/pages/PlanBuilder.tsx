@@ -30,6 +30,7 @@ import {
   NumberField,
   SectionTitle,
   EmptyState,
+  ErrorBanner,
 } from "../components/ui";
 import { RuleList } from "../components/plan/RuleList";
 import { RuleEditorModal, newRuleOfType } from "../components/plan/RuleEditorModal";
@@ -44,6 +45,7 @@ import {
 } from "../lib/commission-timing";
 import { uid, todayISO } from "../lib/format";
 import { createPlan, updatePlan } from "../lib/resource-client";
+import { errorMessage } from "../lib/api-errors";
 
 const ADD_BUTTONS: { type: RuleType; label: string; icon: typeof Gift }[] = [
   { type: "setup_fee", label: "Setup Fee", icon: CircleDollarSign },
@@ -69,12 +71,14 @@ function clonePlan(p: CommissionPlan): CommissionPlan {
 }
 
 export default function PlanBuilder() {
-  const { data, dispatch, reload } = useApp();
+  const { data, dispatch, reload, serverAuthoritative } = useApp();
   const navigate = useNavigate();
   const { id } = useParams();
   const isEdit = !!id;
   const existing = id ? data.plans.find((p) => p.id === id) : undefined;
   const plansLoaded = data.plans.length > 0;
+
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const [draft, setDraft] = useState<CommissionPlan>(() =>
     existing ? clonePlan(existing) : freshPlan(),
@@ -150,14 +154,21 @@ export default function PlanBuilder() {
       timing: plan.timing,
       rules: plan.rules,
     };
+    setSaveError(null);
     try {
       // Real DB API: persist the plan + its rules + timing, recompute the ledger
-      // for everyone on the plan, then reload authoritative state. Falls back to
-      // the local store off the API (e.g. vite dev with no functions).
+      // for everyone on the plan, then reload authoritative state.
       if (isEdit && existing) await updatePlan(existing.id, payload);
       else await createPlan(payload);
       await reload();
-    } catch {
+    } catch (err) {
+      // The local reducer is the write path ONLY where no server owns the data
+      // (`vite dev`). On a real deployment, stay on the form and say why, rather
+      // than navigating away as if the plan had saved.
+      if (serverAuthoritative) {
+        setSaveError(errorMessage(err));
+        return;
+      }
       if (isEdit && existing) dispatch({ type: "PLAN_UPDATE", plan });
       else dispatch({ type: "PLAN_ADD", plan });
     }
@@ -187,6 +198,8 @@ export default function PlanBuilder() {
           </>
         }
       />
+
+      <ErrorBanner message={saveError} onDismiss={() => setSaveError(null)} />
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* ---- Left: configuration ---- */}

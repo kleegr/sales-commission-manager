@@ -23,6 +23,14 @@ import {
 } from "../components/ui";
 import { Modal, ConfirmModal } from "../components/ui/Modal";
 import { uid, todayISO, formatCurrency, formatDate } from "../lib/format";
+import {
+  createClient,
+  updateClient,
+  deleteClient,
+  type ClientInput,
+} from "../lib/resource-client";
+import { errorMessage } from "../lib/api-errors";
+import { ErrorBanner } from "../components/ui";
 
 const STATUSES: ClientStatus[] = ["active", "paused", "canceled", "refunded"];
 
@@ -44,13 +52,32 @@ function emptyClient(): Client {
   };
 }
 
+/** The fields the per-resource client API accepts. */
+function toInput(c: Client): ClientInput {
+  return {
+    companyName: c.companyName,
+    contactName: c.contactName,
+    email: c.email,
+    phone: c.phone,
+    salespersonId: c.salespersonId,
+    signupDate: c.signupDate,
+    setupFee: c.setupFee,
+    monthlySubscription: c.monthlySubscription,
+    status: c.status,
+    canceledDate: c.canceledDate,
+    notes: c.notes,
+  };
+}
+
 export default function Clients() {
-  const { data, dispatch } = useApp();
+  const { data, dispatch, reload, serverAuthoritative } = useApp();
   const [editing, setEditing] = useState<Client | null>(null);
   const [isNew, setIsNew] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | ClientStatus>("all");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const spName = (spId: string | null) =>
     data.salespeople.find((s) => s.id === spId)?.name ?? "Unassigned";
@@ -72,10 +99,53 @@ export default function Clients() {
     setEditing({ ...c });
     setIsNew(false);
   }
-  function save() {
-    if (!editing) return;
-    dispatch({ type: isNew ? "CLIENT_ADD" : "CLIENT_UPDATE", client: editing });
-    setEditing(null);
+  /**
+   * Write through the per-resource API. The local reducer is used ONLY when no
+   * server owns the data (the `vite dev` backend) — on a server-backed
+   * deployment a failed write surfaces as an error instead of quietly editing a
+   * browser-only copy that the database would never see.
+   */
+  async function save() {
+    if (!editing || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (isNew) await createClient(toInput(editing));
+      else await updateClient(editing.id, toInput(editing));
+      await reload();
+      setEditing(null);
+    } catch (err) {
+      if (serverAuthoritative) {
+        setError(errorMessage(err));
+      } else {
+        dispatch({ type: isNew ? "CLIENT_ADD" : "CLIENT_UPDATE", client: editing });
+        setEditing(null);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmDelete() {
+    if (!deleteId || busy) return;
+    const id = deleteId;
+    setBusy(true);
+    setError(null);
+    try {
+      await deleteClient(id);
+      await reload();
+      setDeleteId(null);
+    } catch (err) {
+      if (serverAuthoritative) {
+        setError(errorMessage(err));
+        setDeleteId(null);
+      } else {
+        dispatch({ type: "CLIENT_DELETE", id });
+        setDeleteId(null);
+      }
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -89,6 +159,8 @@ export default function Clients() {
           </Button>
         }
       />
+
+      <ErrorBanner message={error} onDismiss={() => setError(null)} />
 
       <Card padded={false} className="overflow-hidden">
         <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 p-3 dark:border-slate-800">
@@ -200,10 +272,12 @@ export default function Clients() {
         size="lg"
         footer={
           <>
-            <Button variant="secondary" onClick={() => setEditing(null)}>
+            <Button variant="secondary" onClick={() => setEditing(null)} disabled={busy}>
               Cancel
             </Button>
-            <Button onClick={save}>{isNew ? "Add client" : "Save changes"}</Button>
+            <Button onClick={save} disabled={busy}>
+              {isNew ? "Add client" : "Save changes"}
+            </Button>
           </>
         }
       >
@@ -317,9 +391,9 @@ export default function Clients() {
       <ConfirmModal
         open={!!deleteId}
         onClose={() => setDeleteId(null)}
-        onConfirm={() => deleteId && dispatch({ type: "CLIENT_DELETE", id: deleteId })}
+        onConfirm={confirmDelete}
         title="Delete client?"
-        message="This removes the client and its payments, and recalculates affected commissions. This cannot be undone."
+        message="This removes the client and its payments, and recalculates affected commissions. A client whose commissions are already in a payout batch cannot be deleted. This cannot be undone."
       />
     </div>
   );

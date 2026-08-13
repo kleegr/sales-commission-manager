@@ -98,6 +98,59 @@ export async function saveSettings(payload: SettingsPayload): Promise<void> {
   await asJson(res);
 }
 
+// ---- Clients ---------------------------------------------------------------
+// The per-resource replacement for the client half of the retired snapshot PUT.
+// The server recomputes the client's commission ledger inside the same
+// transaction, so `reload()` after any of these returns an already-consistent
+// dataset.
+
+import type { Client } from "../types";
+
+export type ClientInput = Partial<
+  Pick<
+    Client,
+    | "companyName"
+    | "contactName"
+    | "email"
+    | "phone"
+    | "salespersonId"
+    | "signupDate"
+    | "setupFee"
+    | "monthlySubscription"
+    | "status"
+    | "canceledDate"
+    | "notes"
+  >
+>;
+
+export async function createClient(input: ClientInput): Promise<{ id: string }> {
+  const res = await fetch("/api/clients", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return asJson(res);
+}
+
+export async function updateClient(id: string, input: ClientInput): Promise<void> {
+  const res = await fetch(`/api/clients?id=${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  await asJson(res);
+}
+
+/**
+ * Hard delete, with the client's payments and unlocked ledger rows. Rejected
+ * with `has_locked_commissions` when any of its commissions sit in a payout
+ * batch — that money is committed and the batch must be resolved first.
+ */
+export async function deleteClient(id: string): Promise<void> {
+  const res = await fetch(`/api/clients?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+  await asJson(res);
+}
+
 // ---- Goals & milestones ----------------------------------------------------
 // Server-owned; fetched directly (not part of AppData). Tenant + role come from
 // the session. Each goal in the response carries a server-computed `actual`.

@@ -18,15 +18,35 @@ const uid = (p: string) => `${p}_${Date.now().toString(36)}_${Math.random().toSt
 
 export type PayoutAction = "submit" | "approve" | "reject" | "mark_paid" | "cancel";
 
+/**
+ * Who assembled the batch. `admin_batch` is the classic flow (an admin selects
+ * lines on the Payouts screen); `withdrawal_request` is a rep asking to be paid
+ * from their own available balance. Same lifecycle, same authorization — only
+ * the origin differs.
+ */
+export type PayoutKind = "admin_batch" | "withdrawal_request";
+
 export interface PayoutActor {
   userId: string;
   role: string;
+}
+
+/** One line of a batch, read from the immutable snapshot taken at submit time. */
+export interface PayoutLine {
+  commissionEntryId: string;
+  commissionAmount: number;
+  clientId: string | null;
+  ruleLabel: string;
+  paymentDate: string;
+  /** False when the ledger row behind this line no longer exists. */
+  linked: boolean;
 }
 
 export interface PayoutListItem {
   id: string;
   salespersonId: string;
   salespersonName: string;
+  kind: PayoutKind;
   status: string;
   totalAmount: number;
   entryCount: number;
@@ -35,6 +55,7 @@ export interface PayoutListItem {
   submittedAt: string | null;
   approvedAt: string | null;
   paidAt: string | null;
+  lines: PayoutLine[];
   events: Array<{ toStatus: string; fromStatus: string | null; actorRole: string | null; note: string; at: string }>;
 }
 
@@ -82,10 +103,38 @@ export async function listPayouts(
     evByBatch.set(e.payout_batch_id, list);
   }
 
+  // Lines come from the batch's own snapshot, LEFT JOINed to the ledger only to
+  // report whether the underlying row still exists. The amounts shown are the
+  // ones that were submitted and approved — never a later re-priced value.
+  const { rows: lineRows } = await query<any>(
+    `SELECT e.payout_batch_id, e.commission_entry_id, e.commission_amount,
+            e.client_id, e.rule_label, e.payment_date,
+            (l.id IS NOT NULL) AS linked
+       FROM payout_batch_entries e
+       LEFT JOIN commission_ledger l
+         ON l.id = e.commission_entry_id AND l.tenant_id = e.tenant_id
+      WHERE e.tenant_id = $1 AND e.payout_batch_id = ANY($2::text[])`,
+    [tenantId, ids],
+  );
+  const linesByBatch = new Map<string, PayoutLine[]>();
+  for (const l of lineRows) {
+    const list = linesByBatch.get(l.payout_batch_id) ?? [];
+    list.push({
+      commissionEntryId: l.commission_entry_id,
+      commissionAmount: Number(l.commission_amount ?? 0),
+      clientId: l.client_id ?? null,
+      ruleLabel: l.rule_label ?? "",
+      paymentDate: l.payment_date ?? "",
+      linked: !!l.linked,
+    });
+    linesByBatch.set(l.payout_batch_id, list);
+  }
+
   return filtered.map((r) => ({
     id: r.id,
     salespersonId: r.salesperson_id,
     salespersonName: r.sp_name ?? "—",
+    kind: (r.kind === "withdrawal_request" ? "withdrawal_request" : "admin_batch") as PayoutKind,
     status: r.status,
     totalAmount: Number(r.total_amount),
     entryCount: Number(r.entry_count),
@@ -94,6 +143,7 @@ export async function listPayouts(
     submittedAt: r.submitted_at ?? null,
     approvedAt: r.approved_at ?? null,
     paidAt: r.paid_at ?? null,
+    lines: linesByBatch.get(r.id) ?? [],
     events: (evByBatch.get(r.id) ?? []).map((e) => ({
       toStatus: e.to_status,
       fromStatus: e.from_status ?? null,
@@ -126,7 +176,15 @@ export class PayoutError extends Error {
   }
 }
 
-/** SUBMIT: bundle pending ledger entries into a new payout batch. */
+/**
+ * SUBMIT: bundle pending ledger entries into a new payout batch.
+ *
+ * `kind` distinguishes an admin-assembled batch from a rep's own self-service
+ * withdrawal request. Both are payout_batches and both run the identical
+ * approve → mark-paid workflow — the kind only changes who created it and how
+ * the Payouts screen groups it, so a withdrawal request cannot bypass any of
+ * the approval, separation-of-duties or role checks below.
+ */
 export async function submitPayout(
   tenantId: string,
   actor: PayoutActor,
@@ -134,6 +192,7 @@ export async function submitPayout(
   salespersonId: string,
   entryIds: string[],
   notes: string,
+  kind: PayoutKind = "admin_batch",
 ): Promise<{ id: string }> {
   if (!salespersonId || entryIds.length === 0) throw new PayoutError("nothing_to_submit");
 
@@ -144,7 +203,8 @@ export async function submitPayout(
   return withTransaction(async (c) => {
     // validate the entries: same tenant + salesperson, still pending, not already in a batch
     const { rows: entries } = await c.query<any>(
-      `SELECT id, commission_amount, status FROM commission_ledger
+      `SELECT id, commission_amount, status, client_id, commission_rule_used, payment_date
+         FROM commission_ledger
         WHERE tenant_id = $1 AND salesperson_id = $2 AND id = ANY($3::text[]) FOR UPDATE`,
       [tenantId, salespersonId, entryIds],
     );
@@ -158,15 +218,26 @@ export async function submitPayout(
 
     await c.query(
       `INSERT INTO payout_batches
-         (id, tenant_id, salesperson_id, status, total_amount, submitted_at, created_by_user_id, notes, created_at, updated_at)
-       VALUES ($1,$2,$3,'submitted',$4,$5,$6,$7,$8,$8)`,
-      [id, tenantId, salespersonId, total, ts, actor.userId, notes ?? "", ts],
+         (id, tenant_id, salesperson_id, status, total_amount, submitted_at, created_by_user_id,
+          kind, requested_by_user_id, notes, created_at, updated_at)
+       VALUES ($1,$2,$3,'submitted',$4,$5,$6,$7,$8,$9,$10,$10)`,
+      [id, tenantId, salespersonId, total, ts, actor.userId, kind,
+       kind === "withdrawal_request" ? actor.userId : null, notes ?? "", ts],
     );
+    // The entry row carries an IMMUTABLE SNAPSHOT of the line as submitted:
+    // amount, rule label, client and date. The ledger row it points at can later
+    // be re-priced by a recompute (its id survives — see recompute.ts) or, in the
+    // worst case, removed entirely; either way the batch can still show exactly
+    // what was approved and paid. A financial audit trail cannot depend on rows
+    // that are still allowed to change.
     for (const e of entries) {
       await c.query(
-        `INSERT INTO payout_batch_entries (payout_batch_id, commission_entry_id, tenant_id)
-         VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
-        [id, e.id, tenantId],
+        `INSERT INTO payout_batch_entries
+           (payout_batch_id, commission_entry_id, tenant_id, commission_amount,
+            salesperson_id, client_id, rule_label, payment_date, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING`,
+        [id, e.id, tenantId, Number(e.commission_amount), salespersonId,
+         e.client_id ?? null, e.commission_rule_used ?? "", e.payment_date ?? "", ts],
       );
     }
     await c.query(
@@ -268,17 +339,36 @@ export async function transitionPayout(
     const ts = nowISO();
     const from = batch.status as string;
 
-    // Reconcile the batch total against the sum of its entries before approving
-    // or paying, so a stale or edited total can never be approved or paid out.
+    // Reconcile before approving or paying, so no stale or drifted amount is
+    // ever approved. Two independent checks, because they mean different things:
+    //
+    //   snapshot vs batch total — an internal inconsistency in the batch itself.
+    //   live ledger vs snapshot — somebody edited the underlying payment, plan
+    //     or client AFTER submission, so the amount on screen when this batch
+    //     was approved is no longer the amount it would pay.
+    //
+    // The second is the one the immutable snapshot makes detectable at all: it
+    // used to be invisible, because there was nothing left to compare against.
     if (action === "approve" || action === "mark_paid") {
-      const { rows: sumRows } = await c.query<{ s: string }>(
+      const { rows: snapRows } = await c.query<{ s: string }>(
         `SELECT COALESCE(SUM(commission_amount),0)::text AS s
+           FROM payout_batch_entries WHERE tenant_id = $1 AND payout_batch_id = $2`,
+        [tenantId, batchId],
+      );
+      const snapshotTotal = Number(snapRows[0]?.s ?? 0);
+      if (Math.abs(snapshotTotal - Number(batch.total_amount)) > 0.005) {
+        throw new PayoutError("batch_total_mismatch", 409);
+      }
+
+      const { rows: liveRows } = await c.query<{ s: string; n: string }>(
+        `SELECT COALESCE(SUM(commission_amount),0)::text AS s, count(*)::text AS n
            FROM commission_ledger WHERE tenant_id = $1 AND id = ANY($2::text[])`,
         [tenantId, ids],
       );
-      const entriesTotal = Number(sumRows[0]?.s ?? 0);
-      if (Math.abs(entriesTotal - Number(batch.total_amount)) > 0.005) {
-        throw new PayoutError("batch_total_mismatch", 409);
+      const liveTotal = Number(liveRows[0]?.s ?? 0);
+      const liveCount = Number(liveRows[0]?.n ?? 0);
+      if (liveCount !== ids.length || Math.abs(liveTotal - snapshotTotal) > 0.005) {
+        throw new PayoutError("batch_lines_changed", 409);
       }
     }
 

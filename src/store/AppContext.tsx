@@ -2,10 +2,27 @@
 // APP STATE
 //
 // A single React context holds the entire dataset and exposes typed actions.
-// All persistence goes through the DataStore abstraction (localStorage today,
-// GoHighLevel / external DB later). Whenever payments, clients, salespeople or
-// plans change, payment-derived and salary commission rows are recomputed by
-// the deterministic engine so the ledger is always in sync.
+//
+// WHAT THE REDUCER IS FOR, NOW THAT THE SNAPSHOT WRITE IS GONE
+// ------------------------------------------------------------
+// `PUT /api/state` used to persist this whole object, which made the reducer a
+// real write path: mutate here, and the snapshot carried it to the database.
+// That is what allowed a browser to hold — and push — a balance the database
+// disagreed with, so it was removed (see api/state.ts).
+//
+// Two roles remain:
+//   1. On a server-backed deployment the reducer is DISPLAY STATE. Pages call
+//      the per-resource endpoint and then reload() the authoritative dataset;
+//      a reducer action is at most an optimistic echo, never the source of
+//      truth, and `store.save()` is a no-op.
+//   2. On the local-storage backend (`vite dev`, which serves no serverless
+//      functions) there is no server to be authoritative, so the reducer IS the
+//      database and `store.save()` persists it. `serverAuthoritative` on the
+//      context is how a page tells the two apart.
+//
+// Whenever payments, clients, salespeople or plans change locally, the
+// payment-derived and salary commission rows are recomputed by the same
+// deterministic engine the server runs, so the two modes agree.
 // ============================================================================
 
 import {
@@ -34,6 +51,7 @@ import {
   store,
   getBackendInfo,
   isAuthError,
+  isUnavailableError,
   type Backend,
 } from "../lib/storage/apiStore";
 import { useAuth } from "./AuthContext";
@@ -317,7 +335,23 @@ interface Ctx {
   tenant: string;
   role: string;
   readOnly: boolean;
+  /**
+   * True when the database owns this tenant's data — i.e. every mutation must
+   * go through a per-resource endpoint and the reducer is display-only.
+   *
+   * Pages branch on it for one reason: a failed write must be SHOWN here, not
+   * absorbed into a browser-local copy. (Off only on the local-storage backend,
+   * where `vite dev` runs no serverless functions and the reducer IS the
+   * database.)
+   */
+  serverAuthoritative: boolean;
   reload: () => Promise<void>;
+  /**
+   * True when the dataset could not be loaded and no cached copy was allowed to
+   * stand in for it (the production posture — see storage/fallback-policy.ts).
+   * The UI must say so rather than render an empty or stale ledger.
+   */
+  unavailable: boolean;
   /**
    * True when `data` came from the localStorage cache because /api/state was
    * unreachable (network failure or 5xx), rather than from the server. Show it:
@@ -372,6 +406,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Render-visible twin of `hydrated` (a ref deliberately does not re-render).
   // Consumers read this to tell "still fetching" from "genuinely empty".
   const [hydrating, setHydrating] = useState(true);
+  // Set when the load failed AND the cache was not allowed to substitute.
+  const [unavailable, setUnavailable] = useState(false);
   // When true, the next persist effect is skipped. Set by reload(): re-pulling
   // authoritative server data should not be echoed straight back as a snapshot
   // write. This is what lets per-resource API writes (salespeople, settings,
@@ -407,11 +443,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       let loaded: AppData | null = null;
       try {
         loaded = await loadState();
-      } catch {
-        /* An outage is already answered from the cache inside the store, and a
-           dead session is handled by loadState(). Whatever is left is a real
-           error with nothing to show for it — treat it as "no data" so the UI
-           leaves its loading state instead of hanging. */
+      } catch (err) {
+        /* A dead session is handled by loadState(). What is left is either an
+           outage the cache was not allowed to answer (production) or a real
+           application error — both mean "we have no trustworthy data", which
+           the UI must say out loud instead of rendering an empty ledger. */
+        if (!cancelled && isUnavailableError(err)) setUnavailable(true);
       }
       if (cancelled) return;
       if (loaded) {
@@ -434,6 +471,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // Persist on every change (after initial hydration), unless this change came
   // from a reload() of authoritative server state (then we skip the echo).
+  // store.save() is a no-op wherever the server owns the data, so on a real
+  // deployment this effect costs nothing and writes nothing.
   useEffect(() => {
     if (!hydrated.current) return;
     if (suppressPersist.current) {
@@ -467,6 +506,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const loaded = await loadState();
     if (loaded) {
       suppressPersist.current = true;
+      setUnavailable(false);
       dispatch({ type: "HYDRATE", data: loaded });
     }
   }, [loadState]);
@@ -481,11 +521,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       tenant: user?.tenantName ?? user?.tenantSlug ?? "",
       role: user?.role ?? "",
       readOnly: info.readOnly,
+      serverAuthoritative: info.serverAuthoritative,
       reload,
       hydrating,
+      unavailable,
       isOfflineData: info.isOfflineData,
     };
-  }, [data, user, reload, hydrating]);
+  }, [data, user, reload, hydrating, unavailable]);
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>;
 }

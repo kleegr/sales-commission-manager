@@ -27,8 +27,27 @@
 //
 //   The admin "Release now" flag (released_override) and a human-set workflow
 //   label (rejected / canceled) are carried across a regenerate by the stable
-//   key `${paymentId}:${ruleId}`, so a released or manually-labelled line keeps
-//   its meaning.
+//   key `${paymentId}:${ruleId}`.
+//
+// STABLE IDENTITY — WHY A REGENERATED ROW KEEPS ITS ID
+//   A regenerated row used to get a brand-new id from the engine's uid(). For a
+//   row nothing else references that is harmless; for a row a payout batch
+//   points at it is data loss. `payout_batch_entries.commission_entry_id` has no
+//   foreign key, so the old id simply stopped resolving: the batch kept its
+//   total but its LINES vanished, and a rejected or canceled batch — whose rows
+//   are NOT locked and therefore ARE regenerated — lost its line history on the
+//   next edit to the client.
+//
+//   So identity is now carried across the regenerate by the same
+//   `${paymentId}:${ruleId}` key as the rest of the prior state: a row that is
+//   re-priced keeps its id and its payout_batch_id, and only a genuinely NEW
+//   line (a payment or rule that did not exist before) mints a new id. That also
+//   removes the last piece of non-determinism from the recompute — running it
+//   twice over unchanged inputs now produces byte-identical rows.
+//
+//   The immutable line snapshot on payout_batch_entries (written at submit time)
+//   is the belt to this braces: even if a line is deleted outright, the batch can
+//   still show what it paid for.
 // ============================================================================
 
 import { calculateCommissionForPayment } from "../../src/lib/commission-engine.js";
@@ -93,7 +112,12 @@ export interface PriorLedgerRow {
   status: CommissionStatus;
   paidDate: string | null;
   releasedOverride: boolean;
+  /** The payout batch this line belongs to, if any. Carried across a rebuild. */
+  payoutBatchId?: string | null;
 }
+
+/** A freshly-computed row, plus the batch linkage inherited from its predecessor. */
+export type RecomputedEntry = CommissionEntry & { payoutBatchId: string | null };
 
 export interface RecomputeClientInput {
   client: Client;
@@ -112,8 +136,12 @@ export interface RecomputeClientInput {
 export interface RecomputeClientResult {
   /** Ids of NON-locked payment-derived rows to delete before inserting. */
   deleteIds: string[];
-  /** Fresh, timing-resolved rows to insert. */
-  insertRows: CommissionEntry[];
+  /**
+   * Fresh, timing-resolved rows to insert. A row that replaces an existing
+   * non-locked row REUSES that row's id and payout batch linkage, so anything
+   * referencing it (a payout batch, an export, a deep link) still resolves.
+   */
+  insertRows: RecomputedEntry[];
   /** Ids of locked rows that were preserved untouched (for reporting/tests). */
   preservedIds: string[];
 }
@@ -147,7 +175,7 @@ export function recomputeClientLedger(
   const priorByKey = new Map<string, PriorLedgerRow>();
   for (const r of nonLockedRows) priorByKey.set(key(r.paymentId, r.ruleId), r);
 
-  const insertRows: CommissionEntry[] = [];
+  const insertRows: RecomputedEntry[] = [];
 
   // Without an assigned salesperson + plan there is nothing to regenerate; the
   // stale non-locked rows are removed (deleteIds) and locked rows are kept.
@@ -195,6 +223,10 @@ export function recomputeClientLedger(
 
       insertRows.push({
         ...entry,
+        // Identity is inherited, not regenerated — see "STABLE IDENTITY" above.
+        // Without this the row a payout batch points at silently disappears.
+        id: prior?.id ?? entry.id,
+        payoutBatchId: prior?.payoutBatchId ?? null,
         status,
         paidDate: prior?.paidDate ?? null,
         releasedOverride,
@@ -304,7 +336,7 @@ async function insertLedgerRow(
   c: PoolClient,
   tenantId: string,
   planId: string | null,
-  e: CommissionEntry,
+  e: RecomputedEntry,
 ): Promise<void> {
   const ts = nowISO();
   await c.query(
@@ -318,7 +350,9 @@ async function insertLedgerRow(
       e.id, tenantId, e.salespersonId, e.clientId, e.paymentId, planId, e.ruleId,
       e.ruleType, e.paymentDate, e.paymentType, e.paymentAmount, e.ruleLabel, e.commissionValueType,
       e.commissionValue, e.commissionAmount, e.status, e.dueDate, e.paidDate, e.releasedOverride ?? false,
-      null, e.isProjection ?? false, e.notes ?? "", e.createdAt || ts, ts,
+      // Inherited from the row this one replaces, so a re-priced line stays
+      // attached to the batch that already claimed it.
+      e.payoutBatchId ?? null, e.isProjection ?? false, e.notes ?? "", e.createdAt || ts, ts,
     ],
   );
 }
@@ -370,10 +404,14 @@ export async function recomputeClientInTx(
   );
   const payments = payRows.map(mapPaymentRow);
 
+  // Clawback adjustment rows are authored by the refund/chargeback flow, not by
+  // the engine, so they are excluded from the rebuild — regenerating the ledger
+  // must never erase a reversal that has already been booked.
   const { rows: ledgerRows } = await c.query<any>(
-    `SELECT id, payment_id, commission_rule_id, status, paid_date, released_override
+    `SELECT id, payment_id, commission_rule_id, status, paid_date, released_override, payout_batch_id
        FROM commission_ledger
-      WHERE tenant_id = $1 AND client_id = $2 AND payment_id IS NOT NULL`,
+      WHERE tenant_id = $1 AND client_id = $2 AND payment_id IS NOT NULL
+        AND COALESCE(entry_source, 'engine') = 'engine'`,
     [tenantId, clientId],
   );
   const priorRows: PriorLedgerRow[] = ledgerRows.map((r) => ({
@@ -383,6 +421,7 @@ export async function recomputeClientInTx(
     status: r.status,
     paidDate: r.paid_date ?? null,
     releasedOverride: !!r.released_override,
+    payoutBatchId: r.payout_batch_id ?? null,
   }));
 
   const result = recomputeClientLedger({ client, salesperson, plan, payments, priorRows, today });

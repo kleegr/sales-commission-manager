@@ -1,4 +1,5 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { X } from "lucide-react";
 import { classNames } from "../../lib/format";
 import type { CommissionStatus, PayoutStatus } from "../../types";
 
@@ -330,6 +331,57 @@ export function SectionTitle({
         {children}
       </h2>
       {right}
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// ErrorBanner
+//
+// Now that per-resource writes no longer fall back to a local copy on failure,
+// a refused write has to be SEEN. This is the one place that renders that: an
+// inline, dismissible strip in the page flow, so the user reads the reason next
+// to the thing they were editing rather than in a toast that has already gone.
+//
+// role="alert" so assistive tech announces it the moment it appears.
+// ----------------------------------------------------------------------------
+
+export function ErrorBanner({
+  message,
+  onDismiss,
+  tone = "error",
+  className,
+}: {
+  message: string | null | undefined;
+  onDismiss?: () => void;
+  tone?: "error" | "warning";
+  className?: string;
+}) {
+  if (!message) return null;
+  const tones =
+    tone === "warning"
+      ? "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300"
+      : "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300";
+  return (
+    <div
+      role="alert"
+      className={classNames(
+        "mb-4 flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-sm",
+        tones,
+        className,
+      )}
+    >
+      <span className="min-w-0">{message}</span>
+      {onDismiss && (
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss"
+          className="flex-none rounded p-0.5 text-current/70 transition hover:text-current"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      )}
     </div>
   );
 }

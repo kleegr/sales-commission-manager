@@ -286,4 +286,52 @@ CREATE INDEX IF NOT EXISTS idx_clients_kleegr_opportunity ON clients(tenant_id, 
 
 INSERT INTO schema_migrations (id) VALUES ('0010_kleegr_integration')
 ON CONFLICT (id) DO NOTHING;
+
+-- 0011 — production hardening -----------------------------------------------
+-- Adds the columns the post-snapshot architecture needs:
+--   * an IMMUTABLE line snapshot on payout_batch_entries, so a batch's history
+--     survives any later re-price or removal of the underlying ledger row (the
+--     stale-linkage class of bug);
+--   * payment VERIFICATION, so a commission can be held until the money is
+--     actually confirmed by the payment gateway (via the Kleegr webhook);
+--   * clawback bookkeeping on the ledger (a negative adjustment row points back
+--     at the entry it reverses);
+--   * self-service WITHDRAWAL REQUESTS as a kind of payout batch, so the whole
+--     existing approve / reject / mark-paid workflow applies unchanged.
+
+-- payout_batch_entries: immutable snapshot of the line as submitted ----------
+ALTER TABLE payout_batch_entries ADD COLUMN IF NOT EXISTS commission_amount DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE payout_batch_entries ADD COLUMN IF NOT EXISTS salesperson_id    TEXT;
+ALTER TABLE payout_batch_entries ADD COLUMN IF NOT EXISTS client_id         TEXT;
+ALTER TABLE payout_batch_entries ADD COLUMN IF NOT EXISTS rule_label        TEXT NOT NULL DEFAULT '';
+ALTER TABLE payout_batch_entries ADD COLUMN IF NOT EXISTS payment_date      TEXT NOT NULL DEFAULT '';
+ALTER TABLE payout_batch_entries ADD COLUMN IF NOT EXISTS created_at        TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_payout_entries_entry ON payout_batch_entries(tenant_id, commission_entry_id);
+
+-- payout_batches: self-service withdrawal requests ---------------------------
+ALTER TABLE payout_batches ADD COLUMN IF NOT EXISTS kind                 TEXT NOT NULL DEFAULT 'admin_batch'; -- admin_batch | withdrawal_request
+ALTER TABLE payout_batches ADD COLUMN IF NOT EXISTS requested_by_user_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_payouts_kind ON payout_batches(tenant_id, kind);
+
+-- payments: gateway verification + refund linkage ----------------------------
+-- verified defaults TRUE so every pre-existing (admin-entered) payment keeps
+-- behaving exactly as it did; only the verification GATE (settings below, off
+-- by default) changes what an unverified payment means.
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS verified        BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS verified_at     TIMESTAMPTZ;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS external_status TEXT;   -- succeeded | failed | refunded | disputed
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS refunds_payment_id TEXT; -- set on a refund row -> the payment it reverses
+CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_external
+  ON payments(tenant_id, external_payment_id) WHERE external_payment_id IS NOT NULL;
+
+-- settings: require gateway confirmation before a commission is payable ------
+ALTER TABLE settings ADD COLUMN IF NOT EXISTS require_payment_verification BOOLEAN NOT NULL DEFAULT false;
+
+-- commission_ledger: clawback adjustments ------------------------------------
+ALTER TABLE commission_ledger ADD COLUMN IF NOT EXISTS adjustment_of_entry_id TEXT;
+ALTER TABLE commission_ledger ADD COLUMN IF NOT EXISTS entry_source TEXT NOT NULL DEFAULT 'engine'; -- engine | clawback | manual
+CREATE INDEX IF NOT EXISTS idx_ledger_adjustment ON commission_ledger(tenant_id, adjustment_of_entry_id);
+
+INSERT INTO schema_migrations (id) VALUES ('0011_production_hardening')
+ON CONFLICT (id) DO NOTHING;
 `;

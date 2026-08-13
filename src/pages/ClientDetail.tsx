@@ -27,10 +27,12 @@ import {
   Table, THead, TBody, TR, TH, TD,
 } from "../components/ui";
 import { Modal } from "../components/ui/Modal";
+import { ErrorBanner } from "../components/ui";
 import { fullLedger, displayStatus } from "../lib/ledger";
 import { commissionTotals } from "../lib/analytics";
 import { formatCurrency, formatDate, todayISO } from "../lib/format";
-import { listDocuments } from "../lib/resource-client";
+import { listDocuments, updateClient, type ClientInput } from "../lib/resource-client";
+import { errorMessage } from "../lib/api-errors";
 
 const STATUSES: ClientStatus[] = ["active", "paused", "canceled", "refunded"];
 const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
@@ -68,7 +70,7 @@ interface TimelineItem {
 export default function ClientDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { data, dispatch } = useApp();
+  const { data, dispatch, reload, serverAuthoritative } = useApp();
 
   const client = data.clients.find((c) => c.id === id);
   const rep = data.salespeople.find((s) => s.id === client?.salespersonId) ?? null;
@@ -115,11 +117,46 @@ export default function ClientDetail() {
   const contracts = docs.filter((d) => d.kind === "contract");
 
   // --- inline edit ----------------------------------------------------------
+  // Writes through PATCH /api/clients (which recomputes this client's ledger in
+  // the same transaction). The reducer is only the write path where no server
+  // owns the data; on a server-backed deployment a refusal is shown, never
+  // silently applied to a browser-only copy.
   const [editing, setEditing] = useState<Client | null>(null);
-  function saveEdit() {
-    if (!editing) return;
-    dispatch({ type: "CLIENT_UPDATE", client: editing });
-    setEditing(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  async function saveEdit() {
+    if (!editing || saving) return;
+    setSaving(true);
+    setSaveError(null);
+    const next = editing;
+    const input: ClientInput = {
+      companyName: next.companyName,
+      contactName: next.contactName,
+      email: next.email,
+      phone: next.phone,
+      salespersonId: next.salespersonId,
+      signupDate: next.signupDate,
+      setupFee: next.setupFee,
+      monthlySubscription: next.monthlySubscription,
+      status: next.status,
+      canceledDate: next.canceledDate,
+      notes: next.notes,
+    };
+    try {
+      await updateClient(next.id, input);
+      await reload();
+      setEditing(null);
+    } catch (err) {
+      if (serverAuthoritative) {
+        setSaveError(errorMessage(err));
+      } else {
+        dispatch({ type: "CLIENT_UPDATE", client: next });
+        setEditing(null);
+      }
+    } finally {
+      setSaving(false);
+    }
   }
 
   // --- activity timeline (derived) ------------------------------------------
@@ -365,13 +402,16 @@ export default function ClientDetail() {
         size="lg"
         footer={
           <>
-            <Button variant="secondary" onClick={() => setEditing(null)}>Cancel</Button>
-            <Button onClick={saveEdit}>Save changes</Button>
+            <Button variant="secondary" onClick={() => setEditing(null)} disabled={saving}>Cancel</Button>
+            <Button onClick={saveEdit} disabled={saving}>Save changes</Button>
           </>
         }
       >
         {editing && (
           <div className="grid gap-4 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <ErrorBanner message={saveError} onDismiss={() => setSaveError(null)} />
+            </div>
             <Field label="Company name" required>
               <Input value={editing.companyName} onChange={(e) => setEditing({ ...editing, companyName: e.target.value })} />
             </Field>

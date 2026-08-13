@@ -311,6 +311,153 @@ export function buildPaymentUpdate(
 }
 
 // ---------------------------------------------------------------------------
+// Clients (pure)
+//
+// The client row drives every commission: its salesperson decides WHOSE
+// commission it is, its status + canceled date drive holds and clawbacks, and
+// its fees are the base amounts. So the same "which fields are commission
+// affecting" discipline used for payments applies here — the endpoint recomputes
+// the client's ledger after any of them changes.
+// ---------------------------------------------------------------------------
+
+const CLIENT_STATUSES = ["active", "paused", "canceled", "refunded"] as const;
+
+/** True for the statuses that mean the client has stopped paying. */
+export function isEndedClientStatus(status: string): boolean {
+  return status === "canceled" || status === "refunded";
+}
+
+/**
+ * Keep the cancellation date consistent with the status so the clawback window
+ * can be measured (mirrors stampClientCancellation in the client reducer):
+ * moving to canceled/refunded with no date stamps `today`; moving back to
+ * active/paused clears it; an explicitly supplied date always wins.
+ */
+export function resolveCanceledDate(
+  status: string,
+  supplied: string | null | undefined,
+  today: string,
+): string | null {
+  if (!isEndedClientStatus(status)) return null;
+  const given = str(supplied);
+  return given || today;
+}
+
+export interface ClientInput {
+  companyName: string;
+  contactName: string;
+  email: string;
+  phone: string;
+  salespersonId: string | null;
+  signupDate: string;
+  setupFee: number;
+  monthlySubscription: number;
+  status: (typeof CLIENT_STATUSES)[number];
+  canceledDate: string | null;
+  notes: string;
+}
+
+/** Validate + normalize a client for INSERT. */
+export function normalizeClientInput(
+  body: Record<string, unknown>,
+  today = nowISO().slice(0, 10),
+): Result<ClientInput> {
+  const companyName = str(body.companyName);
+  if (!companyName) return { ok: false, error: "company_name_required" };
+
+  const status = oneOf(body.status, CLIENT_STATUSES, "active");
+  return {
+    ok: true,
+    value: {
+      companyName,
+      contactName: str(body.contactName),
+      email: str(body.email),
+      phone: str(body.phone),
+      salespersonId: str(body.salespersonId) || null,
+      signupDate: str(body.signupDate) || today,
+      setupFee: nonNeg(body.setupFee, 0),
+      monthlySubscription: nonNeg(body.monthlySubscription, 0),
+      status,
+      canceledDate: resolveCanceledDate(status, body.canceledDate as string | null, today),
+      notes: str(body.notes),
+    },
+  };
+}
+
+/**
+ * Build a PARTIAL update set for a client PATCH (snake_case columns). Only keys
+ * present in the body are written. `commissionAffecting` lists the ones that
+ * change what the engine would produce, so the endpoint knows when a recompute
+ * is required. `reassigned` is called out separately: moving a client to a new
+ * rep moves every future commission with it.
+ */
+export function buildClientUpdate(
+  body: Record<string, unknown>,
+  today = nowISO().slice(0, 10),
+): Result<{
+  set: Record<string, unknown>;
+  commissionAffecting: string[];
+  reassignedTo: string | null | undefined;
+}> {
+  const set: Record<string, unknown> = {};
+  const commissionAffecting: string[] = [];
+  const has = (k: string) => Object.prototype.hasOwnProperty.call(body, k);
+  let reassignedTo: string | null | undefined;
+
+  if (has("companyName")) {
+    const v = str(body.companyName);
+    if (!v) return { ok: false, error: "company_name_required" };
+    set.company_name = v;
+  }
+  if (has("contactName")) set.contact_name = str(body.contactName);
+  if (has("email")) set.email = str(body.email);
+  if (has("phone")) set.phone = str(body.phone);
+  if (has("notes")) set.notes = str(body.notes);
+
+  if (has("salespersonId")) {
+    reassignedTo = str(body.salespersonId) || null;
+    set.salesperson_id = reassignedTo;
+    commissionAffecting.push("salesperson_id");
+  }
+  if (has("signupDate")) {
+    set.signup_date = str(body.signupDate);
+    commissionAffecting.push("signup_date");
+  }
+  if (has("setupFee")) {
+    set.setup_fee_amount = nonNeg(body.setupFee, 0);
+    commissionAffecting.push("setup_fee_amount");
+  }
+  if (has("monthlySubscription")) {
+    set.monthly_subscription_amount = nonNeg(body.monthlySubscription, 0);
+    commissionAffecting.push("monthly_subscription_amount");
+  }
+  // Status and cancellation date move together: they are one fact about the
+  // client, and the clawback window is measured from the pair.
+  if (has("status") || has("canceledDate")) {
+    const status = has("status")
+      ? oneOf(body.status, CLIENT_STATUSES, "active")
+      : null;
+    if (status) {
+      set.status = status;
+      commissionAffecting.push("status");
+      set.canceled_date = resolveCanceledDate(
+        status,
+        has("canceledDate") ? (body.canceledDate as string | null) : null,
+        today,
+      );
+      commissionAffecting.push("canceled_date");
+    } else if (has("canceledDate")) {
+      set.canceled_date = str(body.canceledDate) || null;
+      commissionAffecting.push("canceled_date");
+    }
+  }
+
+  if (Object.keys(set).length === 0) return { ok: false, error: "no_fields_to_update" };
+  set.updated_at = nowISO();
+  return { ok: true, value: { set, commissionAffecting, reassignedTo } };
+}
+
+// ---------------------------------------------------------------------------
 // Ledger filters (pure)
 // ---------------------------------------------------------------------------
 

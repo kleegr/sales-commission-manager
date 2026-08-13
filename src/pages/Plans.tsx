@@ -28,6 +28,7 @@ import {
   Badge,
   EmptyState,
   StatCard,
+  ErrorBanner,
 } from "../components/ui";
 import { ConfirmModal } from "../components/ui/Modal";
 import { Input, Select } from "../components/ui/form";
@@ -44,6 +45,7 @@ import {
 } from "../lib/plan-analytics";
 import { uid, todayISO, formatCurrency, classNames } from "../lib/format";
 import { duplicatePlan, deletePlan } from "../lib/resource-client";
+import { errorMessage } from "../lib/api-errors";
 
 type View = "cards" | "table";
 type StatusFilter = "all" | "active" | "unused" | "draft";
@@ -64,7 +66,7 @@ const USAGE_TONE = {
 } as const;
 
 export default function Plans() {
-  const { data, dispatch, tenant, reload } = useApp();
+  const { data, dispatch, tenant, reload, serverAuthoritative } = useApp();
   const navigate = useNavigate();
 
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -75,6 +77,7 @@ export default function Plans() {
   const [typeFilter, setTypeFilter] = useState<RuleType | "all">("all");
   const [assignee, setAssignee] = useState<string>("all");
   const [sort, setSort] = useState<SortKey>("name");
+  const [error, setError] = useState<string | null>(null);
 
   // Derive everything the list needs once per data change.
   const rows = useMemo(
@@ -143,11 +146,18 @@ export default function Plans() {
       createdAt: todayISO(),
       rules: plan.rules.map((r) => ({ ...r, id: uid("rule") })),
     };
+    setError(null);
     try {
       const { id } = await duplicatePlan(plan.id);
       await reload();
       navigate(`/plans/${id}/edit`);
-    } catch {
+    } catch (err) {
+      // Only the local-storage backend may be written from the browser; on a
+      // server-backed deployment the refusal is shown instead.
+      if (serverAuthoritative) {
+        setError(errorMessage(err));
+        return;
+      }
       dispatch({ type: "PLAN_ADD", plan: copy });
       navigate(`/plans/${copy.id}/edit`);
     }
@@ -156,11 +166,13 @@ export default function Plans() {
   async function confirmDelete() {
     if (!deleteId) return;
     const id = deleteId;
+    setError(null);
     try {
       await deletePlan(id);
       await reload();
-    } catch {
-      dispatch({ type: "PLAN_DELETE", id });
+    } catch (err) {
+      if (serverAuthoritative) setError(errorMessage(err));
+      else dispatch({ type: "PLAN_DELETE", id });
     }
     setDeleteId(null);
   }
@@ -183,6 +195,8 @@ export default function Plans() {
           </Button>
         }
       />
+
+      <ErrorBanner message={error} onDismiss={() => setError(null)} />
 
       {/* Workspace + at-a-glance numbers */}
       {tenant && (

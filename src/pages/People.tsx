@@ -22,6 +22,7 @@ import {
   Select,
   NumberField,
   Textarea,
+  ErrorBanner,
 } from "../components/ui";
 import { ConfirmModal } from "../components/ui/Modal";
 import { uid, todayISO, formatCurrency } from "../lib/format";
@@ -32,6 +33,7 @@ import {
   setSalespersonApproval,
   type SalespersonInput,
 } from "../lib/resource-client";
+import { errorMessage } from "../lib/api-errors";
 
 const ROLE_LABEL: Record<Role, string> = {
   salesperson: "Salesperson",
@@ -60,13 +62,14 @@ function emptySalesperson(): Salesperson {
 }
 
 export default function People() {
-  const { data, dispatch, reload } = useApp();
+  const { data, dispatch, reload, serverAuthoritative } = useApp();
   const [editing, setEditing] = useState<Salesperson | null>(null);
   const [isNew, setIsNew] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [roleFilter, setRoleFilter] = useState<"all" | Role>("all");
   const [search, setSearch] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Map the edited record to the fields the per-resource API accepts.
   function toInput(sp: Salesperson): SalespersonInput {
@@ -111,39 +114,61 @@ export default function People() {
     setEditing({ ...sp });
     setIsNew(false);
   }
+  /**
+   * A refused or failed write is REPORTED wherever the database owns the data.
+   * The local reducer stays a legitimate write path only on the local-storage
+   * backend (`vite dev`), where there is no server to disagree with — writing
+   * there on a real deployment is exactly the browser/database divergence the
+   * snapshot removal exists to prevent.
+   */
+  function handleWriteError(err: unknown, applyLocally: () => void): boolean {
+    if (serverAuthoritative) {
+      setError(errorMessage(err));
+      return false;
+    }
+    applyLocally();
+    return true;
+  }
+
   async function save() {
     if (!editing || busy) return;
+    const sp = editing;
     setBusy(true);
+    setError(null);
     try {
-      if (isNew) await createSalesperson(toInput(editing));
-      else await updateSalesperson(editing.id, toInput(editing));
+      if (isNew) await createSalesperson(toInput(sp));
+      else await updateSalesperson(sp.id, toInput(sp));
       await reload();
-    } catch {
-      // API unreachable (local/dev) or rejected — keep working via local store.
-      dispatch(isNew ? { type: "SP_ADD", sp: editing } : { type: "SP_UPDATE", sp: editing });
+      setEditing(null);
+    } catch (err) {
+      const applied = handleWriteError(err, () =>
+        dispatch(isNew ? { type: "SP_ADD", sp } : { type: "SP_UPDATE", sp }),
+      );
+      if (applied) setEditing(null);
     } finally {
       setBusy(false);
-      setEditing(null);
     }
   }
 
   async function deactivate(id: string) {
+    setError(null);
     try {
       await deactivateSalesperson(id);
       await reload();
-    } catch {
-      dispatch({ type: "SP_DELETE", id });
+    } catch (err) {
+      handleWriteError(err, () => dispatch({ type: "SP_DELETE", id }));
     } finally {
       setDeleteId(null);
     }
   }
 
   async function approve(id: string, approval: "approved" | "rejected") {
+    setError(null);
     try {
       await setSalespersonApproval(id, approval);
       await reload();
-    } catch {
-      dispatch({ type: "SP_APPROVAL", id, approval });
+    } catch (err) {
+      handleWriteError(err, () => dispatch({ type: "SP_APPROVAL", id, approval }));
     }
   }
 
@@ -158,6 +183,8 @@ export default function People() {
           </Button>
         }
       />
+
+      <ErrorBanner message={error} onDismiss={() => setError(null)} />
 
       {/* Pending affiliate approvals */}
       {pending.length > 0 && (

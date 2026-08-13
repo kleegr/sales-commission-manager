@@ -19,10 +19,12 @@ import {
   TR,
   TH,
   TD,
+  ErrorBanner,
 } from "../components/ui";
 import { Modal, ConfirmModal } from "../components/ui/Modal";
 import { uid, todayISO, formatCurrency, formatDate } from "../lib/format";
 import { createPayment, deletePayment } from "../lib/resource-client";
+import { errorMessage } from "../lib/api-errors";
 
 const TYPE_LABEL: Record<PaymentType, string> = {
   setup_fee: "Setup fee",
@@ -52,10 +54,13 @@ function emptyPayment(): Payment {
 }
 
 export default function Payments() {
-  const { data, dispatch, reload } = useApp();
+  const { data, dispatch, reload, serverAuthoritative } = useApp();
   const [editing, setEditing] = useState<Payment | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // A refused write (server-backed deployments only) — shown inline, not as a
+  // "can't delete" modal, since it also covers create failures.
+  const [writeError, setWriteError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
 
   const clientName = (clientId: string) =>
@@ -124,10 +129,18 @@ export default function Payments() {
         notes: payment.notes,
       });
       await reload();
-    } catch {
+      setEditing(null);
+    } catch (err) {
+      // The local reducer is the write path ONLY where no server owns the data
+      // (`vite dev`). On a server-backed deployment a refused payment must be
+      // shown, not applied to a browser-only copy of the ledger.
+      if (serverAuthoritative) {
+        setWriteError(errorMessage(err));
+        return;
+      }
       dispatch({ type: "PAYMENT_ADD", payment });
+      setEditing(null);
     }
-    setEditing(null);
   }
 
   async function confirmDelete() {
@@ -148,9 +161,12 @@ export default function Payments() {
         );
         return;
       }
-      // Other failure (e.g. local-dev with no API): fall back to the local store.
-      dispatch({ type: "PAYMENT_DELETE", id });
       setDeleteId(null);
+      if (serverAuthoritative) {
+        setWriteError(errorMessage(err));
+        return;
+      }
+      dispatch({ type: "PAYMENT_DELETE", id });
     }
   }
 
@@ -165,6 +181,8 @@ export default function Payments() {
           </Button>
         }
       />
+
+      <ErrorBanner message={writeError} onDismiss={() => setWriteError(null)} />
 
       {data.clients.length === 0 && (
         <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">

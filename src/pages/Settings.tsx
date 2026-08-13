@@ -30,11 +30,12 @@ import {
 import { ConfirmModal } from "../components/ui/Modal";
 import { downloadJSON } from "../lib/export";
 import { saveSettings, saveFeatures } from "../lib/resource-client";
+import { errorMessage } from "../lib/api-errors";
 import { useFeatures } from "../store/FeaturesContext";
 import { FEATURES, FEATURE_KEYS, type FeatureFlags } from "../lib/features";
 
 export default function Settings() {
-  const { data, dispatch, storeName, backend } = useApp();
+  const { data, dispatch, storeName, backend, serverAuthoritative } = useApp();
   const fileRef = useRef<HTMLInputElement>(null);
   const [resetOpen, setResetOpen] = useState(false);
   const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -43,16 +44,14 @@ export default function Settings() {
   const setAssumptions = (patch: Partial<ProjectionAssumptions>) =>
     dispatch({ type: "SET_ASSUMPTIONS", assumptions: { ...a, ...patch } });
 
-  // Mirror settings to the real per-resource endpoint (PUT /api/settings) on a
-  // short debounce whenever they change on the Neon backend. The reducer keeps
-  // the UI instant (sidebar, theme); this writes the authoritative row through
-  // the new API. The legacy snapshot still persists settings too and acts as a
-  // fallback if the API call fails — it will be retired once every resource is
-  // on its own endpoint.
+  // Settings are written through PUT /api/settings on a short debounce. The
+  // reducer keeps the UI instant (sidebar name, theme); this endpoint is now the
+  // ONLY thing that persists them — there is no snapshot behind it any more, so
+  // a failure has to be reported rather than assumed to be covered.
   const settings = data.settings;
   const firstSettingsRun = useRef(true);
   useEffect(() => {
-    if (backend !== "neon") return; // local-only mode: the snapshot handles it
+    if (backend !== "neon") return; // local-only mode: the local store handles it
     if (firstSettingsRun.current) {
       firstSettingsRun.current = false;
       return; // don't write on initial hydrate
@@ -62,8 +61,8 @@ export default function Settings() {
         companyName: settings.companyName,
         theme: settings.theme,
         assumptions: settings.assumptions,
-      }).catch(() => {
-        /* snapshot already persisted as fallback */
+      }).catch((err) => {
+        setImportMsg({ ok: false, text: `Settings didn't save. ${errorMessage(err)}` });
       });
     }, 600);
     return () => clearTimeout(t);
@@ -73,9 +72,25 @@ export default function Settings() {
     downloadJSON("commission-data.json", data);
   }
 
+  /**
+   * Import and "reset to demo data" replace the WHOLE dataset in one step. That
+   * was only ever possible because `PUT /api/state` existed to carry the result
+   * to the database; with the snapshot write removed there is no way to apply
+   * them server-side, and applying them locally would leave the browser holding
+   * a dataset the database has never seen — the exact divergence this refactor
+   * removes. So both are local-backend-only, and the UI says why.
+   */
   function onImportFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (serverAuthoritative) {
+      setImportMsg({
+        ok: false,
+        text: "Importing a full dataset isn't available on a database-backed workspace — it would replace rows the database owns. Add people, plans, clients and payments through their own screens instead.",
+      });
+      e.target.value = "";
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       try {
@@ -195,6 +210,14 @@ export default function Settings() {
           <p className="text-sm text-slate-500">
             Active store: <span className="font-medium">{storeName}</span>. Export to
             back up the current tenant's data or move it between environments.
+            {serverAuthoritative && (
+              <>
+                {" "}
+                Import and reset are unavailable here: this workspace's rows are owned by the
+                database, and every change goes through its own screen so it can be validated,
+                audited, and recomputed.
+              </>
+            )}
           </p>
 
           {importMsg && (
@@ -214,7 +237,16 @@ export default function Settings() {
             <Button variant="secondary" onClick={exportJSON}>
               <Download className="h-4 w-4" /> Export JSON
             </Button>
-            <Button variant="secondary" onClick={() => fileRef.current?.click()}>
+            <Button
+              variant="secondary"
+              onClick={() => fileRef.current?.click()}
+              disabled={serverAuthoritative}
+              title={
+                serverAuthoritative
+                  ? "Not available on a database-backed workspace"
+                  : undefined
+              }
+            >
               <Upload className="h-4 w-4" /> Import JSON
             </Button>
             <input
@@ -224,7 +256,17 @@ export default function Settings() {
               className="hidden"
               onChange={onImportFile}
             />
-            <Button variant="ghost" className="text-rose-500" onClick={() => setResetOpen(true)}>
+            <Button
+              variant="ghost"
+              className="text-rose-500"
+              onClick={() => setResetOpen(true)}
+              disabled={serverAuthoritative}
+              title={
+                serverAuthoritative
+                  ? "Not available on a database-backed workspace"
+                  : undefined
+              }
+            >
               <RotateCcw className="h-4 w-4" /> Reset to demo data
             </Button>
           </div>

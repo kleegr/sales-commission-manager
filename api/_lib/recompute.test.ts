@@ -69,7 +69,8 @@ function client(over: Partial<Client> = {}): Client {
 const setupPay: Payment = { id: "p_setup", clientId: "cl1", date: "2025-01-01", type: "setup_fee", amount: 1000, paymentNumber: null, notes: "", createdAt: "2025-01-01" };
 const monthlyPay: Payment = { id: "p_m1", clientId: "cl1", date: "2025-01-01", type: "monthly_subscription", amount: 200, paymentNumber: 1, notes: "", createdAt: "2025-01-01" };
 
-const findByRule = (rows: CommissionEntry[], ruleId: string) => rows.filter((r) => r.ruleId === ruleId);
+const findByRule = <T extends CommissionEntry>(rows: T[], ruleId: string): T[] =>
+  rows.filter((r) => r.ruleId === ruleId);
 
 // ---- status classification -------------------------------------------------
 
@@ -202,6 +203,59 @@ console.log("\n[Recompute \u00b7 unassigned client]");
   const otherSp: Salesperson = { ...sp, id: "spX" };
   const r = recomputeClientLedger({ client: client(), salesperson: otherSp, plan: plan(), payments: [setupPay], priorRows: [], today: TODAY });
   ok("salesperson mismatch -> nothing inserted", r.insertRows.length === 0);
+}
+
+// ---- STABLE IDENTITY: a regenerated row keeps the id a payout points at -----
+//
+// The defect this covers: a re-priced row used to get a brand-new id, so
+// `payout_batch_entries.commission_entry_id` (which has no foreign key) simply
+// stopped resolving. The batch kept its total but lost its lines — and because
+// rejected/canceled batches hold NON-locked rows, they lost their history on the
+// next edit to the client.
+
+console.log("\n[Recompute \u00b7 stable identity across a rebuild]");
+{
+  const prior: PriorLedgerRow[] = [
+    { id: "led_keep_setup", paymentId: "p_setup", ruleId: "r_setup", status: "pending", paidDate: null, releasedOverride: false, payoutBatchId: null },
+    { id: "led_keep_res", paymentId: "p_m1", ruleId: "r_res", status: "pending", paidDate: null, releasedOverride: false, payoutBatchId: null },
+  ];
+  const r = recomputeClientLedger({ client: client(), salesperson: sp, plan: plan(), payments: [setupPay, monthlyPay], priorRows: prior, today: TODAY });
+  ok("the re-priced setup row keeps its id", findByRule(r.insertRows, "r_setup")[0]?.id === "led_keep_setup");
+  ok("the re-priced residual row keeps its id", findByRule(r.insertRows, "r_res")[0]?.id === "led_keep_res");
+  // A line with no predecessor is genuinely new, so it mints an id.
+  const bonus = findByRule(r.insertRows, "r_bonus")[0];
+  ok("a brand-new line still gets a fresh id", !!bonus && bonus.id !== "led_keep_setup" && bonus.id !== "led_keep_res");
+  ok("delete+insert cover the same ids, so nothing is orphaned",
+    prior.every((pr) => r.deleteIds.includes(pr.id) && r.insertRows.some((row) => row.id === pr.id)));
+}
+
+// Re-pricing must not detach a line from the batch that already claimed it.
+{
+  const prior: PriorLedgerRow[] = [
+    { id: "led_in_batch", paymentId: "p_setup", ruleId: "r_setup", status: "rejected", paidDate: null, releasedOverride: false, payoutBatchId: "po_1" },
+  ];
+  const r = recomputeClientLedger({ client: client(), salesperson: sp, plan: plan(), payments: [setupPay], priorRows: prior, today: TODAY });
+  const row = findByRule(r.insertRows, "r_setup")[0];
+  ok("a rejected line keeps its batch linkage", row?.payoutBatchId === "po_1");
+  ok("...and its id", row?.id === "led_in_batch");
+  ok("...and its manual status label", row?.status === "rejected");
+}
+
+// With identity carried across, the recompute is now fully deterministic:
+// running it twice over unchanged inputs must produce identical rows.
+{
+  const prior: PriorLedgerRow[] = [
+    { id: "led_a", paymentId: "p_setup", ruleId: "r_setup", status: "pending", paidDate: null, releasedOverride: false },
+    { id: "led_b", paymentId: "p_setup", ruleId: "r_bonus", status: "pending", paidDate: null, releasedOverride: false },
+    { id: "led_c", paymentId: "p_m1", ruleId: "r_res", status: "pending", paidDate: null, releasedOverride: false },
+  ];
+  const args = { client: client(), salesperson: sp, plan: plan(), payments: [setupPay, monthlyPay], priorRows: prior, today: TODAY };
+  const first = recomputeClientLedger(args);
+  const second = recomputeClientLedger(args);
+  const strip = (rows: typeof first.insertRows) =>
+    rows.map((x) => ({ ...x, createdAt: "" })).sort((a, b) => a.id.localeCompare(b.id));
+  ok("two runs over unchanged input are byte-identical",
+    JSON.stringify(strip(first.insertRows)) === JSON.stringify(strip(second.insertRows)));
 }
 
 console.log(`\n========================\n${passed} passed, ${failed} failed\n`);

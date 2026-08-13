@@ -18,6 +18,7 @@ import {
   TR,
   TH,
   TD,
+  ErrorBanner,
 } from "../components/ui";
 import { DateRangeFilter, type DateRange } from "../components/DateRangeFilter";
 import { fullLedger, displayStatus, clientLabel } from "../lib/ledger";
@@ -25,6 +26,7 @@ import { commissionTotals, inRange } from "../lib/analytics";
 import { formatCurrency, formatDate, formatPercent } from "../lib/format";
 import { downloadCSV } from "../lib/export";
 import { releaseCommissions, recomputeLedger } from "../lib/resource-client";
+import { errorMessage } from "../lib/api-errors";
 
 const PAYMENT_TYPE_LABEL: Record<string, string> = {
   setup_fee: "Setup fee",
@@ -48,13 +50,14 @@ const STATUS_OPTIONS: (CommissionStatus | "all" | "real")[] = [
 ];
 
 export default function Ledger() {
-  const { data, dispatch, reload } = useApp();
+  const { data, dispatch, reload, serverAuthoritative } = useApp();
   const { user } = useAuth();
   const canRelease = !!user && ADMIN_ROLES.includes(user.role);
   const [recomputing, setRecomputing] = useState(false);
   const [spFilter, setSpFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<CommissionStatus | "all" | "real">("all");
   const [range, setRange] = useState<DateRange>({ from: null, to: null });
+  const [error, setError] = useState<string | null>(null);
 
   const ledger = useMemo(() => fullLedger(data, 24), [data]);
   const spName = (id: string) => data.salespeople.find((s) => s.id === id)?.name ?? "—";
@@ -89,8 +92,11 @@ export default function Ledger() {
       // reload. Falls back to the local store off the API.
       await releaseCommissions([id]);
       await reload();
-    } catch {
-      dispatch({ type: "RELEASE_COMMISSION", ids: [id] });
+    } catch (err) {
+      // The local reducer is the write path ONLY where no server owns the data
+      // (`vite dev`). A refused release on a real deployment is reported.
+      if (serverAuthoritative) setError(errorMessage(err));
+      else dispatch({ type: "RELEASE_COMMISSION", ids: [id] });
     }
   }
 
@@ -99,9 +105,10 @@ export default function Ledger() {
     try {
       await recomputeLedger();
       await reload();
-    } catch {
+    } catch (err) {
       // Local-store mode keeps the ledger recomputed on every change, so there
-      // is nothing to do when the API isn't reachable.
+      // is nothing to do when no server owns the data.
+      if (serverAuthoritative) setError(errorMessage(err));
     } finally {
       setRecomputing(false);
     }
@@ -162,6 +169,8 @@ export default function Ledger() {
           </>
         }
       />
+
+      <ErrorBanner message={error} onDismiss={() => setError(null)} />
 
       <div className="mb-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard label="Earned (real)" value={formatCurrency(totals.earned)} tone="green" />

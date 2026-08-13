@@ -35,6 +35,7 @@ import {
 } from "../components/ui";
 import { Modal } from "../components/ui/Modal";
 import { PortalSkeleton } from "../components/PortalSkeleton";
+import { WithdrawalCard } from "../components/portal/WithdrawalCard";
 import { portalView } from "../lib/portal-state";
 import { fullLedger, displayStatus, clientLabel } from "../lib/ledger";
 import { commissionTotals } from "../lib/analytics";
@@ -55,7 +56,7 @@ function emptyLead(): LeadDraft {
 }
 
 export default function AffiliatePortal() {
-  const { data, reload, role, hydrating } = useApp();
+  const { data, reload, role, hydrating, serverAuthoritative } = useApp();
   const { user } = useAuth();
   const me = data.salespeople[0]; // self-scoped: the only person is this user
   const [open, setOpen] = useState(false);
@@ -212,6 +213,11 @@ export default function AffiliatePortal() {
         <StatCard label="Paid out" value={formatCurrency(totals.paid)} tone="green" />
         <StatCard label="Projected (next 24 mo)" value={formatCurrency(totals.projected)} tone="cyan" />
         <StatCard label="My referrals" value={referrals.length} tone="violet" />
+      </div>
+
+      {/* What you can actually be paid, and a button to ask for it. */}
+      <div className="mb-5">
+        <WithdrawalCard canRequest={serverAuthoritative} onRequested={reload} />
       </div>
 
       {/* Referrals */}

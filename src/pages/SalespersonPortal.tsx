@@ -26,6 +26,7 @@ import {
 } from "../components/ui";
 import { Modal } from "../components/ui/Modal";
 import { PortalSkeleton } from "../components/PortalSkeleton";
+import { WithdrawalCard } from "../components/portal/WithdrawalCard";
 import { portalView } from "../lib/portal-state";
 import { MoneyBarChart } from "../components/charts/Charts";
 import { fullLedger, displayStatus, clientLabel } from "../lib/ledger";
@@ -62,7 +63,7 @@ const GOAL_METRIC_NOUN: Record<string, string> = {
 const GOAL_PERIOD_LABEL: Record<string, string> = { monthly: "this month", quarterly: "this quarter", custom: "this period" };
 
 export default function SalespersonPortal() {
-  const { data, reload, hydrating } = useApp();
+  const { data, reload, hydrating, serverAuthoritative } = useApp();
   const { user } = useAuth();
   // Self-scoped: under real auth /api/state returns only the logged-in
   // salesperson, so the portal always shows that single person's own data.
@@ -277,6 +278,11 @@ export default function SalespersonPortal() {
             <StatCard label="Paid" value={formatCurrency(totals.paid)} tone="blue" />
             <StatCard label="Pending" value={formatCurrency(totals.pending)} tone="amber" />
             <StatCard label="Projected" value={formatCurrency(totals.projected)} tone="cyan" />
+          </div>
+
+          {/* What you can actually be paid, and a button to ask for it. */}
+          <div className="mb-5">
+            <WithdrawalCard canRequest={serverAuthoritative} onRequested={reload} />
           </div>
 
           {myGoals.length > 0 && (

@@ -7,6 +7,7 @@ import {
   Card,
   EmptyState,
   PayoutBadge,
+  Badge,
   StatCard,
   SectionTitle,
   Select,
@@ -175,6 +176,9 @@ export default function Payouts() {
         id: p.id,
         salespersonId: p.salespersonId,
         salespersonName: spName(p.salespersonId),
+        // The local backend has no withdrawal flow (no server to reconcile a
+        // balance against), so every local batch is admin-assembled.
+        kind: "admin_batch",
         status: p.status,
         totalAmount: p.totalAmount,
         entryCount: p.commissionEntryIds.length,
@@ -183,6 +187,7 @@ export default function Payouts() {
         submittedAt: p.submittedAt,
         approvedAt: p.approvedAt,
         paidAt: p.paidAt,
+        lines: [],
         events: [],
       }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -315,7 +320,17 @@ export default function Payouts() {
                         {expanded[p.id] ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                       </button>
                     </TD>
-                    <TD className="font-medium text-slate-900 dark:text-white">{p.salespersonName}</TD>
+                    <TD className="font-medium text-slate-900 dark:text-white">
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        {p.salespersonName}
+                        {/* A rep asked for this one themselves. It runs the same
+                            approval path as any other batch; the badge just tells
+                            the approver where it came from. */}
+                        {p.kind === "withdrawal_request" && (
+                          <Badge tone="violet">Requested</Badge>
+                        )}
+                      </span>
+                    </TD>
                     <TD className="text-slate-500">{p.entryCount}</TD>
                     <TD className="text-right font-semibold tabular-nums text-slate-900 dark:text-white">{formatCurrency(p.totalAmount)}</TD>
                     <TD><PayoutBadge status={p.status} /></TD>
@@ -361,6 +376,35 @@ export default function Payouts() {
                   {expanded[p.id] && (
                     <TR key={p.id + "_ev"}>
                       <TD colSpan={8} className="bg-slate-50 dark:bg-slate-900/40">
+                        {/* The lines are read from the batch's OWN snapshot,
+                            taken at submit time — these amounts are what was
+                            approved and paid, and never change if the underlying
+                            ledger row is later re-priced or removed. */}
+                        {p.lines.length > 0 && (
+                          <div className="mb-3">
+                            <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                              Lines as submitted
+                            </p>
+                            <ul className="space-y-0.5">
+                              {p.lines.map((l) => (
+                                <li key={l.commissionEntryId} className="flex items-baseline justify-between gap-3 text-xs">
+                                  <span className="min-w-0 truncate text-slate-500">
+                                    {l.ruleLabel || "Commission"}
+                                    {l.paymentDate ? ` · ${formatDate(l.paymentDate)}` : ""}
+                                    {!l.linked && (
+                                      <span className="ml-1 text-amber-600 dark:text-amber-400">
+                                        (ledger row no longer exists)
+                                      </span>
+                                    )}
+                                  </span>
+                                  <span className="flex-none tabular-nums text-slate-600 dark:text-slate-300">
+                                    {formatCurrency(l.commissionAmount)}
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
                         {p.events.length === 0 ? (
                           <span className="text-xs text-slate-400">No detailed history recorded.</span>
                         ) : (

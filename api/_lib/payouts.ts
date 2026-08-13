@@ -12,6 +12,12 @@
 // ============================================================================
 
 import { query, withTransaction, type PoolClient } from "./db.js";
+import {
+  computeBalance,
+  selectWithdrawalEntries,
+  type BalanceBreakdown,
+  type BalanceRow,
+} from "./balance.js";
 
 const nowISO = () => new Date().toISOString();
 const uid = (p: string) => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -248,6 +254,93 @@ export async function submitPayout(
     await logEvent(c, tenantId, id, "pending", "submitted", actor, notes ?? "");
     return { id };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Self-service withdrawals
+// ---------------------------------------------------------------------------
+
+/** Every ledger row for one rep, in the shape the balance reconciliation needs. */
+export async function readBalanceRows(
+  tenantId: string,
+  salespersonId: string,
+): Promise<BalanceRow[]> {
+  const { rows } = await query<any>(
+    `SELECT id, commission_amount, status, is_projection, rule_type,
+            entry_source, payout_batch_id, payment_date
+       FROM commission_ledger
+      WHERE tenant_id = $1 AND salesperson_id = $2`,
+    [tenantId, salespersonId],
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    commissionAmount: Number(r.commission_amount),
+    status: r.status,
+    isProjection: !!r.is_projection,
+    ruleType: r.rule_type,
+    entrySource: r.entry_source ?? "engine",
+    payoutBatchId: r.payout_batch_id ?? null,
+    paymentDate: r.payment_date ?? "",
+  }));
+}
+
+/** A rep's balance, reconciled. Used by the portal card and the request flow. */
+export async function getBalance(
+  tenantId: string,
+  salespersonId: string,
+): Promise<BalanceBreakdown & { hasOpenRequest: boolean }> {
+  const rows = await readBalanceRows(tenantId, salespersonId);
+  const { rows: open } = await query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM payout_batches
+      WHERE tenant_id = $1 AND salesperson_id = $2
+        AND kind = 'withdrawal_request' AND status IN ('submitted','approved')`,
+    [tenantId, salespersonId],
+  );
+  return { ...computeBalance(rows), hasOpenRequest: Number(open[0]?.n ?? 0) > 0 };
+}
+
+/**
+ * A rep asking to be paid from their own available balance.
+ *
+ * This deliberately reuses submitPayout rather than inventing a parallel
+ * lifecycle: the result is an ordinary payout batch that an owner/admin/manager
+ * approves, marks paid, or rejects with the SAME role checks, separation of
+ * duties and audit history as any other batch. The only things this adds are
+ * (a) reconciling the balance server-side, so a rep cannot request money the
+ * ledger does not owe them, and (b) refusing a second concurrent request.
+ *
+ * The amount is never taken from the client: the client asks for a number, and
+ * the server decides which ledger lines back it.
+ */
+export async function requestWithdrawal(
+  tenantId: string,
+  actor: PayoutActor,
+  actorSalespersonId: string | null,
+  salespersonId: string,
+  requestedAmount: number | null,
+  notes: string,
+): Promise<{ id: string; amount: number; partial: boolean }> {
+  if (!salespersonId) throw new PayoutError("nothing_to_submit");
+
+  // A rep may only ever request for themselves; a manager/admin may raise one
+  // on behalf of someone in scope (visibleSalespeople enforces which).
+  const visible = await visibleSalespeople(tenantId, actor, actorSalespersonId);
+  if (visible !== "all" && !visible.has(salespersonId)) throw new PayoutError("forbidden", 403);
+
+  const balance = await getBalance(tenantId, salespersonId);
+  // One open request at a time. Two concurrent requests would each reconcile
+  // against the same pool and could together claim more than the rep is owed.
+  if (balance.hasOpenRequest) throw new PayoutError("withdrawal_already_pending", 409);
+
+  const rows = await readBalanceRows(tenantId, salespersonId);
+  const selection = selectWithdrawalEntries(balance, rows, requestedAmount);
+  if (!selection.ok) throw new PayoutError(selection.error, selection.error === "nothing_to_submit" ? 400 : 409);
+
+  const result = await submitPayout(
+    tenantId, actor, actorSalespersonId, salespersonId,
+    selection.entryIds, notes, "withdrawal_request",
+  );
+  return { id: result.id, amount: selection.amount, partial: selection.partial };
 }
 
 async function loadBatch(c: PoolClient, tenantId: string, batchId: string) {

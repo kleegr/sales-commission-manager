@@ -13,7 +13,14 @@
 // ============================================================================
 
 import { createHash } from "node:crypto";
-import { query } from "./db.js";
+import { query, withTransaction } from "./db.js";
+import {
+  normalizePaymentEvent,
+  paymentEventAction,
+  type NormalizedPaymentEvent,
+} from "./payment-events.js";
+import { planClawback, type ClawbackCandidate, type ClawbackTrigger } from "./clawbacks.js";
+import { LOCKED_STATUSES, recomputeClientInTx } from "./recompute.js";
 import {
   gatewaySubaccount,
   gatewayUsers,
@@ -842,9 +849,283 @@ export async function applyWebhookEvent(eventType: string, payload: any): Promis
       const r = await upsertOpportunity(t.id, o);
       return { applied: true, action: `opportunity_${r}`, tenantId: t.id };
     }
+    case "payment.succeeded":
+    case "payment.failed":
+    case "payment.refunded":
+    case "payment.disputed": {
+      const t = subAccountId ? await resolveTenantBySubAccount(subAccountId) : null;
+      if (!t) return { applied: false, action: "tenant_unknown", tenantId: null };
+      const ev = normalizePaymentEvent(eventType, payload);
+      if (!ev) return { applied: false, action: "unparseable_payment", tenantId: t.id };
+      const r = await applyPaymentEvent(t.id, ev);
+      return { applied: r.applied, action: r.action, tenantId: t.id };
+    }
     default:
       return { applied: false, action: "ignored", tenantId: null };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Payment events: verification and clawbacks
+//
+// This is the path that makes a commission real. A succeeded charge records (or
+// confirms) the payment and recomputes the client, which is what moves the
+// commission from `held` to `pending`; a refund or chargeback reverses it.
+//
+// Everything here is IDEMPOTENT on the gateway's own payment id: the webhook
+// receiver already dedupes by delivery id, but a gateway that re-sends the same
+// charge under a new delivery id must still not double-book the money, so the
+// payment row is UPSERTed and the clawback plan skips lines already reversed.
+// ---------------------------------------------------------------------------
+
+/** Find the client a payment belongs to, via its contact or opportunity ref. */
+async function resolveClientForPayment(
+  tenantId: string,
+  ev: NormalizedPaymentEvent,
+): Promise<{ id: string; salespersonId: string | null } | null> {
+  const tryRef = async (sql: string, params: unknown[]) => {
+    const { rows } = await query<any>(sql, params);
+    return rows[0] ? { id: rows[0].id, salespersonId: rows[0].salesperson_id ?? null } : null;
+  };
+
+  if (ev.contactRef) {
+    const hit = await tryRef(
+      `SELECT id, salesperson_id FROM clients
+        WHERE tenant_id = $1 AND (kleegr_contact_id = $2 OR ghl_contact_id = $2) LIMIT 1`,
+      [tenantId, ev.contactRef],
+    );
+    if (hit) return hit;
+  }
+  if (ev.opportunityRef) {
+    const hit = await tryRef(
+      `SELECT id, salesperson_id FROM clients
+        WHERE tenant_id = $1 AND (kleegr_opportunity_id = $2 OR ghl_opportunity_id = $2) LIMIT 1`,
+      [tenantId, ev.opportunityRef],
+    );
+    if (hit) return hit;
+  }
+  // Last resort: a payment we have already seen tells us its own client.
+  if (ev.externalId) {
+    const { rows } = await query<any>(
+      `SELECT c.id, c.salesperson_id
+         FROM payments p JOIN clients c ON c.id = p.client_id AND c.tenant_id = p.tenant_id
+        WHERE p.tenant_id = $1 AND p.external_payment_id = $2 LIMIT 1`,
+      [tenantId, ev.externalId],
+    );
+    if (rows[0]) return { id: rows[0].id, salespersonId: rows[0].salesperson_id ?? null };
+  }
+  return null;
+}
+
+export interface PaymentEventResult {
+  applied: boolean;
+  action: string;
+  clientId?: string;
+  paymentId?: string;
+  reversed?: number;
+}
+
+/** Apply one normalized payment event to a tenant's data. */
+export async function applyPaymentEvent(
+  tenantId: string,
+  ev: NormalizedPaymentEvent,
+): Promise<PaymentEventResult> {
+  const client = await resolveClientForPayment(tenantId, ev);
+  // A payment for a contact we have never imported is not an error: the tenant
+  // may simply not track that client here. Acknowledge and move on rather than
+  // inventing a client (and therefore a commission) out of a payment webhook.
+  if (!client) return { applied: false, action: "client_unknown" };
+
+  const action = paymentEventAction(ev.kind);
+  const date = ev.date ?? nowISO().slice(0, 10);
+
+  if (action === "reverse") {
+    return reversePaymentEvent(tenantId, client.id, ev, date);
+  }
+
+  const verified = action === "record_verified";
+  const paymentId = ev.externalId ? `pay_k_${idSafe(ev.externalId)}` : uid("pay");
+  const ts = nowISO();
+
+  await withTransaction(async (c) => {
+    // UPSERT on the gateway id (unique per tenant), so a re-delivered charge
+    // updates the same row instead of adding a second one — double-counting a
+    // payment would double the commission.
+    await c.query(
+      `INSERT INTO payments
+         (id, tenant_id, client_id, salesperson_id, payment_date, payment_type, amount,
+          payment_number, source, external_payment_id, external_status, verified, verified_at,
+          notes, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'kleegr',$9,$10,$11,$12,$13,$14,$14)
+       ON CONFLICT (id) DO UPDATE SET
+         amount          = EXCLUDED.amount,
+         payment_date    = EXCLUDED.payment_date,
+         payment_type    = EXCLUDED.payment_type,
+         payment_number  = COALESCE(EXCLUDED.payment_number, payments.payment_number),
+         external_status = EXCLUDED.external_status,
+         -- verification only ever moves FORWARD: a later "failed" event for a
+         -- charge that already succeeded must not un-pay a confirmed payment.
+         verified        = payments.verified OR EXCLUDED.verified,
+         verified_at     = COALESCE(payments.verified_at, EXCLUDED.verified_at),
+         salesperson_id  = EXCLUDED.salesperson_id,
+         updated_at      = EXCLUDED.updated_at`,
+      [
+        paymentId, tenantId, client.id, client.salespersonId, date, ev.paymentType,
+        ev.amount, ev.paymentNumber, ev.externalId, ev.kind,
+        verified, verified ? ts : null,
+        ev.notes || `Kleegr ${ev.kind} payment`, ts,
+      ],
+    );
+    // The recompute is what actually releases the commission: with the payment
+    // now verified, the timing resolver stops holding its lines.
+    await recomputeClientInTx(c, tenantId, client.id);
+  });
+  await touchLastSync(tenantId);
+
+  return {
+    applied: true,
+    action: verified ? "payment_verified" : "payment_recorded_unverified",
+    clientId: client.id,
+    paymentId,
+  };
+}
+
+/**
+ * Reverse the commissions a refunded / charged-back payment generated, and
+ * record the refund itself so revenue reporting reflects it.
+ *
+ * The split between "void the line" and "book a negative adjustment" lives in
+ * clawbacks.ts — the short version is that an unpaid commission simply stops
+ * being payable, while an already-paid one is history and is instead netted off
+ * the rep's next payout.
+ */
+async function reversePaymentEvent(
+  tenantId: string,
+  clientId: string,
+  ev: NormalizedPaymentEvent,
+  date: string,
+): Promise<PaymentEventResult> {
+  const trigger: ClawbackTrigger = ev.kind === "disputed" ? "chargeback" : "refund";
+  const originalId = ev.reversesExternalId ?? ev.externalId;
+
+  const result = await withTransaction(async (c) => {
+    // Which of our payments is being reversed? Matched on the gateway id; if we
+    // never saw the original we still record the refund, we just have no
+    // specific commission lines to reverse.
+    const { rows: origRows } = await c.query<any>(
+      `SELECT id FROM payments
+        WHERE tenant_id = $1 AND external_payment_id = ANY($2::text[]) LIMIT 1`,
+      [tenantId, [originalId, ev.externalId].filter(Boolean)],
+    );
+    const originalPaymentId: string | null = origRows[0]?.id ?? null;
+
+    // 1. record the refund as its own payment row (negative revenue).
+    const refundId = ev.externalId
+      ? `pay_k_ref_${idSafe(ev.externalId)}`
+      : uid("pay_ref");
+    const ts = nowISO();
+    await c.query(
+      `INSERT INTO payments
+         (id, tenant_id, client_id, salesperson_id, payment_date, payment_type, amount,
+          payment_number, source, external_payment_id, external_status, verified, verified_at,
+          refunds_payment_id, notes, created_at, updated_at)
+       SELECT $1,$2,$3,c.salesperson_id,$4,'refund',$5,NULL,'kleegr',$6,$7,true,$8,$9,$10,$11,$11
+         FROM clients c WHERE c.id = $3 AND c.tenant_id = $2
+       ON CONFLICT (id) DO UPDATE SET
+         amount = EXCLUDED.amount, external_status = EXCLUDED.external_status,
+         updated_at = EXCLUDED.updated_at`,
+      [
+        refundId, tenantId, clientId, date, ev.amount,
+        ev.externalId ? `${ev.externalId}:refund` : null, ev.kind, ts,
+        originalPaymentId, ev.notes || `Kleegr ${ev.kind}`, ts,
+      ],
+    );
+
+    // 2. mark the original payment reversed so a later recompute does not
+    //    regenerate the commissions we are about to reverse.
+    if (originalPaymentId) {
+      await c.query(
+        `UPDATE payments SET external_status = $3, verified = false, updated_at = $4
+          WHERE tenant_id = $1 AND id = $2`,
+        [tenantId, originalPaymentId, ev.kind, ts],
+      );
+    }
+
+    // 3. plan and apply the reversal over that payment's commission lines.
+    const { rows: ledgerRows } = await c.query<any>(
+      originalPaymentId
+        ? `SELECT * FROM commission_ledger
+             WHERE tenant_id = $1 AND payment_id = $2 FOR UPDATE`
+        : `SELECT * FROM commission_ledger
+             WHERE tenant_id = $1 AND client_id = $2 AND payment_id IS NOT NULL FOR UPDATE`,
+      [tenantId, originalPaymentId ?? clientId],
+    );
+
+    const candidates: ClawbackCandidate[] = ledgerRows.map((r) => ({
+      id: r.id,
+      salespersonId: r.salesperson_id,
+      clientId: r.client_id ?? null,
+      paymentId: r.payment_id ?? null,
+      ruleId: r.commission_rule_id ?? null,
+      ruleType: r.rule_type,
+      ruleLabel: r.commission_rule_used ?? "",
+      commissionAmount: Number(r.commission_amount),
+      status: r.status,
+      isProjection: !!r.is_projection,
+      entrySource: r.entry_source ?? "engine",
+    }));
+
+    const plan = planClawback({ candidates, trigger, asOf: date });
+
+    if (plan.voidIds.length > 0) {
+      await c.query(
+        `UPDATE commission_ledger
+            SET status = 'clawed_back', payout_batch_id = NULL, updated_at = $4
+          WHERE tenant_id = $1 AND id = ANY($2::text[])
+            AND status <> ALL($3::text[])`,
+        [tenantId, plan.voidIds, LOCKED_STATUSES, nowISO()],
+      );
+      // A line sitting in an OPEN payout batch is locked, so the update above
+      // skips it. Leaving it silently in the batch would pay out reversed
+      // money, so it is flagged for the approver instead.
+      await c.query(
+        `UPDATE commission_ledger
+            SET notes = trim(both ' ' from coalesce(notes,'') || ' [reversed: client ' || $3 || ']'),
+                updated_at = $4
+          WHERE tenant_id = $1 AND id = ANY($2::text[]) AND status = ANY($5::text[])`,
+        [tenantId, plan.voidIds, trigger, nowISO(), LOCKED_STATUSES],
+      );
+    }
+
+    for (const adj of plan.adjustments) {
+      await c.query(
+        `INSERT INTO commission_ledger
+           (id, tenant_id, salesperson_id, client_id, payment_id, commission_plan_id,
+            commission_rule_id, rule_type, payment_date, payment_type, payment_amount,
+            commission_rule_used, commission_type, commission_value, commission_amount,
+            status, due_date, paid_date, released_override, payout_batch_id, is_projection,
+            notes, adjustment_of_entry_id, entry_source, created_at, updated_at)
+         SELECT $1,$2,$3,$4,NULL,sp.commission_plan_id,$5,$6,$7,'adjustment',0,
+                $8,'fixed',$9,$9,'pending',$7,NULL,false,NULL,false,$10,$11,'clawback',$12,$12
+           FROM salespeople sp WHERE sp.id = $3 AND sp.tenant_id = $2
+         ON CONFLICT (id) DO NOTHING`,
+        [
+          adj.id, tenantId, adj.salespersonId, adj.clientId, adj.ruleId, adj.ruleType,
+          date, adj.ruleLabel, adj.commissionAmount, adj.notes, adj.adjustmentOfEntryId, nowISO(),
+        ],
+      );
+    }
+
+    return plan;
+  });
+
+  await touchLastSync(tenantId);
+  return {
+    applied: true,
+    action: `payment_${trigger}`,
+    clientId,
+    reversed: result.totalReversed,
+  };
 }
 
 // ---------------------------------------------------------------------------

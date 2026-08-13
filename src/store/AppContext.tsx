@@ -73,6 +73,7 @@ type Action =
   | { type: "SET_THEME"; theme: "light" | "dark" }
   | { type: "SET_COMPANY"; name: string }
   | { type: "SET_ASSUMPTIONS"; assumptions: ProjectionAssumptions }
+  | { type: "SET_PAYMENT_VERIFICATION"; required: boolean }
   // salespeople
   | { type: "SP_ADD"; sp: Salesperson }
   | { type: "SP_UPDATE"; sp: Salesperson }
@@ -138,6 +139,11 @@ function reducer(state: AppData, action: Action): AppData {
       return { ...state, settings: { ...state.settings, companyName: action.name } };
     case "SET_ASSUMPTIONS":
       return { ...state, settings: { ...state.settings, assumptions: action.assumptions } };
+    case "SET_PAYMENT_VERIFICATION":
+      return {
+        ...state,
+        settings: { ...state.settings, requirePaymentVerification: action.required },
+      };
 
     // --- salespeople ---------------------------------------------------------
     case "SP_ADD":

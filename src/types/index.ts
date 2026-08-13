@@ -174,6 +174,27 @@ export interface Payment {
   paymentNumber: number | null;
   notes: string;
   createdAt: string;
+
+  // --- gateway verification (optional; absent on older rows) ----------------
+  /**
+   * Has the payment gateway CONFIRMED this money? An admin-entered payment is
+   * verified by definition (recording it is the assertion that it happened); a
+   * payment created from a Kleegr webhook is verified only when the event said
+   * the charge succeeded.
+   *
+   * It only changes behaviour when the tenant turns on
+   * `requirePaymentVerification`, which holds commissions from unconfirmed
+   * payments — see recompute.ts.
+   */
+  verified?: boolean;
+  /** When the gateway confirmed it. */
+  verifiedAt?: string | null;
+  /** Where the row came from: manual | kleegr | ghl | stripe | import. */
+  source?: string;
+  /** The gateway's own id — the idempotency key for payment webhooks. */
+  externalPaymentId?: string | null;
+  /** Gateway lifecycle state: succeeded | failed | refunded | disputed. */
+  externalStatus?: string | null;
 }
 
 // ----------------------------------------------------------------------------
@@ -265,6 +286,12 @@ export interface AppSettings {
   theme: "light" | "dark";
   companyName: string;
   assumptions: ProjectionAssumptions;
+  /**
+   * Hold every commission until the payment gateway confirms the money.
+   * Optional so older stored datasets (and the local-storage backend) still
+   * type-check; absent means OFF, the historical behaviour.
+   */
+  requirePaymentVerification?: boolean;
 }
 
 export interface AppData {

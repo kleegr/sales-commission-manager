@@ -14,6 +14,7 @@ import {
   Building2,
   RefreshCw,
   ToggleRight,
+  ShieldCheck,
 } from "lucide-react";
 import { useApp } from "../store/AppContext";
 import type { AppData, ProjectionAssumptions } from "../types";
@@ -61,6 +62,7 @@ export default function Settings() {
         companyName: settings.companyName,
         theme: settings.theme,
         assumptions: settings.assumptions,
+        requirePaymentVerification: settings.requirePaymentVerification === true,
       }).catch((err) => {
         setImportMsg({ ok: false, text: `Settings didn't save. ${errorMessage(err)}` });
       });
@@ -202,6 +204,32 @@ export default function Settings() {
               />
             </Field>
           </div>
+        </Card>
+
+        {/* Payment verification (gateway-confirmed money) */}
+        <Card className="space-y-4">
+          <SectionTitle right={<ShieldCheck className="h-4 w-4 text-slate-400" />}>
+            Payment verification
+          </SectionTitle>
+          <p className="text-sm text-slate-500">
+            With this on, a commission stays <span className="font-medium">held</span> until the
+            payment gateway confirms the client's money through the Kleegr webhook. It releases
+            automatically the moment the confirmation arrives. Leave it off if payments are entered
+            by hand here — recording a payment is already the assertion that it happened, and
+            turning this on with no payment webhooks arriving would hold every commission
+            indefinitely.
+          </p>
+          <Checkbox
+            label="Hold commissions until the payment gateway confirms the payment"
+            checked={data.settings.requirePaymentVerification === true}
+            onChange={(v) =>
+              dispatch({ type: "SET_PAYMENT_VERIFICATION", required: v })
+            }
+          />
+          <p className="text-xs text-slate-400">
+            Changing this recomputes the whole ledger, so existing lines are held or released to
+            match immediately. An admin can still force-release an individual line from the ledger.
+          </p>
         </Card>
 
         {/* Data */}

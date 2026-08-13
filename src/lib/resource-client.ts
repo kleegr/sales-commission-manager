@@ -83,6 +83,8 @@ export interface SettingsPayload {
   companyName: string;
   theme: "light" | "dark";
   assumptions: ProjectionAssumptions;
+  /** Hold commissions until the payment gateway confirms the payment. */
+  requirePaymentVerification?: boolean;
 }
 
 export async function saveSettings(payload: SettingsPayload): Promise<void> {
@@ -93,6 +95,7 @@ export async function saveSettings(payload: SettingsPayload): Promise<void> {
       companyName: payload.companyName,
       theme: payload.theme,
       assumptions: payload.assumptions,
+      requirePaymentVerification: payload.requirePaymentVerification === true,
     }),
   });
   await asJson(res);

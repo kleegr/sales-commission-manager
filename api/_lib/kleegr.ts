@@ -27,6 +27,7 @@
 // ============================================================================
 
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { normalizePaymentEventName } from "./payment-events.js";
 
 /** Stable identity of this app inside Kleegr / GoHighLevel. */
 export const APP_KEY = "sales-commission-manager";
@@ -409,12 +410,17 @@ export function subaccountGatewayResource(): GatewayResource {
 }
 
 /**
- * Normalize a webhook event name so the receiver handles BOTH namings Kleegr
- * might send: `location.*` (matching the locations scope) and the legacy
- * `subaccount.*`. Everything downstream keys on the `subaccount.*` form.
+ * Normalize a webhook event name so the receiver handles every naming Kleegr
+ * might send:
+ *   - `location.*` (matching the locations scope) and the legacy `subaccount.*`
+ *     — everything downstream keys on the `subaccount.*` form;
+ *   - the payment lifecycle, which arrives under whichever name the underlying
+ *     gateway uses (`invoice.paid`, `charge.refunded`, `chargeback.created`, …)
+ *     and is folded onto our four canonical `payment.*` events.
  */
 export function normalizeWebhookEvent(name: string): string {
-  return name.startsWith("location.") ? name.replace(/^location\./, "subaccount.") : name;
+  if (name.startsWith("location.")) return name.replace(/^location\./, "subaccount.");
+  return normalizePaymentEventName(name) ?? name;
 }
 
 /**
@@ -584,6 +590,14 @@ export const HANDLED_WEBHOOK_EVENTS = [
   "contact.updated",
   "opportunity.created",
   "opportunity.updated",
+  // Payment lifecycle. These are what make a commission PAYABLE (or reverse
+  // it): a succeeded charge confirms the client actually paid, and a refund or
+  // chargeback claws the commission back. See payment-events.ts for the alias
+  // table that maps each gateway's naming onto these four.
+  "payment.succeeded",
+  "payment.failed",
+  "payment.refunded",
+  "payment.disputed",
 ] as const;
 
 export type HandledWebhookEvent = (typeof HANDLED_WEBHOOK_EVENTS)[number];

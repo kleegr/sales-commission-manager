@@ -9,6 +9,7 @@ import { hasDb, query } from "./_lib/db.js";
 import { ensureSchema, seedIfEmpty } from "./_lib/repository.js";
 import { getSessionUser } from "./_lib/auth.js";
 import { csrfOk } from "./_lib/http.js";
+import { recomputeTenant } from "./_lib/recompute.js";
 import { parseBody, canEditSettings, normalizeSettingsInput } from "./_lib/handlers.js";
 
 const nowISO = () => new Date().toISOString();
@@ -20,6 +21,7 @@ function toAppSettings(row: any) {
       theme: "light",
       companyName: "",
       assumptions: { avgSetupFee: 2500, avgMonthly: 250, closingsPerMonth: 5, monthlyChurnPct: 3, months: 60 },
+      requirePaymentVerification: false,
     };
   }
   return {
@@ -32,6 +34,7 @@ function toAppSettings(row: any) {
       monthlyChurnPct: Number(row.default_churn_rate),
       months: Number(row.projection_months),
     },
+    requirePaymentVerification: row.require_payment_verification === true,
   };
 }
 
@@ -60,8 +63,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await query(
         `INSERT INTO settings
            (tenant_id, company_name, theme, default_setup_fee, default_monthly_subscription,
-            default_closings_per_month, default_churn_rate, projection_months, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)
+            default_closings_per_month, default_churn_rate, projection_months,
+            require_payment_verification, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)
          ON CONFLICT (tenant_id) DO UPDATE SET
            company_name = EXCLUDED.company_name,
            theme = EXCLUDED.theme,
@@ -70,12 +74,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
            default_closings_per_month = EXCLUDED.default_closings_per_month,
            default_churn_rate = EXCLUDED.default_churn_rate,
            projection_months = EXCLUDED.projection_months,
+           require_payment_verification = EXCLUDED.require_payment_verification,
            updated_at = EXCLUDED.updated_at`,
         [
           tenantId, v.companyName, v.theme, v.defaultSetupFee, v.defaultMonthly,
-          v.closingsPerMonth, v.churnPct, v.months, ts,
+          v.closingsPerMonth, v.churnPct, v.months, v.requirePaymentVerification, ts,
         ],
       );
+      // Turning the gate ON must hold existing unverified lines, and turning it
+      // OFF must release them — neither happens until the ledger is rebuilt, so
+      // the toggle recomputes the tenant rather than taking effect only on the
+      // next unrelated edit.
+      await recomputeTenant(tenantId);
       const { rows } = await query<any>(`SELECT * FROM settings WHERE tenant_id = $1`, [tenantId]);
       return res.status(200).json({ ok: true, settings: toAppSettings(rows[0]) });
     }

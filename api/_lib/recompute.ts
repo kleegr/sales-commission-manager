@@ -131,6 +131,20 @@ export interface RecomputeClientInput {
   priorRows: PriorLedgerRow[];
   /** Evaluation date ("today"); defaults to today. */
   today?: string;
+  /**
+   * The tenant's "don't pay on an unconfirmed payment" setting.
+   *
+   * OFF (the default, and every pre-existing tenant): a payment exists because
+   * an admin recorded it, and recording it IS the assertion that it happened.
+   * Nothing changes.
+   *
+   * ON: only a payment the gateway has confirmed (payment.verified, set by the
+   * Kleegr payment webhook) can release a commission. Lines from an unconfirmed
+   * payment are HELD — the product's rule that *if the client hasn't paid, the
+   * salesperson's commission stays held* — and release automatically the moment
+   * the confirmation arrives and this recompute runs again.
+   */
+  requirePaymentVerification?: boolean;
 }
 
 export interface RecomputeClientResult {
@@ -160,6 +174,7 @@ export function recomputeClientLedger(
 ): RecomputeClientResult {
   const today = input.today ?? todayISO();
   const { client, salesperson, plan, payments, priorRows } = input;
+  const requireVerified = input.requirePaymentVerification === true;
 
   const lockedRows = priorRows.filter((r) => isLocked(r.status));
   const nonLockedRows = priorRows.filter((r) => !isLocked(r.status));
@@ -186,12 +201,16 @@ export function recomputeClientLedger(
   const timing = normalizeTiming(plan.timing);
 
   // Qualifying monthly payments at/under `today` (for the after_payments gate).
+  // When verification is required, an unconfirmed payment does not count toward
+  // the threshold either — "pay after 3 payments" has to mean three payments
+  // that actually cleared.
   const cutoff = isoToDate(today).getTime();
   const clientPaymentCount = payments.filter(
     (p) =>
       p.clientId === client.id &&
       p.type === "monthly_subscription" &&
-      isoToDate(p.date).getTime() <= cutoff,
+      isoToDate(p.date).getTime() <= cutoff &&
+      (!requireVerified || p.verified !== false),
   ).length;
 
   for (const pay of payments) {
@@ -215,11 +234,23 @@ export function recomputeClientLedger(
         releasedOverride,
       });
 
+      // An unconfirmed payment holds its commission when the tenant requires
+      // gateway verification — and holds it regardless of what the plan's
+      // timing says, because "the client has paid" is a precondition of every
+      // trigger, not one more trigger among them. An admin force-release
+      // (releasedOverride) still wins: that is a human deciding to pay anyway.
+      const unverified =
+        requireVerified && pay.verified === false && !releasedOverride;
+
       // Timing owns the status UNLESS a human set a manual label we must keep
       // (rejected / canceled). submitted/approved/paid are locked above and
       // never reach here.
       const status: CommissionStatus =
-        prior && isManual(prior.status) ? prior.status : t.status;
+        prior && isManual(prior.status)
+          ? prior.status
+          : unverified
+            ? "held"
+            : t.status;
 
       insertRows.push({
         ...entry,
@@ -231,9 +262,11 @@ export function recomputeClientLedger(
         paidDate: prior?.paidDate ?? null,
         releasedOverride,
         earnedDate: t.earnedDate,
-        releaseDate: t.releaseDate,
-        holdDays: t.holdDays,
-        holdReason: t.reason,
+        // A payment-verification hold has no known release date: it releases
+        // when the gateway confirms, which is not a date we can compute.
+        releaseDate: unverified ? null : t.releaseDate,
+        holdDays: unverified ? null : t.holdDays,
+        holdReason: unverified ? "Awaiting payment confirmation" : t.reason,
         clawbackReason: t.clawbackReason,
         timingTrigger: t.trigger,
       });
@@ -328,7 +361,29 @@ function mapPaymentRow(p: any): Payment {
     paymentNumber: p.payment_number === null ? null : Number(p.payment_number),
     notes: p.notes ?? "",
     createdAt: p.created_at || nowISO(),
+    // Default TRUE for any row predating the column: an existing payment was
+    // entered by an admin, and that IS the confirmation.
+    verified: p.verified === undefined || p.verified === null ? true : !!p.verified,
+    verifiedAt: p.verified_at ? new Date(p.verified_at).toISOString() : null,
+    source: p.source ?? "manual",
+    externalPaymentId: p.external_payment_id ?? null,
+    externalStatus: p.external_status ?? null,
   };
+}
+
+/**
+ * Read the tenant's "hold commissions until the gateway confirms" setting.
+ * Absent row or column ⇒ OFF, so an existing tenant behaves exactly as before.
+ */
+export async function readPaymentVerificationSetting(
+  c: PoolClient,
+  tenantId: string,
+): Promise<boolean> {
+  const { rows } = await c.query<{ v: boolean | null }>(
+    `SELECT require_payment_verification AS v FROM settings WHERE tenant_id = $1`,
+    [tenantId],
+  );
+  return rows[0]?.v === true;
 }
 
 /** Insert one freshly-computed ledger row (column mapping mirrors writeState). */
@@ -424,7 +479,10 @@ export async function recomputeClientInTx(
     payoutBatchId: r.payout_batch_id ?? null,
   }));
 
-  const result = recomputeClientLedger({ client, salesperson, plan, payments, priorRows, today });
+  const requirePaymentVerification = await readPaymentVerificationSetting(c, tenantId);
+  const result = recomputeClientLedger({
+    client, salesperson, plan, payments, priorRows, today, requirePaymentVerification,
+  });
 
   if (result.deleteIds.length > 0) {
     await c.query(

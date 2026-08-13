@@ -300,6 +300,13 @@ export async function readState(tenantId: string): Promise<AppData> {
     paymentNumber: p.payment_number === null ? null : Number(p.payment_number),
     notes: p.notes ?? "",
     createdAt: p.created_at || nowISO(),
+    // Absent column (a row predating verification) reads as verified: an admin
+    // entered it, and recording a payment IS the assertion that it happened.
+    verified: p.verified === undefined || p.verified === null ? true : !!p.verified,
+    verifiedAt: p.verified_at ? new Date(p.verified_at).toISOString() : null,
+    source: p.source ?? "manual",
+    externalPaymentId: p.external_payment_id ?? null,
+    externalStatus: p.external_status ?? null,
   }));
 
   const commissions: CommissionEntry[] = ledgerRes.rows.map((e: any) => ({
@@ -349,6 +356,7 @@ export async function readState(tenantId: string): Promise<AppData> {
     ? {
         theme: s.theme === "dark" ? "dark" : "light",
         companyName: s.company_name ?? "",
+        requirePaymentVerification: s.require_payment_verification === true,
         assumptions: {
           avgSetupFee: Number(s.default_setup_fee),
           avgMonthly: Number(s.default_monthly_subscription),

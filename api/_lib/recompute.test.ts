@@ -258,5 +258,59 @@ console.log("\n[Recompute \u00b7 stable identity across a rebuild]");
     JSON.stringify(strip(first.insertRows)) === JSON.stringify(strip(second.insertRows)));
 }
 
+// ---- PAYMENT VERIFICATION GATE ---------------------------------------------
+//
+// The product rule: if the client hasn't actually paid, the commission stays
+// held. The gate is off by default (an admin-entered payment IS the assertion
+// that it happened), and on it holds any line whose payment the gateway has not
+// confirmed — regardless of what the plan's timing says, because "the money
+// arrived" is a precondition of every trigger rather than one more trigger.
+
+console.log("\n[Recompute \u00b7 payment verification gate]");
+
+const unverifiedSetup: Payment = { ...setupPay, verified: false };
+const verifiedSetup: Payment = { ...setupPay, verified: true };
+
+{
+  // Gate OFF: nothing changes, even for an unverified payment.
+  const r = recomputeClientLedger({ client: client(), salesperson: sp, plan: plan(), payments: [unverifiedSetup], priorRows: [], today: TODAY });
+  ok("gate off -> an unverified payment still pays", r.insertRows.every((e) => e.status === "pending"));
+}
+{
+  const r = recomputeClientLedger({ client: client(), salesperson: sp, plan: plan(), payments: [unverifiedSetup], priorRows: [], today: TODAY, requirePaymentVerification: true });
+  ok("gate on -> unverified lines are held", r.insertRows.length > 0 && r.insertRows.every((e) => e.status === "held"));
+  ok("...with an explanatory hold reason", r.insertRows.every((e) => e.holdReason === "Awaiting payment confirmation"));
+  // The release date is unknowable: it is whenever the gateway confirms.
+  ok("...and no fabricated release date", r.insertRows.every((e) => e.releaseDate === null));
+}
+{
+  const r = recomputeClientLedger({ client: client(), salesperson: sp, plan: plan(), payments: [verifiedSetup], priorRows: [], today: TODAY, requirePaymentVerification: true });
+  ok("gate on -> a CONFIRMED payment releases", r.insertRows.every((e) => e.status === "pending"));
+}
+{
+  // A payment with no `verified` field at all (an older row) is treated as
+  // verified, so switching the gate on cannot retroactively freeze history.
+  const r = recomputeClientLedger({ client: client(), salesperson: sp, plan: plan(), payments: [setupPay], priorRows: [], today: TODAY, requirePaymentVerification: true });
+  ok("a legacy payment with no flag is treated as verified", r.insertRows.every((e) => e.status === "pending"));
+}
+{
+  // An admin force-release still wins: that is a human choosing to pay anyway.
+  const prior: PriorLedgerRow[] = [
+    { id: "led_forced", paymentId: "p_setup", ruleId: "r_setup", status: "pending", paidDate: null, releasedOverride: true },
+  ];
+  const r = recomputeClientLedger({ client: client(), salesperson: sp, plan: plan(), payments: [unverifiedSetup], priorRows: prior, today: TODAY, requirePaymentVerification: true });
+  const forced = findByRule(r.insertRows, "r_setup")[0];
+  ok("a force-released line is not re-held by the gate", forced?.status === "pending");
+}
+{
+  // "Pay after N payments" has to mean N payments that actually cleared.
+  const timing: CommissionTiming = { trigger: "after_payments", days: 0, months: 0, payments: 2, requireActiveClient: false, clawbackBeforeMonths: 0 };
+  const m1: Payment = { ...monthlyPay, id: "p_m1", paymentNumber: 1, verified: true };
+  const m2: Payment = { ...monthlyPay, id: "p_m2", paymentNumber: 2, verified: false };
+  const r = recomputeClientLedger({ client: client(), salesperson: sp, plan: plan(timing), payments: [m1, m2], priorRows: [], today: TODAY, requirePaymentVerification: true });
+  ok("an unconfirmed payment does not count toward the threshold",
+    r.insertRows.every((e) => e.status === "held"));
+}
+
 console.log(`\n========================\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);

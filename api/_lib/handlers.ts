@@ -197,6 +197,14 @@ export interface SettingsInput {
   closingsPerMonth: number;
   churnPct: number;
   months: number;
+  /**
+   * Hold every commission until the payment gateway confirms the money.
+   * Absent in the body ⇒ unchanged is not expressible here (settings are a
+   * whole-row PUT), so it coerces to FALSE — the historical behaviour, and the
+   * safe default for a tenant with no gateway wired up: turning it on with no
+   * payment webhooks arriving would hold every commission forever.
+   */
+  requirePaymentVerification: boolean;
 }
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
@@ -224,6 +232,7 @@ export function normalizeSettingsInput(body: Record<string, unknown>): Result<Se
       closingsPerMonth: pick("closingsPerMonth", "closingsPerMonth", 0),
       churnPct: Number.isFinite(churnRaw) ? clamp(churnRaw, 0, 100) : 0,
       months: Number.isFinite(monthsRaw) ? clamp(Math.round(monthsRaw), 1, 600) : 60,
+      requirePaymentVerification: body.requirePaymentVerification === true,
     },
   };
 }

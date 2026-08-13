@@ -17,13 +17,18 @@
     "contact.created",
     "contact.updated",
     "opportunity.created",
-    "opportunity.updated"
+    "opportunity.updated",
+    "payment.succeeded",
+    "payment.failed",
+    "payment.refunded",
+    "payment.disputed"
   ],
   "scopes": [
     "locations.readonly",
     "users.readonly",
     "contacts.readonly",
-    "opportunities.readonly"
+    "opportunities.readonly",
+    "payments.readonly"
   ],
   "requiredPermissions": [],
   "placements": [

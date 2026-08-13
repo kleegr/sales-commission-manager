@@ -8,14 +8,17 @@ decides commissions: every dollar traces back to a specific rule, and the UI
 shows which rule fired, when it starts and stops, what continues forever, and how
 earnings change with closings and churn.
 
-> **Data layer:** the app now runs on a real **multi-tenant Neon (Postgres)
-> database** through serverless API routes, with automatic fallback to browser
-> `localStorage` when no database is reachable (e.g. `vite dev` with no
-> functions, or before `DATABASE_URL` is configured). The commission engine and
-> the entire UI are unchanged — persistence is fully behind a small `DataStore`
-> seam, so the same code reads/writes Postgres in production and `localStorage`
-> locally. The schema is **GoHighLevel-ready** for a future marketplace /
-> sub-account integration.
+> **Data layer:** the app runs on a real **multi-tenant Neon (Postgres)**
+> database through serverless API routes. Every mutation goes through a
+> dedicated, role-checked, single-row endpoint — the `PUT /api/state` snapshot
+> write has been **removed** (it now answers 410 with a map of the endpoint to
+> use instead).
+>
+> `localStorage` is a **development-only** backend for `vite dev`, which serves
+> no serverless functions. In production the database is the sole source of
+> truth: a cached copy is never substituted for the live dataset, because a rep
+> reading a balance the database disagrees with is worse than an honest error.
+> See [`docs/FEATURES.md` §23](docs/FEATURES.md#23-data-integrity-model).
 
 ## Demo / Review mode
 
@@ -88,7 +91,8 @@ The app seeds a full demo dataset on first run.
 ```bash
 npm run build    # type-check + production build (SPA)
 npm run preview  # preview the production build
-npm test         # commission-engine (29) + auth (8) unit tests
+npm test         # 32 dependency-free unit suites (engine, timing, recompute,
+                 # clawbacks, balance, payment events, auth, handlers, …)
 ```
 
 Requires Node 18+ (developed on Node 22; Vercel builds on Node 22).
@@ -186,14 +190,20 @@ Auth:
 Data:
 - `GET  /api/state` — the current user's `AppData`, scoped to their tenant **and
   role** (owner/admin = whole tenant; sales_manager = their team; salesperson /
-  affiliate / partner = only their own rows).
-- `PUT  /api/state` — replace the tenant's snapshot transactionally
-  (**owner/admin only**; writes an `audit_logs` row).
-- `GET/POST /api/clients` — list (role-scoped) / create ONE client (real
-  single-row insert, not a snapshot replace).
+  affiliate / partner = only their own rows), plus a `mode` block telling the
+  browser store who owns the data.
+- ~~`PUT /api/state`~~ — **removed**; answers 410 with the per-resource map.
+- `GET/POST/PATCH/DELETE /api/clients`, `/api/salespeople`, `/api/payments` —
+  single-row writes; a commission-affecting change recomputes that client's
+  ledger in the same transaction.
+- `GET/POST/PUT/DELETE /api/plans` — plans, rules and timing (+ duplicate,
+  reorder).
+- `GET/POST /api/ledger` — the ledger, plus `?action=release|recompute`.
 - `GET  /api/payouts` — payouts visible to the user + their audit history.
-- `POST /api/payouts` — `submit | approve | reject | mark_paid | cancel`; real
-  per-resource DB writes with role checks, logged to `payout_events`.
+- `GET  /api/payouts?resource=balance` — a rep's reconciled, withdrawable balance.
+- `POST /api/payouts` — `submit | request_withdrawal | approve | reject |
+  mark_paid | cancel`; real per-resource DB writes with role checks, logged to
+  `payout_events`.
 
 Ops/diagnostics:
 - `GET  /api/health` — DB connectivity, Postgres version, per-tenant counts.
@@ -226,12 +236,17 @@ api/
     migrations.ts    # forward-only idempotent ALTERs / new tables (auth, sessions, payout_events)
     auth.ts          # scrypt password hashing + DB-backed sessions + cookies
     auth-seed.ts     # one user per role per tenant; links portals + manager teams
-    repository.ts    # ensureSchema, read/role-scoped-read/write AppData, seeding
-    payouts.ts       # real per-resource payout workflow + audit history
+    repository.ts    # ensureSchema, role-scoped reads, seeding (writeState = seed path only)
+    recompute.ts     # pure ledger recompute: stable ids, timing, verification gate
+    payouts.ts       # payout workflow + withdrawal requests + audit history
+    balance.ts       # pure rep balance reconciliation
+    payment-events.ts# pure webhook normalization (did the client actually pay?)
+    clawbacks.ts     # pure refund / chargeback reversal plan
+    runtime-env.ts   # deployment environment + local-fallback policy
   auth/{login,logout,me}.ts   # session endpoints
-  state.ts           # GET (role-scoped) / PUT (owner-admin) /api/state
-  clients.ts         # GET/POST one client (per-resource write example)
-  payouts.ts         # GET list / POST workflow actions
+  state.ts           # GET (role-scoped) only — the PUT snapshot was removed
+  clients.ts         # GET/POST/PATCH/DELETE one client
+  payouts.ts         # GET list + balance / POST workflow actions
   health.ts, tenants.ts, seed.ts
 src/
   types/             # the whole data model (serializable, GHL/DB-swap friendly)
@@ -241,7 +256,9 @@ src/
     analytics.ts          # totals, rollups, monthly series for charts
     roles.ts              # role labels, home paths, route access map (client guard)
     payouts-client.ts     # client for the /api/payouts workflow
-    storage/apiStore.ts   # HybridStore: session-scoped Neon API first, localStorage fallback
+    storage/apiStore.ts      # HybridStore: reads /api/state; local cache only where no server owns the data
+    storage/fallback-policy.ts # when a cached read / local write is permitted
+    commission-breakdown.ts  # step-by-step explanation of one ledger line
   store/AuthContext.tsx # current user + login/logout
   store/AppContext.tsx  # global state (useReducer) + reload(); tenant/role from session
   pages/                # Login, Reports, Payouts, portals, admin sections
@@ -255,20 +272,21 @@ live preview, the projection page, the recruiting view, and the real ledger — 
 what a candidate is shown and what actually gets paid come from one source of
 truth.
 
-### How persistence works (the snapshot seam + per-resource writes)
+### How persistence works (per-resource writes)
 
 `src/lib/storage/index.ts` defines a `DataStore` interface
 (`load` / `save` / `clear` / `name`). `apiStore.ts` implements it as a
-**HybridStore**: on first load it reads the session-scoped dataset from
-`/api/state`; if the API + DB are reachable it reads/writes Postgres (debounced
-PUTs, owner/admin only), otherwise it falls back to `localStorage`.
+**HybridStore** that reads the session-scoped dataset from `/api/state`. It no
+longer writes to the server at all — every mutation goes through a per-resource
+endpoint — so `save()` only maintains the local cache, and only where no server
+owns the data.
 
-The snapshot `PUT /api/state` is a transactional per-tenant replace. The newer,
-role-aware workflows (payouts; `/api/clients` create) are **real per-resource
-writes** that do NOT replace the tenant — they are the pattern for migrating the
-remaining resources off the snapshot. The payout tables are server-owned and
-excluded from the snapshot replace so their workflow state + history survive
-admin edits elsewhere.
+Reads classify the failure rather than answering everything from cache: a 401/403
+propagates (a dead session must not look like a healthy dashboard), an *absent*
+API (`vite dev` answering with the SPA shell) legitimately falls back, and an
+*outage* (5xx/network) may only be answered from cache where the deployment
+policy allows it — never in production or preview. See
+[`docs/FEATURES.md` §23](docs/FEATURES.md#23-data-integrity-model).
 
 ## Kleegr Smart Productivity integration
 
@@ -344,10 +362,14 @@ Imported rows are labelled via `clients.kleegr_source` — `kleegr_imported` for
 rows the sync created, `kleegr_linked` for existing rows it matched. Every
 upsert is **idempotent**: rows are matched by their Kleegr/GHL ids, so a
 re-launch or a repeated webhook never duplicates data, and manually-entered
-business data is linked rather than overwritten. Because the `PUT /api/state`
-snapshot doesn't carry these external-id columns, `writeState` captures and
-restores them around its replace-all, so an admin save never wipes a tenant's
-Kleegr/GHL links.
+business data is linked rather than overwritten. (`writeState` — now the seeding
+path only — still captures and restores these external-id columns around its
+replace-all, since the `AppData` shape does not carry them.)
+
+Kleegr also forwards the **payment lifecycle**: a succeeded charge records a
+verified payment and recomputes the client, which is what releases the
+commission, and a refund or chargeback books an automatic clawback. See
+[`docs/FEATURES.md` §15](docs/FEATURES.md#15-kleegr--gohighlevel-integration).
 
 ### Webhooks
 
@@ -411,11 +433,13 @@ Done in this phase:
   (httpOnly cookie), `/api/auth/*`, and one seeded user per role per tenant.
 - **Role-based portals + server-enforced isolation** — `/api/state` scopes data
   by tenant and role; scoped roles physically never receive other users' rows,
-  and snapshot writes are owner/admin only.
+  and every write is a role-checked single-row endpoint.
 - **Real payout workflow** — `/api/payouts` does per-resource DB writes
   (submit → approve → reject → mark paid → claw back/cancel) with role checks
   and an append-only `payout_events` history. These tables are server-owned and
-  excluded from the snapshot replace, so history survives admin edits.
+  each batch stores an immutable snapshot of its lines, so history survives any
+  later edit or re-price. Reps can raise their own **withdrawal requests**
+  against a server-reconciled balance.
 - **Reports** — revenue, commission liability/paid/pending/projected,
   salesperson & affiliate performance, top clients — all role/tenant scoped.
 - **Kleegr Smart Productivity integration** — launch/SSO, role mapping, a safe
@@ -423,11 +447,10 @@ Done in this phase:
   brokered through Kleegr (no direct GoHighLevel access).
 
 Next steps:
-- **Migrate remaining writes off the snapshot.** People/plans/clients/payments
-  still use `PUT /api/state` (replace-all). Add per-resource endpoints like the
-  `/api/clients` and `/api/payouts` examples. Known limitation: editing the
-  underlying payments/plans after a payout exists can stale that batch's exact
-  line linkage (the batch + history + totals are preserved).
+- **A public affiliate-signup endpoint.** `src/pages/AffiliateSignup.tsx` is
+  unrouted and is the one component still writing only to the local reducer; the
+  `affiliate_applications` table is waiting for an endpoint with its own rate
+  limiting.
 - **Deepen the Kleegr sync.** The first sync is intentionally small; add
   pagination, conversations, and write-back as Kleegr exposes those resources.
 - **Password reset / user management UI**, session revocation, and rate limiting

@@ -10,9 +10,14 @@ named rule, and the UI always shows which rule fired, when it starts and stops,
 what continues forever, and how earnings change with closings and churn.
 
 **Stack:** React 18 + TypeScript + Vite + Tailwind + Recharts SPA, Vercel Node
-serverless functions under `/api`, Neon (Postgres) storage, with an automatic
-`localStorage` fallback. GoHighLevel is reached **only** through the Kleegr Smart
-Productivity bridge.
+serverless functions under `/api`, Neon (Postgres) storage. GoHighLevel is
+reached **only** through the Kleegr Smart Productivity bridge.
+
+Every mutation goes through a dedicated, role-checked, single-row endpoint. The
+`PUT /api/state` snapshot write has been **removed** (see
+[§19](#19-api-reference)), and the `localStorage` fallback is a
+**development-only** backend — in production the database is the sole source of
+truth (see [§23](#23-data-integrity-model)).
 
 ---
 
@@ -40,6 +45,7 @@ Productivity bridge.
 20. [Function reference (by module)](#20-function-reference-by-module)
 21. [UI system, layout and embedded shell](#21-ui-system-layout-and-embedded-shell)
 22. [Operations, testing and deployment](#22-operations-testing-and-deployment)
+23. [Data integrity model](#23-data-integrity-model)
 
 ---
 
@@ -269,6 +275,11 @@ stands."
 - **Release now** action on a held line (admin) — force-releases it for payout.
 - **Recompute** action — regenerates payment-derived lines from current plan
   rules.
+- **Every amount is clickable**, opening the step-by-step arithmetic that
+  produced it (see [§11](#11-self-service-portals)).
+- **Negative clawback rows** appear in the ledger as pending adjustments, so a
+  reversal is visible next to the commission it reverses and nets off the next
+  payout.
 - Nine statuses: `projected`, `held`, `pending`, `submitted`, `approved`, `paid`,
   `rejected`, `canceled`, `clawed_back`.
 - Future-dated lines display as **Projected** until their due date passes; a
@@ -324,8 +335,53 @@ stands."
   and pay/cancel are owner/admin only; portal roles see only their own batches.
 - **Append-only `payout_events` history** — every transition is logged with the
   actor, the from/to status and a note.
-- Payout tables are **server-owned** and excluded from the `PUT /api/state`
-  snapshot replace, so workflow state and history survive admin edits elsewhere.
+- **Immutable line snapshot.** `payout_batch_entries` records each line exactly
+  as submitted — amount, rule label, client, date. The batch can always show what
+  it paid for, even if the underlying ledger row is later re-priced or removed,
+  and the expander flags any line whose ledger row no longer exists.
+- **Two reconciliation checks** before approving or paying: the snapshot sum must
+  match the batch total (internal consistency), and the live ledger must still
+  match the snapshot (`batch_lines_changed` — somebody edited the underlying
+  payment, plan or client after submission).
+
+### Self-service withdrawal requests
+
+A rep can ask to be paid from their own available balance, from the **Your
+balance** card in their portal. This is not a parallel lifecycle: it produces an
+ordinary payout batch (`kind = 'withdrawal_request'`) that runs the *same*
+approve / mark-paid / reject path, with the same role checks, separation of
+duties and audit history. On the Payouts screen it carries a **Requested** badge
+so the approver knows where it came from.
+
+The rep sends an **amount**; the server decides which ledger lines back it, so a
+request can never claim money the ledger does not owe. Rules that follow from the
+ledger's shape:
+
+- A ledger line cannot be half-paid, so a partial request takes **whole lines,
+  oldest first**, and reports the shortfall.
+- Drawing the whole balance pulls the **deduction rows in too**, so a rep cannot
+  settle their positives and leave a clawback behind.
+- **One open request at a time** — two concurrent requests would each reconcile
+  against the same pool.
+
+### The balance, reconciled (`api/_lib/balance.ts`)
+
+Every dollar in a rep's ledger lands in **exactly one** bucket:
+
+| Bucket | What it is |
+| --- | --- |
+| Commission | Positive engine rows in the pending pool |
+| Salary | Base salary — earned money, paid through the same workflow |
+| Deductions | Negative pending rows: refund / chargeback clawbacks |
+| **Available** | commission + salary − deductions, floored at 0 |
+| Awaiting approval | Claimed by a submitted or approved batch |
+| Not yet released | Held or projected |
+| Paid to date | Already paid (context only, **never** subtracted) |
+
+Money already paid is never subtracted again — that would charge the rep twice
+for the same payment — and money claimed by a batch is never also counted as
+available. When refunds exceed earnings the card says so explicitly rather than
+showing a negative headline.
 
 ---
 
@@ -502,6 +558,20 @@ language, and default proposal/contract styles.
 ### Salesperson portal (`/portal`)
 
 - KPIs: total earned, paid, pending, projected.
+- **Your balance** — the reconciled, withdrawable balance with its full
+  composition (commission, salary, deductions, awaiting approval, not yet
+  released, paid to date) and a **Request withdrawal** button. The composition is
+  shown rather than a bare total because a balance a rep cannot reconcile against
+  their own ledger is worse than no balance at all. See
+  [§7](#7-payout-workflow).
+- **Earnings planner** — sliders for deals per month, average setup fee, average
+  subscription and churn, with live output: what each new client is worth up
+  front and over its first year, month-1 vs month-12 earnings, first-year book
+  total, and the residual bands a client moves through as it ages. It runs the
+  *same* engine functions as the ledger and the recruiting deck, so the figure a
+  rep plans against and the figure they are paid come from one source of truth.
+- **Clickable commission amounts** — any amount opens the step-by-step
+  arithmetic that produced it (see below).
 - Earnings-over-time chart.
 - My clients (company, monthly, status).
 - Recent commissions (client, rule, commission, status).
@@ -513,10 +583,40 @@ language, and default proposal/contract styles.
 
 - **Referral code** panel, prominently displayed and copyable.
 - KPIs: pending commission, paid out, projected (next 24 months), my referrals.
+- **Your balance** card with the same reconciled composition and
+  **Request withdrawal** flow as the salesperson portal.
 - My referrals table (company, contact, referred date, monthly, status).
 - Recent commissions and payout history.
 - **Submit a referral** — company, contact, email, phone, estimated setup fee,
   estimated monthly, notes.
+
+### Commission breakdown modal
+
+Clicking a commission amount — in the ledger or in a rep's own portal — opens the
+arithmetic that produced it, in the order a person would do it on paper:
+
+```
+Northwind paid a setup fee            $1,000
+Your plan's rule · Setup fee · 10%       10%
+The calculation · 10% of $1,000         $100
+Your commission                         $100
+```
+
+plus a plain-English "when you get paid" section covering the status, the hold
+reason, the release rule and date, any admin force-release, and any clawback
+reason.
+
+`src/lib/commission-breakdown.ts` **derives** the explanation from the stored
+ledger row rather than recomputing the amount. Recomputing would show what the
+rules say *today* and quietly disagree with a line priced under an older version
+of the plan; deriving means the breakdown always explains the money that was
+actually booked. `verified` reports whether the stored parts still multiply out
+to the stored total, so a genuine mismatch is **surfaced with an explanation**
+rather than silently corrected.
+
+It handles all four rule types plus clawback adjustments (which read as a
+deduction, not a calculation) and salary (not tied to a client payment), and
+degrades cleanly when no plan or client is in hand.
 
 ### Public affiliate signup (`AffiliateSignup.tsx`)
 
@@ -591,8 +691,14 @@ database and take effect immediately.
   closings per month, monthly churn, projection horizon (max 60 months). These
   seed every projection and the recruiting view.
 - **Feature access** — the entitlement editor described above.
-- **Data** — active store name, **Export JSON**, **Import JSON**, **Reset to demo
-  data**, and live counts of people, plans, clients and payments.
+- **Payment verification** — hold every commission until the payment gateway
+  confirms the money (off by default; see [§15](#15-kleegr--gohighlevel-integration)).
+  Toggling it recomputes the whole ledger so existing lines move immediately.
+- **Data** — active store name, **Export JSON**, and live counts of people,
+  plans, clients and payments. **Import JSON** and **Reset to demo data** replace
+  the entire dataset in one step; with the snapshot write removed there is no way
+  to apply them server-side, so both are **disabled on a database-backed
+  workspace** and the panel says why.
 - **Data source & workspace** — live `/api/health` status: connected to Neon
   Postgres (with the engine version and which env var supplied the connection
   string) or using browser storage; the current session-bound workspace; and a
@@ -683,9 +789,82 @@ idempotently by delivery id.
 
 Handled events: `app.installed`, `subaccount.connected`,
 `subaccount.disconnected`, `contact.created`, `contact.updated`,
-`opportunity.created`, `opportunity.updated`.
+`opportunity.created`, `opportunity.updated`, plus the **payment lifecycle**
+below.
+
+### Payment events — what makes a commission real
+
+Four canonical events are declared in the manifest:
+
+| Event | What happens |
+| --- | --- |
+| `payment.succeeded` | The payment is recorded/confirmed as **verified** and the client's ledger is recomputed — which is what moves the commission from `held` to `pending`. |
+| `payment.failed` | The attempt is still **recorded**, but unverified: it is part of the client's history, and holding the commission is more honest than pretending the charge never happened. |
+| `payment.refunded` | The refund is recorded and the commissions it generated are **reversed** (see clawbacks below). |
+| `payment.disputed` | Same reversal path, labelled as a chargeback. |
+
+Gateways name these differently, so an **alias table** in
+`api/_lib/payment-events.ts` folds `invoice.paid`, `order.completed`,
+`charge.refunded`, `chargeback.created`, `invoice.payment_failed` and friends
+onto the four. A name that is *not* recognised is never guessed into a money
+movement — it falls through to "ignored".
+
+The normalization fails **safe**: a payload that cannot be read produces `null`
+rather than "succeeded", because a false positive releases money that was never
+collected. Amounts are only divided by 100 when the payload declares minor units
+(`amountInCents`, `amountUnit: "cents"`); dates accept ISO strings, epoch seconds
+and epoch milliseconds.
+
+Idempotency runs two deep: the webhook receiver dedupes by delivery id, and the
+payment row is UPSERTed on the **gateway's own id** (unique per tenant), so a
+re-delivery under a fresh delivery id still cannot double-count a payment and
+thereby double the commission. Verification only ever moves **forward** — a late
+"failed" event cannot un-pay a charge that already succeeded.
+
+### Payment verification gate
+
+**Settings → Payment verification** (`require_payment_verification`, off by
+default) turns the product's strict rule on: *if the client hasn't paid, the
+salesperson's commission stays held.*
+
+- A line whose payment the gateway has not confirmed is **held**, regardless of
+  what the plan's timing says — "the money arrived" is a precondition of every
+  trigger, not one more trigger among them. Its hold reason reads *Awaiting
+  payment confirmation*, and it carries **no release date**, because that is
+  whenever the gateway confirms.
+- An unconfirmed payment also stops counting toward an `after_payments`
+  threshold — "pay after 3 payments" has to mean three that cleared.
+- An admin **force-release** still wins: that is a human choosing to pay anyway.
+- Payments predating the column read as **verified** (an admin entered them, and
+  recording a payment *is* the assertion that it happened), so enabling the gate
+  cannot retroactively freeze history.
+- Toggling the setting **recomputes the tenant**, so existing lines are held or
+  released to match immediately.
+
+### Automated refund & chargeback clawbacks
+
+`api/_lib/clawbacks.ts` holds the one decision that matters:
+
+| The rep's money | What happens |
+| --- | --- |
+| **Not yet paid** (projected / held / pending / submitted / approved) | The line is marked `clawed_back`. Nothing left the business, so there is nothing to deduct. |
+| **Already paid** | The paid line is **history and is not rewritten** — a payout batch, an export and an audit trail all point at it. A **negative adjustment** is booked against the rep instead, status `pending`, so it nets off their next payout. |
+| **Already reversed** | Skipped. Refund webhooks get re-delivered, and a second reversal would double-deduct. |
+
+Reversals are idempotent from two directions: the adjustment id is derived from
+the entry it reverses (a second insert collides on the primary key and no-ops),
+and a clawback row is never itself reversible — otherwise a repeated refund would
+claw back the clawback and pay the rep for the refund.
+
+A voided line sitting in an **open payout batch** is locked and cannot be silently
+pulled, so it is flagged in the batch for the approver rather than quietly paying
+out reversed money. Clawback rows are excluded from the engine rebuild, so a
+later recompute can never erase a reversal that has been booked.
 
 ### Manifest
+
+The declared scopes are `locations.readonly`, `users.readonly`,
+`contacts.readonly`, `opportunities.readonly` and `payments.readonly`.
 
 `smart-productivity.app.json` at the repo root is what Kleegr imports; an
 identical typed copy lives in `api/_lib/kleegr-manifest.ts`, and a unit test
@@ -787,7 +966,20 @@ Base schema (`api/_lib/schema.ts`, mirrored in `migrations/0001_init.sql`):
 Forward-only additions (`api/_lib/migrations.ts`, applied idempotently on cold
 start): `sessions`, `payout_events`, `goals`, `milestones`,
 `tenant_feature_access`, `business_profiles`, `document_templates`, `documents`,
-`ai_generated_content`, `login_attempts` — plus columns for auth
+`ai_generated_content`, `login_attempts`.
+
+Migration `0011_production_hardening` adds the columns the post-snapshot
+architecture needs:
+
+| Table | Columns | Why |
+| --- | --- | --- |
+| `payout_batch_entries` | `commission_amount`, `salesperson_id`, `client_id`, `rule_label`, `payment_date` | Immutable snapshot of each line as submitted |
+| `payout_batches` | `kind`, `requested_by_user_id` | Self-service withdrawal requests |
+| `payments` | `verified`, `verified_at`, `external_status`, `refunds_payment_id` + a unique index on `(tenant_id, external_payment_id)` | Gateway verification and idempotent payment webhooks |
+| `settings` | `require_payment_verification` | The per-tenant hold-until-confirmed gate |
+| `commission_ledger` | `adjustment_of_entry_id`, `entry_source` | Clawback adjustments, and excluding them from the engine rebuild |
+
+Plus columns for auth
 (`password_hash`, `last_login_at`, `manager_user_id`), timing (`timing`,
 `released_override`, `canceled_date`), payouts (`created_by_user_id`,
 `approved_by_user_id`, `paid_by_user_id`, `rejected_at`, `canceled_at`),
@@ -820,15 +1012,16 @@ CSRF check.
 
 | Endpoint | Description |
 | --- | --- |
-| `GET /api/state` | The user's `AppData`, scoped by tenant **and** role. |
-| `PUT/POST /api/state` | Transactional per-tenant snapshot replace (owner/admin only; writes `audit_logs`; preserves server-owned and Kleegr-linked columns). |
-| `GET/POST /api/clients` | List (role-scoped) / create one client — a real single-row insert. |
+| `GET /api/state` | The user's `AppData`, scoped by tenant **and** role, plus a `mode` block (`serverAuthoritative`, `environment`, `localFallback`) that tells the browser store who owns the data. |
+| ~~`PUT/POST /api/state`~~ | **REMOVED.** Answers **410 Gone** with a map of the per-resource endpoint to use instead. See [§23](#23-data-integrity-model). |
+| `GET/POST/PATCH/DELETE /api/clients` | Full per-resource client CRUD. A commission-affecting change recomputes the client's ledger in the same transaction; a delete is refused while locked commissions exist. |
 | `GET/POST/PATCH/DELETE /api/salespeople` | Roster CRUD, deactivate, and approval decisions. |
 | `GET/POST/PUT/DELETE /api/plans` | Plan CRUD plus `duplicate` and rule `reorder` actions. |
 | `GET/POST/PATCH/DELETE /api/payments` | Payment CRUD; edits and deletes trigger a recompute, and locked commissions block a delete. |
 | `GET/POST /api/ledger` | Ledger read plus `release` (force-release a held line) and `recompute` actions. |
 | `GET /api/payouts` | Payouts visible to the user plus their audit history. |
-| `POST /api/payouts` | `submit` / `approve` / `reject` / `mark_paid` / `cancel` — per-resource writes with role checks, logged to `payout_events`. |
+| `GET /api/payouts?resource=balance` | A rep's reconciled, withdrawable balance (self roles are pinned to their own record). |
+| `POST /api/payouts` | `submit` / `request_withdrawal` / `approve` / `reject` / `mark_paid` / `cancel` — per-resource writes with role checks, logged to `payout_events`. |
 | `GET/PUT /api/settings` | Company details and projection assumptions. |
 | `GET/POST/PATCH/DELETE /api/goals` | Goals and (`?resource=milestone`) milestones; `actual` is computed on read. |
 | `GET/PUT/PATCH /api/features` | Read and update the tenant's feature flags. |
@@ -876,6 +1069,8 @@ CSRF check.
 | `features.ts` | `FEATURES`, `FEATURE_KEYS`, `defaultFeatures`, `coerceFeatures`, `featureAllowsPath` |
 | `format.ts` | `uid`, `formatCurrency`, `formatNumber`, `formatPercent`, `formatDate`, `todayISO`, `isoToDate`, `addMonthsISO`, `addDaysISO`, `weeksBetween`, `daysBetween`, `monthsBetween`, `monthsSince`, `clampNum`, `round2`, `classNames`, `YEAR_LABELS` |
 | `export.ts` | `downloadCSV`, `downloadJSON`, `printHTMLToPDF` |
+| `commission-breakdown.ts` | `buildBreakdown`, `findRule`, `formatRate`, `verifyAmount` |
+| `api-errors.ts` | `errorMessage`, `isLockedByPayout` |
 | `portal-state.ts` | `portalView` |
 | `api-auth.ts` | `shouldAttachBearer`, `installApiAuthInterceptor` |
 | `session-token.ts` | `readSessionToken`, `storeSessionToken`, `clearSessionToken` |
@@ -886,7 +1081,9 @@ CSRF check.
 | `resource-client.ts` | Typed clients for every per-resource endpoint: salespeople, settings, goals/milestones, features, agency overview, business profile, documents, templates and sections |
 | `payouts-client.ts` | `fetchPayouts`, `submitPayout`, `payoutTransition` |
 | `kleegr-client.ts` | `getKleegrStatus`, `testKleegrConnection`, `reportKleegrStatus`, `validateKleegrManifest` |
-| `storage/` | `DataStore` interface; `HybridStore` (`classifyStateResponse`, `getBackendInfo`, `StateLoadError`, `isAuthError`); `LocalStorageStore` |
+| `storage/apiStore.ts` | `DataStore` / `HybridStore` (`classifyStateResponse`, `getBackendInfo`, `resetBackendInfo`, `StateLoadError`, `isAuthError`, `isUnavailableError`) |
+| `storage/fallback-policy.ts` | `allowCachedRead`, `allowLocalWrites`, `coerceServerMode`, `rememberMode`, `readRememberedMode` |
+| `storage/localStorage.ts` | `LocalStorageStore` |
 
 ### `api/_lib/`
 
@@ -897,11 +1094,15 @@ CSRF check.
 | `migrations.ts` | Forward-only idempotent ALTERs and new tables |
 | `auth.ts` | scrypt hashing, DB-backed sessions, cookie + Bearer token resolution |
 | `auth-seed.ts` | One user per role per tenant; links portals and manager teams |
-| `repository.ts` | `ensureSchema`, role-scoped reads, snapshot writes, seeding |
+| `repository.ts` | `ensureSchema`, role-scoped reads, seeding. `writeState` survives as the **seeding path only** — it is no longer reachable from any endpoint |
 | `handlers.ts` | Shared request handling and the server-side feature-key list |
 | `commission-handlers.ts` | Commission/ledger endpoint logic |
-| `recompute.ts` | Pure recompute core plus client/plan/tenant transactional wrappers and lock guards |
-| `payouts.ts` | `listPayouts`, `submitPayout`, `transitionPayout`, `roleMayTransition`, `mayActOnBatch`, `violatesSeparationOfDuties` |
+| `recompute.ts` | Pure recompute core (stable ids, the payment-verification gate) plus client/plan/tenant transactional wrappers, `readPaymentVerificationSetting` and lock guards |
+| `payouts.ts` | `listPayouts`, `submitPayout`, `requestWithdrawal`, `getBalance`, `readBalanceRows`, `transitionPayout`, `roleMayTransition`, `mayActOnBatch`, `violatesSeparationOfDuties` |
+| `balance.ts` | `computeBalance`, `selectWithdrawalEntries`, `MIN_WITHDRAWAL` |
+| `payment-events.ts` | `normalizePaymentEventName`, `normalizePaymentEvent`, `paymentEventAction`, `classifyPaymentType`, `resolveAmount`, `toISODate`, `isPaymentEvent` |
+| `clawbacks.ts` | `planClawback`, `isAlreadyPaid`, `isAlreadyReversed` |
+| `runtime-env.ts` | `deploymentEnvironment`, `isProduction`, `localFallbackAllowed`, `isEnabled` |
 | `documents-core.ts` | Section operations, merge resolution, AI prompt building (`buildGenerationMessages`, `parseAiSections`, `aiConfigured`, `aiModel`) |
 | `agency-core.ts` / `agency-scope.ts` | Cross-tenant rollups and who may see them |
 | `feature-access.ts` | `readTenantFlags`, `tenantFeatureEnabled` |
@@ -946,15 +1147,16 @@ CSRF check.
 ### Persistence seam
 
 `src/lib/storage/index.ts` defines a `DataStore` (`load` / `save` / `clear` /
-`name`). `apiStore.ts` implements it as a **HybridStore**: it reads the
-session-scoped dataset from `/api/state`, uses Postgres when the API and DB are
-reachable (debounced PUTs, owner/admin only), and falls back to `localStorage`
-otherwise. `classifyStateResponse()` distinguishes **auth**, **client** and
-**outage** failures so an expired session shows a login prompt instead of
-silently serving a stale cache.
+`name`). `apiStore.ts` implements it as a **HybridStore** that reads the
+session-scoped dataset from `/api/state`. It no longer writes to the server at
+all — every mutation goes through a per-resource endpoint — so `save()` only
+maintains the local cache, and only where no server owns the data.
 
-Newer workflows (payouts, clients, plans, payments, goals, documents, features)
-are **real per-resource writes** that do not replace the tenant snapshot.
+`classifyStateResponse()` splits four cases: **auth** (401/403 — propagate, never
+serve cache), **client** (4xx — a real error), **absent** (the response is not our
+JSON API, i.e. `vite dev` with no serverless functions) and **outage** (5xx or a
+network failure — a server exists and is failing). See
+[§23](#23-data-integrity-model) for which of those may be answered from cache.
 
 ### Scripts
 
@@ -970,11 +1172,17 @@ are **real per-resource writes** that do not replace the tenant snapshot.
 
 ### Test suite
 
-24 test modules run by `npm test`, covering: the commission engine, commission
-timing, auth, request handlers, commission handlers, recompute, goals, documents
-core, agency core and scope, HTTP helpers, payout authorization, roles, sidebar
-preference, portal state, the Kleegr gateway/roles/user-scope/salesperson-link/
-sync-gate, launch handoff, API auth interceptor, and the API store.
+32 test modules run by `npm test`, all dependency-free and database-free:
+
+- **Money:** commission engine, commission timing, recompute (including stable
+  ids, determinism and the payment-verification gate), clawbacks, balance,
+  commission breakdown, payout authorization.
+- **Integration:** payment events, Kleegr gateway / roles / user-scope /
+  salesperson-link / sync-gate, launch handoff.
+- **Platform:** auth, request handlers, commission handlers, clients core, HTTP
+  helpers, runtime-env, goals, documents core, agency core and scope.
+- **Client:** roles, sidebar preference, portal state, API auth interceptor, API
+  store, fallback policy, API error messages.
 
 ### Deployment
 
@@ -995,14 +1203,118 @@ variables), `docs/KLEEGR_SETUP.md` (integration setup), `docs/PILOT_CHECKLIST.md
 
 ### Known limitations / next steps
 
-- People, plans, clients and payments still have a `PUT /api/state` snapshot
-  path alongside their per-resource endpoints; editing underlying payments or
-  plans after a payout exists can stale that batch's exact line linkage (the
-  batch, its history and its totals are preserved).
+- **`src/pages/AffiliateSignup.tsx` is the one remaining local-only write path.**
+  It is not routed anywhere in the app, and a public self-registration endpoint
+  (with its own rate limiting and abuse surface) does not exist yet — the
+  `affiliate_applications` table is there waiting for it. Until then the
+  component cannot run, and approvals are driven from **People**.
 - The Kleegr sync is intentionally small — pagination, conversations and
   write-back are pending as Kleegr exposes those resources.
 - Password reset / user-management UI and session revocation UI are not built.
 - The bundle is not yet code-split (one large chunk).
+
+---
+
+## 23. Data integrity model
+
+The rules that decide where a number is allowed to come from. Everything in this
+section exists because a commission system's failure mode is not a crash — it is
+two places quietly disagreeing about how much someone is owed.
+
+### One write path per resource
+
+`PUT /api/state` replaced an entire tenant per request. It was removed because it
+could not express *who* changed *what*, let a stale client overwrite a concurrent
+admin's work, and — since it deleted and re-inserted the whole commission ledger
+— moved ledger ids underneath `payout_batch_entries`.
+
+It now answers **410 Gone** with a map of the endpoint to use instead, so an
+older cached client gets an actionable error rather than silently diverging:
+
+| Resource | Endpoint |
+| --- | --- |
+| People | `POST` / `PATCH` / `DELETE /api/salespeople` |
+| Plans | `POST` / `PUT` / `DELETE /api/plans` (+ duplicate, reorder) |
+| Clients | `POST` / `PATCH` / `DELETE /api/clients` |
+| Payments | `POST` / `PATCH` / `DELETE /api/payments` |
+| Settings | `PUT /api/settings` |
+| Ledger | `POST /api/ledger?action=release\|recompute` |
+| Payouts | `POST /api/payouts` |
+| Goals / Features | `/api/goals`, `/api/features` |
+
+`writeState()` survives in `repository.ts` as the **seeding path only**.
+
+### Stable ledger identity
+
+A regenerated ledger row used to mint a **new id**. For a row nothing references
+that is harmless; for a row a payout batch points at it is data loss, because
+`payout_batch_entries.commission_entry_id` has no foreign key — the old id simply
+stopped resolving. The batch kept its total but its lines vanished, and a
+rejected or canceled batch (whose rows are *not* locked, and therefore *are*
+regenerated) lost its history on the next edit to the client.
+
+Identity and `payout_batch_id` are now carried across a rebuild by the same
+`${paymentId}:${ruleId}` key as the rest of the prior state. Only a genuinely new
+line — a payment or rule that did not exist before — mints an id. A useful side
+effect: the recompute is now fully deterministic, so running it twice over
+unchanged inputs produces byte-identical rows.
+
+Three layers protect payout history, in order:
+
+1. **Locked statuses** (`submitted` / `approved` / `paid`) are never deleted,
+   never re-priced, and block deletion of the underlying payment or client.
+2. **Stable ids** keep everything else attached to whatever references it.
+3. **The immutable line snapshot** on `payout_batch_entries` means a batch can
+   show what it paid for even if the ledger row is gone entirely.
+
+### Where a number may come from
+
+| Situation | Response | May the cache answer? |
+| --- | --- | --- |
+| 401 / 403 | Session is over | **No** — propagate; a dead session must not look like a healthy dashboard |
+| 4xx | Application error | **No** — stale data would disguise the bug |
+| Not our JSON API (`absent`) | No server exists (`vite dev`) | **Yes** — the local copy *is* the backend |
+| 5xx / network (`outage`) | A server exists and is failing | **Policy** — see below |
+
+The outage policy (`src/lib/storage/fallback-policy.ts`, mirrored server-side by
+`api/_lib/runtime-env.ts`):
+
+| Environment | Cached read on an outage | Local writes |
+| --- | --- | --- |
+| `production` | **No** | **No** |
+| `preview` | **No** (it holds real tenant data too) | **No** |
+| `development` | Yes | Only when no server answered at all |
+
+The environment is reported by `GET /api/state` and **remembered** from the last
+successful load, so the policy still applies on the first request of a session
+when the API is already down. Nothing remembered ⇒ refuse: without evidence that
+this is a development build, a stale financial number is the more expensive
+mistake. `SCM_ALLOW_LOCAL_FALLBACK` re-enables the cache anywhere for a
+deliberately offline demo.
+
+When a read is refused, `AppContext.unavailable` goes true and the UI says so —
+it never renders an empty or stale ledger as if it were real.
+
+### Failed writes are shown, not absorbed
+
+Every page used to fall back to the local reducer when an API call failed, which
+on a real deployment left the browser holding edits the database had never seen.
+The fallback now applies **only** where no server owns the data
+(`serverAuthoritative === false`). Everywhere else the refusal is rendered
+through `ErrorBanner` with a human sentence from `src/lib/api-errors.ts` — the
+code `has_locked_commissions` becomes *"This has commissions in a payout batch.
+Cancel or complete that payout first."*
+
+### Money can only move forward
+
+- A **payment** is verified once and never un-verified by a later event.
+- A **paid** commission line is history: a reversal is booked as a new negative
+  row rather than a rewrite.
+- A **reversal** is not itself reversible.
+- A **withdrawal request** cannot claim money the ledger does not owe, and only
+  one may be open at a time.
+- Approving or paying a batch **re-reconciles** it twice, and refuses if the
+  underlying data changed after submission.
 
 ---
 

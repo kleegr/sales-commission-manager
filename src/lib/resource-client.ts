@@ -1,14 +1,18 @@
 // ============================================================================
 // RESOURCE CLIENT  (front-end calls to the per-resource DB APIs)
 //
-// Thin fetch wrappers around /api/salespeople and /api/settings (the real
-// per-resource endpoints that replace the salespeople/settings portions of the
-// snapshot PUT /api/state). Each throws on a non-2xx response so callers can
-// fall back to the local store when the API isn't reachable (e.g. `vite dev`
-// with no serverless functions, or the local-storage fallback backend).
+// Thin fetch wrappers around the per-resource endpoints that replaced the
+// snapshot `PUT /api/state`: salespeople, settings, clients, plans, payments,
+// goals, features, documents and the agency overview.
 //
-// The tenant + role are derived from the session cookie on the server; the
-// client never sends them.
+// Each throws on a non-2xx response, carrying the server's error CODE as the
+// message. Callers decide what that means: where no server owns the data
+// (`vite dev`, which serves no serverless functions) they may apply the change
+// to the local store, and everywhere else they must SHOW the refusal — see
+// `serverAuthoritative` on AppContext and `errorMessage` in api-errors.ts.
+//
+// The tenant + role are derived from the session on the server; the client
+// never sends them.
 // ============================================================================
 
 import type { ProjectionAssumptions, Salesperson } from "../types";

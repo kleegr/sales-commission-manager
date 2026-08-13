@@ -1,11 +1,11 @@
 // ============================================================================
 // HANDLER HELPERS  (shared, mostly-pure utilities for per-resource APIs)
 //
-// Priority-1 work moves write workflows off the snapshot `PUT /api/state` and
-// onto real per-resource endpoints (see api/clients.ts for the original
-// pattern). To keep every new endpoint consistent — and tenant/role-safe by
-// construction — the authorization decisions and input validation live here as
-// PURE functions that can be unit-tested with no database (see handlers.test.ts).
+// The snapshot `PUT /api/state` has been removed; every write is now a
+// per-resource endpoint (see api/clients.ts for the canonical shape). To keep
+// them consistent — and tenant/role-safe by construction — the authorization
+// decisions and input validation live here as PURE functions that can be
+// unit-tested with no database (see handlers.test.ts).
 //
 // The endpoint files stay thin: parse body, check permission, validate input,
 // run one tenant-scoped SQL statement.

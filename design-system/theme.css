@@ -1,0 +1,27 @@
+/* Kleegr shared design tokens — Tailwind v4 (CSS-first config).
+ *
+ * Import ONCE, right after `@import "tailwindcss";` in the app's global CSS:
+ *   @import "tailwindcss";
+ *   @import "./ds/theme.css";
+ *
+ * This registers the shared `brand` blue ramp (so bg-brand-600, text-brand-700,
+ * ring-brand-500, … all resolve) and makes Inter the default sans font, matching
+ * the Tailwind v3 preset used by SCM. Load the Inter font itself in the app
+ * layout (next/font/google or a <link>), exposing it as --font-inter, or rely on
+ * the system fallback stack below. */
+@theme {
+  --color-brand-50: #eef4ff;
+  --color-brand-100: #d9e6ff;
+  --color-brand-200: #bcd2ff;
+  --color-brand-300: #8eb4ff;
+  --color-brand-400: #598cff;
+  --color-brand-500: #3366ff;
+  --color-brand-600: #1f47f5;
+  --color-brand-700: #1837e1;
+  --color-brand-800: #1a30b6;
+  --color-brand-900: #1c2f8f;
+  --color-brand-950: #161e57;
+
+  --font-sans: var(--font-inter), "Inter", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, sans-serif;
+}

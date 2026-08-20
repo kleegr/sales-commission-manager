@@ -44,6 +44,7 @@ import {
 } from "../lib/commission-timing";
 import { uid, todayISO } from "../lib/format";
 import { createPlan, updatePlan } from "../lib/resource-client";
+import { useSpPermissions } from "../store/SpPermissionsContext";
 
 const ADD_BUTTONS: { type: RuleType; label: string; icon: typeof Gift }[] = [
   { type: "setup_fee", label: "Setup Fee", icon: CircleDollarSign },
@@ -75,6 +76,18 @@ export default function PlanBuilder() {
   const isEdit = !!id;
   const existing = id ? data.plans.find((p) => p.id === id) : undefined;
   const plansLoaded = data.plans.length > 0;
+  const { can, maxPlans } = useSpPermissions();
+
+  // Smart Productivity gating (defense-in-depth for the entry-point buttons on
+  // the Plans page). Standalone (no SP policy) → both are permissive.
+  const planCap = maxPlans();
+  const atPlanCap = !isEdit && planCap != null && data.plans.length >= planCap;
+  const canSavePlan = can("canManagePlans") && !atPlanCap;
+  const savePlanTooltip = !can("canManagePlans")
+    ? "Your Smart Productivity permissions don't allow managing commission plans."
+    : atPlanCap
+      ? `Your plan limit (${planCap}) has been reached.`
+      : undefined;
 
   const [draft, setDraft] = useState<CommissionPlan>(() =>
     existing ? clonePlan(existing) : freshPlan(),
@@ -138,6 +151,7 @@ export default function PlanBuilder() {
   }
 
   async function savePlan() {
+    if (!canSavePlan) return; // SP policy gate (fail-open when standalone)
     const plan: CommissionPlan = {
       ...draft,
       name: draft.name.trim() || "Untitled plan",
@@ -181,7 +195,7 @@ export default function PlanBuilder() {
             <Button variant="secondary" onClick={() => navigate("/plans")}>
               Cancel
             </Button>
-            <Button onClick={savePlan}>
+            <Button onClick={savePlan} disabled={!canSavePlan} title={savePlanTooltip}>
               <Save className="h-4 w-4" /> Save plan
             </Button>
           </>
@@ -321,7 +335,7 @@ export default function PlanBuilder() {
             <Button variant="secondary" onClick={() => navigate("/plans")}>
               Cancel
             </Button>
-            <Button onClick={savePlan}>
+            <Button onClick={savePlan} disabled={!canSavePlan} title={savePlanTooltip}>
               <Save className="h-4 w-4" /> Save plan
             </Button>
           </div>

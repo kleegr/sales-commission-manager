@@ -26,6 +26,7 @@ import {
 import { fullLedger, clientLabel } from "../lib/ledger";
 import { isoToDate, formatCurrency } from "../lib/format";
 import { downloadCSV } from "../lib/export";
+import { useSpPermissions } from "../store/SpPermissionsContext";
 
 function monthKey(iso: string): string {
   const d = isoToDate(iso);
@@ -38,6 +39,12 @@ function monthLabel(key: string): string {
 
 export default function Reports() {
   const { data, role } = useApp();
+  const { can } = useSpPermissions();
+  // Smart Productivity export gate. Standalone (no SP policy) → true (allowed).
+  const canExport = can("canExportReports");
+  const exportTooltip = canExport
+    ? undefined
+    : "Your Smart Productivity permissions don't allow exporting reports.";
   const [range, setRange] = useState<DateRange>({ from: null, to: null });
   const [showRevenueRows, setShowRevenueRows] = useState(false);
 
@@ -145,7 +152,7 @@ export default function Reports() {
               <ChevronDown className={"h-4 w-4 transition-transform" + (showRevenueRows ? " rotate-180" : "")} />
               {showRevenueRows ? "Hide rows" : "View rows"}
             </Button>
-            <Button variant="secondary" size="sm" onClick={exportRevenueCSV} disabled={revenueSeries.length === 0}>
+            <Button variant="secondary" size="sm" onClick={exportRevenueCSV} disabled={revenueSeries.length === 0 || !canExport} title={exportTooltip}>
               <Download className="h-4 w-4" /> Export CSV
             </Button>
           </div>
@@ -187,7 +194,7 @@ export default function Reports() {
         <div>
           <SectionTitle
             right={
-              <Button variant="secondary" size="sm" onClick={exportRepsCSV} disabled={reps.length === 0}>
+              <Button variant="secondary" size="sm" onClick={exportRepsCSV} disabled={reps.length === 0 || !canExport} title={exportTooltip}>
                 <Download className="h-4 w-4" /> Export CSV
               </Button>
             }
@@ -218,7 +225,7 @@ export default function Reports() {
         <div>
           <SectionTitle
             right={
-              <Button variant="secondary" size="sm" onClick={exportPartnersCSV} disabled={partners.length === 0}>
+              <Button variant="secondary" size="sm" onClick={exportPartnersCSV} disabled={partners.length === 0 || !canExport} title={exportTooltip}>
                 <Download className="h-4 w-4" /> Export CSV
               </Button>
             }
@@ -250,7 +257,7 @@ export default function Reports() {
       <div className="mt-6">
         <SectionTitle
           right={
-            <Button variant="secondary" size="sm" onClick={exportClientsCSV} disabled={clientRevenue.length === 0}>
+            <Button variant="secondary" size="sm" onClick={exportClientsCSV} disabled={clientRevenue.length === 0 || !canExport} title={exportTooltip}>
               <Download className="h-4 w-4" /> Export CSV
             </Button>
           }

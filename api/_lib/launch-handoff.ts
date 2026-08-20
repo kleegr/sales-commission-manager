@@ -27,6 +27,14 @@
 export const SESSION_STORAGE_KEY = "scm_session_token";
 
 /**
+ * localStorage key holding the Smart Productivity per-sub-account permission
+ * policy blob. Written alongside the session token during the launch handoff so
+ * the client (src/store/SpPermissionsContext.tsx) can gate the UI. Cleared when
+ * no policy is available (null) so a standalone / stale value never lingers.
+ */
+export const SP_PERMS_STORAGE_KEY = "scm_sp_perms";
+
+/**
  * Embed a value in an inline <script> safely.
  *
  * JSON.stringify alone is NOT enough inside HTML: a literal `</script>` in the
@@ -60,11 +68,33 @@ export function htmlAttr(value: string): string {
  * `target` must be a SAME-ORIGIN, root-relative path ("/portal?kleegr=connected").
  * Everything is inline — no network round-trip stands between the launch and
  * the dashboard, so the perceived experience is still a redirect.
+ *
+ * `spPermissions`, when provided, is the Smart Productivity per-sub-account
+ * permission policy (already a plain JSON-serializable object). It is written to
+ * localStorage['scm_sp_perms'] so the client can gate the UI. Pass `null`
+ * (the default) to CLEAR any stale value — this keeps standalone / non-SP
+ * launches byte-for-byte unchanged (no blob → the client fails open).
  */
-export function renderLaunchHandoff(target: string, sessionToken: string): string {
+export function renderLaunchHandoff(
+  target: string,
+  sessionToken: string,
+  spPermissions: unknown = null,
+): string {
   const jsTarget = jsStringLiteral(target);
   const jsToken = jsStringLiteral(sessionToken);
   const jsKey = jsStringLiteral(SESSION_STORAGE_KEY);
+  const jsPermsKey = jsStringLiteral(SP_PERMS_STORAGE_KEY);
+  // Serialize the policy to a JS string literal we can re-parse client-side.
+  // `null` (or anything that fails to serialize) means "clear the key".
+  let permsJson: string | null = null;
+  if (spPermissions != null) {
+    try {
+      permsJson = JSON.stringify(spPermissions);
+    } catch {
+      permsJson = null;
+    }
+  }
+  const jsPerms = permsJson === null ? "null" : jsStringLiteral(permsJson);
   const attrTarget = htmlAttr(target);
 
   return (
@@ -81,12 +111,16 @@ export function renderLaunchHandoff(target: string, sessionToken: string): strin
     `<noscript><meta http-equiv="refresh" content="0;url=${attrTarget}">` +
     `<p>JavaScript is required to finish signing in. ` +
     `<a href="${attrTarget}">Continue to Sales Commission Manager</a>.</p></noscript>` +
-    `<script>(function(){var t=${jsToken};` +
+    `<script>(function(){var t=${jsToken};var p=${jsPerms};` +
     // Third-party-cookie-proof transport. Wrapped: Safari Private Browsing and
     // some WebViews throw on localStorage access, and a throw here must not
     // strand the user on a blank page — the cookie may still carry them
     // through, so we navigate regardless.
     `try{window.localStorage.setItem(${jsKey},t)}catch(e){}` +
+    // Write the SP permission policy when present, or CLEAR any stale value so a
+    // later standalone / non-SP launch is not gated by yesterday's policy. Its
+    // own try/catch so a storage throw here never blocks the session write above.
+    `try{if(p===null){window.localStorage.removeItem(${jsPermsKey})}else{window.localStorage.setItem(${jsPermsKey},p)}}catch(e){}` +
     `window.location.replace(${jsTarget})})();</script>` +
     `</body></html>`
   );

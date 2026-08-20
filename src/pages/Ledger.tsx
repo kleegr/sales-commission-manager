@@ -25,6 +25,7 @@ import { commissionTotals, inRange } from "../lib/analytics";
 import { formatCurrency, formatDate, formatPercent } from "../lib/format";
 import { downloadCSV } from "../lib/export";
 import { releaseCommissions, recomputeLedger } from "../lib/resource-client";
+import { useSpPermissions } from "../store/SpPermissionsContext";
 
 const PAYMENT_TYPE_LABEL: Record<string, string> = {
   setup_fee: "Setup fee",
@@ -50,7 +51,10 @@ const STATUS_OPTIONS: (CommissionStatus | "all" | "real")[] = [
 export default function Ledger() {
   const { data, dispatch, reload } = useApp();
   const { user } = useAuth();
+  const { can } = useSpPermissions();
   const canRelease = !!user && ADMIN_ROLES.includes(user.role);
+  // Smart Productivity export gate. Standalone (no SP policy) → true (allowed).
+  const canExport = can("canExportReports");
   const [recomputing, setRecomputing] = useState(false);
   const [spFilter, setSpFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<CommissionStatus | "all" | "real">("all");
@@ -156,7 +160,12 @@ export default function Ledger() {
                 {recomputing ? "Recomputing…" : "Recompute"}
               </Button>
             )}
-            <Button variant="secondary" onClick={exportCSV} disabled={rows.length === 0}>
+            <Button
+              variant="secondary"
+              onClick={exportCSV}
+              disabled={rows.length === 0 || !canExport}
+              title={canExport ? undefined : "Your Smart Productivity permissions don't allow exporting reports."}
+            >
               <Download className="h-4 w-4" /> Export CSV
             </Button>
           </>

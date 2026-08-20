@@ -330,6 +330,67 @@ export async function verifyLaunchToken(
 }
 
 // ---------------------------------------------------------------------------
+// Per-sub-account plugin permissions (launch flow)
+//
+// GET ${base}/api/plugins/permissions with the (short-lived) LAUNCH TOKEN as
+// the Bearer credential. Smart Productivity returns the per-sub-account policy
+// for THIS plugin so the app can gate its UI (manage plans, approve payouts,
+// export reports, plan cap).
+//
+// BEST EFFORT / FAIL-OPEN: the launch must never fail because the policy could
+// not be fetched. On ANY error (network, non-2xx, malformed body) this returns
+// `null`, and the client treats a null policy as "everything allowed".
+// ---------------------------------------------------------------------------
+
+export interface SpPluginPermissions {
+  canManagePlans?: boolean;
+  maxPlans?: number | null;
+  canApprovePayouts?: boolean;
+  canExportReports?: boolean;
+}
+
+/** Coerce an unknown gateway body into a clean permission policy (fail-open). */
+function coercePluginPermissions(body: any): SpPluginPermissions | null {
+  const p = body && typeof body === "object" && body.permissions && typeof body.permissions === "object"
+    ? body.permissions
+    : null;
+  if (!p) return null;
+  const out: SpPluginPermissions = {};
+  if (typeof p.canManagePlans === "boolean") out.canManagePlans = p.canManagePlans;
+  if (typeof p.canApprovePayouts === "boolean") out.canApprovePayouts = p.canApprovePayouts;
+  if (typeof p.canExportReports === "boolean") out.canExportReports = p.canExportReports;
+  if (typeof p.maxPlans === "number" && Number.isFinite(p.maxPlans)) out.maxPlans = p.maxPlans;
+  else if (p.maxPlans === null) out.maxPlans = null;
+  return out;
+}
+
+/**
+ * Fetch this plugin's per-sub-account permission policy using the launch token.
+ * Returns `null` on any failure — the caller passes that through to the client,
+ * which fails open (everything allowed). The launch token is used only for this
+ * read and is never persisted.
+ */
+export async function fetchPluginPermissions(
+  launchToken: string,
+  fetchImpl?: typeof fetch,
+): Promise<SpPluginPermissions | null> {
+  if (!launchToken) return null;
+  try {
+    const result = await kleegrFetch(`${kleegrBaseUrl()}/api/plugins/permissions`, {
+      method: "GET",
+      bearer: launchToken,
+      fetchImpl,
+    });
+    if (!result.ok) return null;
+    const b = result.body;
+    if (!b || typeof b !== "object" || b.ok === false) return null;
+    return coercePluginPermissions(b);
+  } catch {
+    return null; // fail open — never block the launch
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Role mapping (Step 2)
 //
 // Kleegr role  →  Sales Commission Manager role

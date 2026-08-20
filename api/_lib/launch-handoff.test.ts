@@ -5,6 +5,7 @@ import {
   jsStringLiteral,
   htmlAttr,
   SESSION_STORAGE_KEY,
+  SP_PERMS_STORAGE_KEY,
 } from "./launch-handoff.js";
 
 let passed = 0;
@@ -64,6 +65,30 @@ for (const target of ["/agency?kleegr=connected", "/?kleegr=connected", "/portal
   const doc = renderLaunchHandoff(target, TOKEN);
   ok(`renders for ${target}`, doc.includes(JSON.stringify(target).replace(/</g, "\\u003c")) || doc.includes(target));
 }
+
+console.log("\n[Launch handoff · SP permissions blob]");
+
+ok("perms key matches the client's contract", SP_PERMS_STORAGE_KEY === "scm_sp_perms");
+
+// No policy → the key is CLEARED (standalone / non-SP launch stays permissive).
+const noPerms = renderLaunchHandoff("/portal?kleegr=connected", TOKEN);
+ok("the perms key appears in the handoff script", noPerms.includes(SP_PERMS_STORAGE_KEY));
+ok("no policy → the runtime value is null (clears the key)", /var p=null;/.test(noPerms));
+ok("session token write is untouched by the perms feature", /try\{window\.localStorage\.setItem\([^)]*\)\}catch/.test(noPerms));
+ok("still exactly one <script> with no policy", noPerms.split("<script>").length - 1 === 1);
+
+// With a policy → the runtime `p` is the JSON blob (not null), written under the key.
+const policy = { canManagePlans: false, maxPlans: 3, canApprovePayouts: true, canExportReports: false };
+const withPerms = renderLaunchHandoff("/?kleegr=connected", TOKEN, policy);
+ok("a policy → the runtime value is NOT null", !/var p=null;/.test(withPerms));
+ok("carries the policy fields", withPerms.includes("canManagePlans") && withPerms.includes("maxPlans"));
+ok("still exactly one <script> with a policy", withPerms.split("<script>").length - 1 === 1);
+ok("still exactly one </script> with a policy", withPerms.split("</script>").length - 1 === 1);
+
+// A hostile policy value cannot break out of the script element.
+const evilPolicy = renderLaunchHandoff("/?kleegr=connected", TOKEN, { x: "</script><script>alert(1)</script>" });
+ok("hostile policy cannot inject a second <script>", evilPolicy.split("<script>").length - 1 === 1);
+ok("hostile policy cannot close the script element early", evilPolicy.split("</script>").length - 1 === 1);
 
 console.log(`\n========================\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);

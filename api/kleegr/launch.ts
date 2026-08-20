@@ -30,6 +30,7 @@ import {
   verifyLaunchToken,
   reportIntegrationStatus,
   readKleegrConfig,
+  fetchPluginPermissions,
   type AppRole,
 } from "../_lib/kleegr.js";
 import { mapLaunchTokenRole } from "../_lib/kleegr-roles.js";
@@ -160,6 +161,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       /* status reporting is best-effort */
     }
 
+    // 6b. best-effort fetch of the per-sub-account permission policy, using the
+    //     launch token (which only exists here, server-side). It rides the same
+    //     localStorage handoff as the session token so the client can gate the
+    //     UI without ever seeing the launch token. FAIL-OPEN: any error yields
+    //     null and the client behaves as if fully permitted.
+    let spPermissions: unknown = null;
+    try {
+      spPermissions = await fetchPluginPermissions(launchToken);
+    } catch {
+      spPermissions = null;
+    }
+
     // 7. hand off into the correct workspace for this role.
     //
     //    NOT a 302. Smart Productivity frames this app on mobile, where iOS
@@ -185,7 +198,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Referrer-Policy", "no-referrer");
-    return res.send(renderLaunchHandoff(target, sessionToken));
+    return res.send(renderLaunchHandoff(target, sessionToken, spPermissions));
   } catch (err: any) {
     return sendLaunchError(res, 500, String(err?.message ?? err).slice(0, 120));
   }

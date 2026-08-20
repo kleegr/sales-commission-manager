@@ -6,6 +6,7 @@ import Login from "./pages/Login";
 import { AppProvider } from "./store/AppContext";
 import { AuthProvider, useAuth } from "./store/AuthContext";
 import { FeaturesProvider } from "./store/FeaturesContext";
+import { SpPermissionsProvider } from "./store/SpPermissionsContext";
 import { installApiAuthInterceptor } from "./lib/api-auth";
 import "./index.css";
 
@@ -44,9 +45,11 @@ function Root() {
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <BrowserRouter>
-      <AuthProvider>
-        <Root />
-      </AuthProvider>
+      <SpPermissionsProvider>
+        <AuthProvider>
+          <Root />
+        </AuthProvider>
+      </SpPermissionsProvider>
     </BrowserRouter>
   </React.StrictMode>,
 );

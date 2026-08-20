@@ -44,6 +44,7 @@ import {
 } from "../lib/plan-analytics";
 import { uid, todayISO, formatCurrency, classNames } from "../lib/format";
 import { duplicatePlan, deletePlan } from "../lib/resource-client";
+import { useSpPermissions } from "../store/SpPermissionsContext";
 
 type View = "cards" | "table";
 type StatusFilter = "all" | "active" | "unused" | "draft";
@@ -66,6 +67,18 @@ const USAGE_TONE = {
 export default function Plans() {
   const { data, dispatch, tenant, reload } = useApp();
   const navigate = useNavigate();
+  const { can, maxPlans } = useSpPermissions();
+
+  // Smart Productivity gating for plan creation. Standalone (no SP policy) →
+  // both are permissive: can('canManagePlans') is true and maxPlans() is null.
+  const planCap = maxPlans();
+  const atPlanCap = planCap != null && data.plans.length >= planCap;
+  const canCreatePlan = can("canManagePlans") && !atPlanCap;
+  const createPlanTooltip = !can("canManagePlans")
+    ? "Your Smart Productivity permissions don't allow managing commission plans."
+    : atPlanCap
+      ? `Your plan limit (${planCap}) has been reached. Remove a plan or contact your administrator.`
+      : undefined;
 
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [previewPlan, setPreviewPlan] = useState<CommissionPlan | null>(null);
@@ -178,7 +191,11 @@ export default function Plans() {
         title="Commission Plans"
         subtitle="Build flexible, rule-based plans and preview exactly what they pay"
         actions={
-          <Button onClick={() => navigate("/plans/new")}>
+          <Button
+            onClick={() => navigate("/plans/new")}
+            disabled={!canCreatePlan}
+            title={createPlanTooltip}
+          >
             <Plus className="h-4 w-4" /> New plan
           </Button>
         }
@@ -199,7 +216,11 @@ export default function Plans() {
           title="No commission plans yet"
           description="Create your first plan from setup-fee, signup-bonus, monthly-residual, and salary rules."
           action={
-            <Button onClick={() => navigate("/plans/new")}>
+            <Button
+              onClick={() => navigate("/plans/new")}
+              disabled={!canCreatePlan}
+              title={createPlanTooltip}
+            >
               <Plus className="h-4 w-4" /> New plan
             </Button>
           }

@@ -28,6 +28,7 @@ import {
   payoutTransition,
   type ServerPayout,
 } from "../lib/payouts-client";
+import { useSpPermissions } from "../store/SpPermissionsContext";
 
 const ERROR_TEXT: Record<string, string> = {
   forbidden: "You don't have permission to do that.",
@@ -39,9 +40,12 @@ const ERROR_TEXT: Record<string, string> = {
 
 export default function Payouts() {
   const { data, dispatch, backend, role, reload } = useApp();
+  const { can: spCan } = useSpPermissions();
   const isNeon = backend === "neon";
 
-  const canApprove = ["owner", "admin", "sales_manager"].includes(role);
+  // The existing role gate, AND-ed with the Smart Productivity policy. Standalone
+  // (no SP policy) → spCan() is always true, so behavior is unchanged.
+  const canApprove = ["owner", "admin", "sales_manager"].includes(role) && spCan("canApprovePayouts");
   const canPay = ["owner", "admin"].includes(role);
   const canCancel = ["owner", "admin"].includes(role);
 

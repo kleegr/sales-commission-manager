@@ -641,7 +641,7 @@ export function Layout({ children }: { children: ReactNode }) {
       <DemoBar />
       <div className="flex min-h-0 flex-1 lg:flex">
         {/* Desktop sidebar */}
-        <aside className="hidden w-64 flex-none flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 lg:flex">
+        <aside className="hidden w-64 flex-none flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 xl:flex">
           <Brand />
           <NavContents />
           <div className="space-y-3 border-t border-slate-200 px-4 py-3 dark:border-slate-800">
@@ -652,7 +652,7 @@ export function Layout({ children }: { children: ReactNode }) {
 
         {/* Mobile drawer */}
         {mobileOpen && (
-          <div className="fixed inset-0 z-40 lg:hidden">
+          <div className="fixed inset-0 z-40 xl:hidden">
             <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
             <aside className="absolute inset-y-0 left-0 flex w-72 flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
               <div className="flex items-center justify-between">
@@ -678,7 +678,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <header className="z-30 flex items-center gap-3 border-b border-slate-200 bg-white/80 px-4 py-3 backdrop-blur dark:border-slate-800 dark:bg-slate-900/80 lg:px-8">
             <button
               onClick={() => setMobileOpen(true)}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 lg:hidden"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 xl:hidden"
               aria-label="Open menu"
             >
               <Menu className="h-5 w-5" />

@@ -339,7 +339,7 @@ export default function Plans() {
               action={<Button variant="secondary" onClick={clearFilters}>Clear filters</Button>}
             />
           ) : view === "cards" ? (
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div className="grid gap-4 xl:grid-cols-2 2xl:grid-cols-3">
               {filtered.map((r) => (
                 <PlanCard
                   key={r.plan.id}

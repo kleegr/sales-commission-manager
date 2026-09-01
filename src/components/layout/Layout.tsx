@@ -519,7 +519,6 @@ function useNarrowShell(ref: RefObject<HTMLElement>): boolean {
  * to spare the width, expanding overlays the content rather than squeezing it.
  */
 function EmbeddedShell({ children }: { children: ReactNode }) {
-  const { data } = useApp();
   const location = useLocation();
   const shellRef = useRef<HTMLDivElement>(null);
   const narrow = useNarrowShell(shellRef);
@@ -582,27 +581,12 @@ function EmbeddedShell({ children }: { children: ReactNode }) {
             overlay ? "fixed inset-y-0 left-0 shadow-xl" : "sticky top-0 max-h-screen",
           )}
         >
-          <div
-            className={classNames(
-              "flex flex-none items-center py-3",
-              expanded ? "gap-2 px-3" : "justify-center",
-            )}
-          >
-            <span
-              className="flex h-9 w-9 flex-none items-center justify-center rounded-lg bg-brand-600 text-white shadow-sm"
-              title="Commission Manager"
-            >
-              <Coins className="h-5 w-5" />
-            </span>
-            {expanded && (
-              <div className="min-w-0">
-                <p className="truncate text-[13px] font-semibold text-slate-900 dark:text-white">
-                  {data.settings.companyName || "Commission Manager"}
-                </p>
-                <p className="truncate text-[10px] text-slate-400">Commission Manager</p>
-              </div>
-            )}
-          </div>
+          {/* No app logo/name block here on purpose: embedded, this app lives
+              UNDER the Smart Productivity brand in the host's header — a second
+              "Commission Manager" mark reads as a competing product. The
+              standalone Layout below keeps its Brand. The spacer preserves the
+              breathing room the block used to provide above the nav. */}
+          <div className="h-3 flex-none" aria-hidden />
 
           <EmbeddedNavRail expanded={expanded} onNavigate={overlay ? collapse : undefined} />
 

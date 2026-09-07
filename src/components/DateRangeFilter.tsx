@@ -39,16 +39,18 @@ export function DateRangeFilter({
       <CalendarRange className="ml-1 h-4 w-4 text-slate-400" />
       <Input
         type="date"
+        aria-label="Start date"
         value={value.from ?? ""}
         onChange={(e) => onChange({ ...value, from: e.target.value || null })}
-        className="h-8 w-auto py-1 text-xs"
+        className="h-8 !w-32 min-w-0 py-1 text-xs"
       />
       <span className="text-xs text-slate-400">to</span>
       <Input
         type="date"
+        aria-label="End date"
         value={value.to ?? ""}
         onChange={(e) => onChange({ ...value, to: e.target.value || null })}
-        className="h-8 w-auto py-1 text-xs"
+        className="h-8 !w-32 min-w-0 py-1 text-xs"
       />
       <div className="flex items-center gap-1">
         {presets.map((p) => (

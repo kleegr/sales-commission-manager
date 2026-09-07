@@ -102,7 +102,7 @@ ok("returns the server's data", idOf(r.data) === "srv");
 ok("did not throw", r.error === null);
 ok("backend is neon", getBackendInfo().backend === "neon");
 ok("isOfflineData is false", getBackendInfo().isOfflineData === false);
-ok("the response was written to the cache", storage.get(CACHE_KEY)?.includes("srv") === true);
+ok("live records are not written to a shared browser cache", storage.get(CACHE_KEY)?.includes("srv") !== true);
 
 console.log("\n[load · auth failure propagates, cache is NOT served]");
 
@@ -126,32 +126,16 @@ for (const status of [400, 404, 422]) {
   ok(`${status} serves no cached data`, r.data === null);
 }
 
-console.log("\n[load · outages fall back to the cache and flag it]");
-
-r = await attempt({ status: 500, contentType: JSON_CT, body: { error: "internal_error" } });
-ok("5xx returns the cached copy", idOf(r.data) === "cached");
-ok("...without throwing", r.error === null);
-ok("...flagged isOfflineData", getBackendInfo().isOfflineData === true);
-ok("...backend reads local", getBackendInfo().backend === "local");
-
-r = await attempt("network-failure");
-ok("a network failure returns the cache", idOf(r.data) === "cached");
-ok("...flagged isOfflineData", getBackendInfo().isOfflineData === true);
-
-r = await attempt({ status: 200, contentType: "text/html", body: {} });
-ok("the vite-dev SPA shell returns the cache", idOf(r.data) === "cached");
-ok("...flagged isOfflineData", getBackendInfo().isOfflineData === true);
-
-// A 2xx JSON body that isn't the payload we asked for: answering, but not
-// usefully. Cached data still beats an empty screen.
-r = await attempt({ status: 200, contentType: JSON_CT, body: { data: { nope: true } } });
-ok("a malformed 2xx payload returns the cache", idOf(r.data) === "cached");
-
-// An outage with nothing cached must still resolve, not throw.
-storage.clear();
-reply = "network-failure";
-r = { data: await store.load(), error: null };
-ok("an outage with an empty cache resolves to null", r.data === null);
+console.log('\n[load · outages never expose old demo or another tenant cache]');
+for (const failure of [
+  { status: 500, contentType: JSON_CT, body: {} },
+  'network-failure',
+  { status: 200, contentType: 'text/html', body: {} },
+  { status: 200, contentType: JSON_CT, body: { data: { nope: true } } },
+] as Reply[]) {
+  r = await attempt(failure);
+  ok('outage throws and returns no cached data', r.error instanceof StateLoadError && r.data === null);
+}
 
 // Recovery: a later success must clear the offline flag rather than latch it.
 r = await attempt({ status: 200, contentType: JSON_CT, body: { data: serverData } });

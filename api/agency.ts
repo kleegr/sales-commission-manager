@@ -34,7 +34,7 @@ import { resolveAgencyScope } from "./_lib/agency-scope.js";
 async function tenantsForAgency(agencyId: string): Promise<TenantRow[]> {
   const { rows } = await query<TenantRow>(
     `SELECT id, name, slug, ghl_location_id, agency_id, status
-       FROM tenants WHERE agency_id = $1 ORDER BY created_at ASC, name ASC`,
+       FROM tenants WHERE agency_id = $1 AND status = 'active' ORDER BY created_at ASC, name ASC`,
     [agencyId],
   );
   return rows;

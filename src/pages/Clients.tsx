@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Plus, Pencil, Trash2, Building2, Search, Eye } from "lucide-react";
+import { DirectorySync } from '../components/DirectorySync';
 import { useApp } from "../store/AppContext";
 import type { Client, ClientStatus } from "../types";
 import {
@@ -35,8 +36,8 @@ function emptyClient(): Client {
     phone: "",
     salespersonId: null,
     signupDate: todayISO(),
-    setupFee: 2500,
-    monthlySubscription: 250,
+    setupFee: 0,
+    monthlySubscription: 0,
     status: "active",
     canceledDate: null,
     notes: "",
@@ -50,6 +51,7 @@ export default function Clients() {
   const [isNew, setIsNew] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState<"all" | ClientStatus>("all");
 
   const spName = (spId: string | null) =>
@@ -63,6 +65,10 @@ export default function Clients() {
       return `${c.companyName} ${c.contactName} ${c.email}`.toLowerCase().includes(q);
     });
   }, [data.clients, search, statusFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(rows.length / 50));
+  const currentPage = Math.min(page, totalPages);
+  const visibleRows = rows.slice((currentPage - 1) * 50, currentPage * 50);
 
   function openNew() {
     setEditing(emptyClient());
@@ -82,7 +88,7 @@ export default function Clients() {
     <div>
       <PageHeader
         title="Clients"
-        subtitle="Accounts, their assigned rep, and the revenue that drives commissions"
+        subtitle="GoHighLevel contacts for this sub-account, with their assigned rep and revenue"
         actions={
           <Button onClick={openNew}>
             <Plus className="h-4 w-4" /> Add client
@@ -90,20 +96,22 @@ export default function Clients() {
         }
       />
 
+      <DirectorySync resource="clients" />
+
       <Card padded={false} className="overflow-hidden">
         <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 p-3 dark:border-slate-800">
           <div className="relative flex-1 min-w-[180px]">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <Input
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
               placeholder="Search clients…"
               className="pl-9"
             />
           </div>
           <Select
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as "all" | ClientStatus)}
+            onChange={(e) => { setStatusFilter(e.target.value as "all" | ClientStatus); setPage(1); }}
             className="w-auto"
           >
             <option value="all">All statuses</option>
@@ -149,11 +157,11 @@ export default function Clients() {
               </TR>
             </THead>
             <TBody>
-              {rows.map((c) => (
+              {visibleRows.map((c) => (
                 <TR key={c.id}>
                   <TD className="font-medium text-slate-900 dark:text-white">
                     <Link to={`/clients/${c.id}`} className="hover:text-brand-600 hover:underline">
-                      {c.companyName}
+                      {c.companyName || c.contactName || c.email || "Unnamed contact"}
                     </Link>
                   </TD>
                   <TD>
@@ -191,6 +199,11 @@ export default function Clients() {
             </TBody>
           </Table>
         )}
+        {rows.length > 0 && <div className="flex items-center justify-between gap-3 border-t border-slate-100 p-3 text-sm dark:border-slate-800">
+          <span>{rows.length.toLocaleString()} clients · Page {currentPage} of {totalPages}</span>
+          <div className="flex gap-2"><Button variant="secondary" disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)}>Previous</Button>
+          <Button variant="secondary" disabled={currentPage === totalPages} onClick={() => setPage(currentPage + 1)}>Next</Button></div>
+        </div>}
       </Card>
 
       <Modal

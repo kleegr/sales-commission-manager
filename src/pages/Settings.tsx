@@ -3,7 +3,6 @@ import {
   SlidersHorizontal,
   Download,
   Upload,
-  RotateCcw,
   Database,
   Sun,
   Moon,
@@ -27,7 +26,6 @@ import {
   NumberField,
   Checkbox,
 } from "../components/ui";
-import { ConfirmModal } from "../components/ui/Modal";
 import { downloadJSON } from "../lib/export";
 import { saveSettings, saveFeatures } from "../lib/resource-client";
 import { useFeatures } from "../store/FeaturesContext";
@@ -36,7 +34,6 @@ import { FEATURES, FEATURE_KEYS, type FeatureFlags } from "../lib/features";
 export default function Settings() {
   const { data, dispatch, storeName, backend } = useApp();
   const fileRef = useRef<HTMLInputElement>(null);
-  const [resetOpen, setResetOpen] = useState(false);
   const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const a = data.settings.assumptions;
@@ -224,9 +221,6 @@ export default function Settings() {
               className="hidden"
               onChange={onImportFile}
             />
-            <Button variant="ghost" className="text-rose-500" onClick={() => setResetOpen(true)}>
-              <RotateCcw className="h-4 w-4" /> Reset to demo data
-            </Button>
           </div>
 
           <div className="grid grid-cols-2 gap-3 border-t border-slate-100 pt-4 text-sm dark:border-slate-800 sm:grid-cols-4">
@@ -238,17 +232,6 @@ export default function Settings() {
         </Card>
       </div>
 
-      <ConfirmModal
-        open={resetOpen}
-        onClose={() => setResetOpen(false)}
-        onConfirm={() => {
-          dispatch({ type: "RESET_DEMO" });
-          setImportMsg({ ok: true, text: "Reset to demo data." });
-        }}
-        title="Reset to demo data?"
-        message="This replaces all current data with the built-in demo set. This cannot be undone."
-        confirmLabel="Reset"
-      />
     </div>
   );
 }

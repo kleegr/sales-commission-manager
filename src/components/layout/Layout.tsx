@@ -13,7 +13,6 @@ import { useFeatures } from "../../store/FeaturesContext";
 import { useEmbedded } from "../../lib/useEmbedded";
 import { canAccess, type Role } from "../../lib/roles";
 import { featureAllowsPath, type FeatureFlags } from "../../lib/features";
-import { DemoBar } from "./DemoBar";
 
 interface NavItem {
   to: string;
@@ -33,7 +32,7 @@ const SECTIONS: { heading: string; items: NavItem[] }[] = [
   {
     heading: "Team & clients",
     items: [
-      { to: "/people", label: "Salespeople", icon: <Users className="h-4 w-4" /> },
+      { to: "/people", label: "Team", icon: <Users className="h-4 w-4" /> },
       { to: "/plans", label: "Commission Plans", icon: <ScrollText className="h-4 w-4" /> },
       { to: "/clients", label: "Clients", icon: <Building2 className="h-4 w-4" /> },
       { to: "/payments", label: "Payments", icon: <CreditCard className="h-4 w-4" /> },
@@ -117,7 +116,6 @@ export function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="app-shell flex min-h-screen min-w-0 flex-col">
       <a href="#main-content" className="skip-link">Skip to content</a>
-      <DemoBar />
       <header className="app-topbar sticky top-0 z-30 border-b border-slate-200/80 bg-white/95 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/95">
         <nav aria-label="Primary navigation" data-primary-navigation className="mx-auto flex max-w-[1600px] gap-1 overflow-x-auto px-4 sm:px-6 lg:px-8">
           {sections.map(section => {

@@ -881,7 +881,7 @@ export async function readKleegrStatusSummary(
     [tenantId],
   );
   const users = await query<{ n: string }>(
-    `SELECT count(*)::text AS n FROM users WHERE tenant_id = $1 AND kleegr_user_id IS NOT NULL`,
+    `SELECT count(*)::text AS n FROM salespeople WHERE tenant_id = $1 AND ghl_user_id IS NOT NULL AND ghl_active = true`,
     [tenantId],
   );
 

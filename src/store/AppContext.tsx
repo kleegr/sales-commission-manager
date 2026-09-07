@@ -2,8 +2,7 @@
 // APP STATE
 //
 // A single React context holds the entire dataset and exposes typed actions.
-// All persistence goes through the DataStore abstraction (localStorage today,
-// GoHighLevel / external DB later). Whenever payments, clients, salespeople or
+// All persistence goes through the authenticated database API. Whenever payments, clients, salespeople or
 // plans change, payment-derived and salary commission rows are recomputed by
 // the deterministic engine so the ledger is always in sync.
 // ============================================================================
@@ -31,13 +30,12 @@ import type {
 } from "../types";
 import { SCHEMA_VERSION } from "../types";
 import {
-  store,
+  HybridStore,
   getBackendInfo,
   isAuthError,
   type Backend,
 } from "../lib/storage/apiStore";
 import { useAuth } from "./AuthContext";
-import { buildDemoData } from "../lib/demo-data";
 import {
   recomputePaymentCommissions,
   recomputeSalaryEntries,
@@ -50,7 +48,6 @@ import { todayISO, uid } from "../lib/format";
 
 type Action =
   | { type: "HYDRATE"; data: AppData }
-  | { type: "RESET_DEMO" }
   | { type: "IMPORT"; data: AppData }
   | { type: "SET_THEME"; theme: "light" | "dark" }
   | { type: "SET_COMPANY"; name: string }
@@ -109,8 +106,6 @@ function reducer(state: AppData, action: Action): AppData {
   switch (action.type) {
     case "HYDRATE":
       return action.data;
-    case "RESET_DEMO":
-      return buildDemoData();
     case "IMPORT":
       return withRecompute(action.data);
 
@@ -318,11 +313,7 @@ interface Ctx {
   role: string;
   readOnly: boolean;
   reload: () => Promise<void>;
-  /**
-   * True when `data` came from the localStorage cache because /api/state was
-   * unreachable (network failure or 5xx), rather than from the server. Show it:
-   * the numbers on screen are a snapshot, not live.
-   */
+  /** Compatibility flag; live data never falls back to a browser snapshot. */
   isOfflineData: boolean;
   /**
    * True from mount until the FIRST store.load() settles (success or failure).
@@ -337,6 +328,7 @@ interface Ctx {
    * that is already showing good data.
    */
   hydrating: boolean;
+  dataError: string;
 }
 
 const AppCtx = createContext<Ctx | null>(null);
@@ -352,12 +344,12 @@ function emptyData(): AppData {
     payouts: [],
     settings: {
       theme: "light",
-      companyName: "Acme Commissions",
+      companyName: "",
       assumptions: {
-        avgSetupFee: 2500,
-        avgMonthly: 250,
-        closingsPerMonth: 5,
-        monthlyChurnPct: 3,
+        avgSetupFee: 0,
+        avgMonthly: 0,
+        closingsPerMonth: 0,
+        monthlyChurnPct: 0,
         months: 60,
       },
     },
@@ -366,6 +358,8 @@ function emptyData(): AppData {
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
+  const [store] = useState(() => new HybridStore());
+  const [dataError, setDataError] = useState('');
   const { user, sessionExpired } = useAuth();
   const [data, dispatch] = useReducer(reducer, undefined, emptyData);
   const hydrated = useRef(false);
@@ -383,8 +377,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
    * here rather than at each call site: a 401/403 means this session is over,
    * so hand it to AuthContext (which drops the token and shows the login
    * screen) and report "no data" instead of leaving the UI on stale cache.
-   * Every other failure — including the outage path, which store.load()
-   * answers from the cache — is passed through to the caller unchanged.
+   * Other failures are surfaced without a shared browser cache.
    */
   const loadState = useCallback(async (): Promise<AppData | null> => {
     try {
@@ -396,11 +389,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       throw err;
     }
-  }, [sessionExpired]);
+  }, [sessionExpired, store]);
 
-  // Load once on mount. If the store is empty we hydrate an EMPTY dataset and do
-  // NOT persist it, so the app never silently seeds sample/demo data. Seeding is
-  // reserved for the explicit "Reset to demo data" action (RESET_DEMO).
+  // Hydrate only from the current authenticated workspace; never seed an empty response.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -408,12 +399,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       try {
         loaded = await loadState();
       } catch {
-        /* An outage is already answered from the cache inside the store, and a
-           dead session is handled by loadState(). Whatever is left is a real
-           error with nothing to show for it — treat it as "no data" so the UI
-           leaves its loading state instead of hanging. */
+        if (!cancelled) setDataError('Workspace data could not be loaded. Please retry.');
+
       }
       if (cancelled) return;
+      suppressPersist.current = true;
       if (loaded) {
         dispatch({ type: "HYDRATE", data: loaded });
       } else {
@@ -429,6 +419,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     })();
     return () => {
       cancelled = true;
+      void store.clear();
     };
   }, []);
 
@@ -440,7 +431,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       suppressPersist.current = false;
       return;
     }
-    void store.save(data);
+    void store.save(data).catch((e: unknown) => setDataError(e instanceof Error ? e.message : 'Changes could not be saved.'));
   }, [data]);
 
   // Reflect theme on <html> and remember it for the pre-paint script.
@@ -466,6 +457,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const reload = useCallback(async (): Promise<void> => {
     const loaded = await loadState();
     if (loaded) {
+      setDataError('');
       suppressPersist.current = true;
       dispatch({ type: "HYDRATE", data: loaded });
     }
@@ -483,11 +475,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       readOnly: info.readOnly,
       reload,
       hydrating,
+      dataError,
       isOfflineData: info.isOfflineData,
     };
-  }, [data, user, reload, hydrating]);
+  }, [data, user, reload, hydrating, dataError]);
 
-  return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>;
+  return <AppCtx.Provider value={value}>{dataError ? <div role="alert" className="mx-auto my-12 max-w-lg rounded-xl border border-amber-200 bg-amber-50 p-6 text-slate-800">
+    <h1 className="text-lg font-semibold">Workspace data needs attention</h1><p className="my-3">{dataError}</p>
+    <button className="rounded-lg bg-slate-900 px-4 py-2 text-white" onClick={() => void reload().catch(() => setDataError('Data is still unavailable. Please retry shortly.'))}>Reload current data</button>
+  </div> : children}</AppCtx.Provider>;
 }
 
 export function useApp(): Ctx {

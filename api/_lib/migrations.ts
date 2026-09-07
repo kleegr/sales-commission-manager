@@ -286,4 +286,20 @@ CREATE INDEX IF NOT EXISTS idx_clients_kleegr_opportunity ON clients(tenant_id, 
 
 INSERT INTO schema_migrations (id) VALUES ('0010_kleegr_integration')
 ON CONFLICT (id) DO NOTHING;
+-- 0011: live directory provenance and concurrent snapshot protection.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS ghl_directory_sync JSONB;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS data_revision BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE salespeople ADD COLUMN IF NOT EXISTS ghl_user_id TEXT;
+ALTER TABLE salespeople ADD COLUMN IF NOT EXISTS ghl_role TEXT;
+ALTER TABLE salespeople ADD COLUMN IF NOT EXISTS ghl_synced_at TIMESTAMPTZ;
+ALTER TABLE salespeople ADD COLUMN IF NOT EXISTS ghl_active BOOLEAN;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS ghl_synced_at TIMESTAMPTZ;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_salespeople_ghl_user ON salespeople(tenant_id, ghl_user_id) WHERE ghl_user_id IS NOT NULL;
+-- Retire only the exact built-in demo workspaces. Real linked workspaces are preserved.
+UPDATE tenants SET status = 'archived', updated_at = now()
+ WHERE kleegr_sub_account_id IS NULL AND (
+  (id = 'tenant_demo' AND slug = 'demo' AND ghl_location_id = 'ghl_loc_demo_001') OR
+  (id = 'tenant_acme' AND slug = 'acme' AND ghl_location_id = 'ghl_loc_acme_002'));
+INSERT INTO schema_migrations (id) VALUES ('0011_live_directory') ON CONFLICT (id) DO NOTHING;
+
 `;

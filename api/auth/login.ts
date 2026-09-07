@@ -76,7 +76,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       `SELECT u.id, u.tenant_id, u.name, u.email, u.role, u.salesperson_id, u.password_hash,
               u.status, t.slug AS tenant_slug, t.name AS tenant_name
          FROM users u JOIN tenants t ON t.id = u.tenant_id
-        WHERE lower(u.email) = $1 ${tenant ? "AND t.slug = $2" : ""}`,
+        WHERE t.status = 'active' AND lower(u.email) = $1 ${tenant ? "AND t.slug = $2" : ""}`,
       tenant ? [email, tenant] : [email],
     );
 

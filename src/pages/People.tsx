@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Plus, Pencil, Trash2, Users, Check, X, Search } from "lucide-react";
+import { DirectorySync } from '../components/DirectorySync';
 import { useApp } from "../store/AppContext";
 import type { Role, Salesperson } from "../types";
 import {
@@ -60,13 +61,14 @@ function emptySalesperson(): Salesperson {
 }
 
 export default function People() {
-  const { data, dispatch, reload } = useApp();
+  const { data, reload } = useApp();
   const [editing, setEditing] = useState<Salesperson | null>(null);
   const [isNew, setIsNew] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [roleFilter, setRoleFilter] = useState<"all" | Role>("all");
   const [search, setSearch] = useState("");
   const [busy, setBusy] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   // Map the edited record to the fields the per-resource API accepts.
   function toInput(sp: Salesperson): SalespersonInput {
@@ -114,17 +116,15 @@ export default function People() {
   async function save() {
     if (!editing || busy) return;
     setBusy(true);
+    setSaveError('');
     try {
       if (isNew) await createSalesperson(toInput(editing));
       else await updateSalesperson(editing.id, toInput(editing));
       await reload();
-    } catch {
-      // API unreachable (local/dev) or rejected — keep working via local store.
-      dispatch(isNew ? { type: "SP_ADD", sp: editing } : { type: "SP_UPDATE", sp: editing });
-    } finally {
-      setBusy(false);
       setEditing(null);
-    }
+    } catch {
+      setSaveError('This person could not be saved. Please retry.');
+    } finally { setBusy(false); }
   }
 
   async function deactivate(id: string) {
@@ -132,7 +132,7 @@ export default function People() {
       await deactivateSalesperson(id);
       await reload();
     } catch {
-      dispatch({ type: "SP_DELETE", id });
+      setSaveError('This person could not be deactivated. Please retry.');
     } finally {
       setDeleteId(null);
     }
@@ -143,15 +143,15 @@ export default function People() {
       await setSalespersonApproval(id, approval);
       await reload();
     } catch {
-      dispatch({ type: "SP_APPROVAL", id, approval });
+      setSaveError('The approval could not be saved. Please retry.');
     }
   }
 
   return (
     <div>
       <PageHeader
-        title="Salespeople, Affiliates & Partners"
-        subtitle="Manage your team and assign commission plans"
+        title="Team"
+        subtitle="Users from this GoHighLevel sub-account and their commission plans"
         actions={
           <Button onClick={openNew}>
             <Plus className="h-4 w-4" /> Add person
@@ -159,6 +159,8 @@ export default function People() {
         }
       />
 
+      <DirectorySync resource="team" />
+      {saveError && <p role="alert" className="mb-4 text-sm text-rose-600">{saveError}</p>}
       {/* Pending affiliate approvals */}
       {pending.length > 0 && (
         <Card className="mb-5 border-violet-200 bg-violet-50/60 dark:border-violet-500/30 dark:bg-violet-500/10">
@@ -220,7 +222,7 @@ export default function People() {
         <EmptyState
           icon={<Users className="h-6 w-6" />}
           title="No people yet"
-          description="Add your first salesperson, affiliate, or partner to get started."
+          description="Sync this sub-account’s GoHighLevel users, or add a team member manually."
           action={<Button onClick={openNew}><Plus className="h-4 w-4" /> Add person</Button>}
         />
       ) : (
@@ -245,6 +247,7 @@ export default function People() {
                       {s.name || "Unnamed"}
                     </Link>
                     <div className="text-xs text-slate-400">{s.email}</div>
+                    {s.ghlUserId && <div className="text-xs text-brand-600">GoHighLevel · {s.ghlRole || 'user'}{s.ghlActive === false ? ' · no longer assigned' : ''}</div>}
                   </TD>
                   <TD><Badge tone="slate">{ROLE_LABEL[s.role]}</Badge></TD>
                   <TD className="text-slate-600 dark:text-slate-300">{planName(s.commissionPlanId)}</TD>

@@ -220,11 +220,11 @@ export default function KleegrIntegration() {
             <div className="grid gap-3 sm:grid-cols-3">
               <StatCard label="Imported clients" value={conn?.counts.importedClients ?? 0} icon={<Building2 className="h-5 w-5" />} tone="blue" />
               <StatCard label="Linked clients" value={conn?.counts.linkedClients ?? 0} icon={<Link2 className="h-5 w-5" />} tone="violet" />
-              <StatCard label="Kleegr users" value={conn?.counts.kleegrUsers ?? 0} icon={<Users className="h-5 w-5" />} tone="cyan" />
+              <StatCard label="GHL team members" value={conn?.counts.kleegrUsers ?? 0} icon={<Users className="h-5 w-5" />} tone="cyan" />
             </div>
             <p className="text-xs text-slate-500">
-              Imported data is labelled (Kleegr imported / Kleegr linked) and is read through the Kleegr gateway —
-              never directly from GoHighLevel. A fresh sync runs each time the app is launched from Kleegr.
+              Smart Productivity manages the fresh tokens used to read this sub-account’s GoHighLevel users and contacts.
+              Sync runs on launch and can be refreshed from Team or Clients.
             </p>
           </Card>
 

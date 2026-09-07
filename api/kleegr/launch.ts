@@ -33,6 +33,9 @@ import {
   fetchPluginPermissions,
   type AppRole,
 } from "../_lib/kleegr.js";
+import { directoryConfigured } from '../_lib/ghl-directory.js';
+import { syncDirectory } from '../_lib/directory-sync.js';
+export const config = { maxDuration: 120 };
 import { mapLaunchTokenRole } from "../_lib/kleegr-roles.js";
 import {
   upsertTenantForSubAccount,
@@ -144,14 +147,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const sessionToken = await createSession(user.id, tenant.id);
     setSessionCookie(res, sessionToken, { crossSite: true });
 
-    // 6. best-effort profile sync + status report. By DEFAULT this only refreshes
-    //    the sub-account profile — it does NOT auto-import contacts/opportunities
-    //    or auto-provision other users (that import is gated behind
-    //    KLEEGR_SYNC_ENABLED; see runInitialSync). Neither blocks the launch:
-    //    failures are swallowed so a transient gateway hiccup never prevents the
-    //    user from entering the app.
+    // 6. Refresh the verified tenant’s live directory when configured.
+    //    Failure is reported on Team/Clients and never prevents signing in.
     try {
-      await runInitialSync({ launchToken, tenantId: tenant.id });
+      if (directoryConfigured()) await syncDirectory(tenant.id);
+      else await runInitialSync({ launchToken, tenantId: tenant.id });
     } catch {
       /* sync is best-effort; per-resource failures are already isolated */
     }

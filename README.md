@@ -1,3 +1,7 @@
+# Live GoHighLevel data
+
+Team now syncs the connected sub-account’s GHL users and Clients syncs its GHL contacts. Smart Productivity refreshes OAuth tokens; Commission Manager keeps the service key and tokens server-side. See [live directory setup](docs/LIVE_DIRECTORY.md). Demo seeding, demo login bypass, and browser data fallback have been removed. Older prototype/review instructions below are historical and no longer enable demo data.
+
 # Sales Commission, Affiliate & Partner Management
 
 An interactive system for designing commission plans and seeing exactly what they

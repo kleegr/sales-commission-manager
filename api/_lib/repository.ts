@@ -11,7 +11,7 @@
 //
 // writeState is a transactional REPLACE-ALL for the tenant: it deletes the
 // tenant's child rows and re-inserts from the snapshot, so there are never
-// stale rows and concurrent saves are last-write-wins (documented).
+// stale rows. A revision check rejects snapshots made before a directory sync.
 //
 // NOTE ON TENANT ISOLATION: every statement below filters / writes by
 // tenant_id. There is no query in this file that can read or mutate rows for a
@@ -22,11 +22,9 @@
 import { query, withTransaction, type PoolClient } from "./db.js";
 import { SCHEMA_SQL, TABLES_CHILD_FIRST } from "./schema.js";
 import { MIGRATIONS_SQL } from "./migrations.js";
-import { ensureAuthSeed } from "./auth-seed.js";
 import { ADMIN_ROLES } from "./auth.js";
 import { preserveExternalMapping } from "./kleegr.js";
 import { emptyAggregate, type RawTenantAggregate } from "./agency-core.js";
-import { buildDemoData } from "../../src/lib/demo-data.js";
 import {
   SCHEMA_VERSION,
   type AppData,
@@ -86,7 +84,7 @@ export interface TenantRow {
 export async function listTenants(): Promise<TenantRow[]> {
   const { rows } = await query<TenantRow>(
     `SELECT id, name, slug, ghl_location_id, agency_id, status
-       FROM tenants ORDER BY created_at ASC, name ASC`,
+       FROM tenants WHERE status = 'active' ORDER BY created_at ASC, name ASC`,
   );
   return rows;
 }
@@ -213,7 +211,9 @@ export async function agencyAggregates(tenantIds: string[]): Promise<RawTenantAg
 // READ: rows -> AppData
 // ---------------------------------------------------------------------------
 
-export async function readState(tenantId: string): Promise<AppData> {
+export async function readState(tenantId: string, attempt = 0): Promise<AppData> {
+  const before = await query<{ data_revision: string }>('SELECT data_revision FROM tenants WHERE id = $1', [tenantId]);
+  const revision = Number(before.rows[0]?.data_revision || 0);
   const [
     spRes,
     planRes,
@@ -250,6 +250,10 @@ export async function readState(tenantId: string): Promise<AppData> {
     salaryEndDate: r.salary_end_date ?? null,
     notes: r.notes ?? "",
     source: r.source,
+    ghlUserId: r.ghl_user_id || undefined,
+    ghlRole: r.ghl_role || undefined,
+    ghlActive: r.ghl_active,
+    syncedAt: r.ghl_synced_at || undefined,
     approvalStatus: r.approval_status,
     companyName: r.company_name ?? undefined,
     website: r.website ?? undefined,
@@ -279,6 +283,8 @@ export async function readState(tenantId: string): Promise<AppData> {
     id: c.id,
     companyName: c.company_name ?? "",
     contactName: c.contact_name ?? "",
+    ghlContactId: c.ghl_contact_id || undefined,
+    syncedAt: c.ghl_synced_at || undefined,
     email: c.email ?? "",
     phone: c.phone ?? "",
     salespersonId: c.salesperson_id ?? null,
@@ -360,10 +366,15 @@ export async function readState(tenantId: string): Promise<AppData> {
     : {
         theme: "light",
         companyName: "",
-        assumptions: { avgSetupFee: 2500, avgMonthly: 250, closingsPerMonth: 5, monthlyChurnPct: 3, months: 60 },
+        assumptions: { avgSetupFee: 0, avgMonthly: 0, closingsPerMonth: 0, monthlyChurnPct: 0, months: 60 },
       };
 
-  return { salespeople, plans, clients, payments, commissions, payouts, settings, version: SCHEMA_VERSION };
+  const after = await query<{ data_revision: string }>('SELECT data_revision FROM tenants WHERE id = $1', [tenantId]);
+  if (Number(after.rows[0]?.data_revision || 0) !== revision) {
+    if (attempt < 2) return readState(tenantId, attempt + 1);
+    throw new StateConflictError();
+  }
+  return { salespeople, plans, clients, payments, commissions, payouts, settings, version: SCHEMA_VERSION, revision };
 }
 
 // ---------------------------------------------------------------------------
@@ -442,7 +453,9 @@ function ruleColumns(rule: Rule): {
   }
 }
 
-export async function writeState(tenantId: string, data: AppData): Promise<void> {
+export class StateConflictError extends Error { constructor() { super('Data changed. Reload before saving again.'); } }
+export async function writeState(tenantId: string, data: AppData, transaction = withTransaction): Promise<number> {
+  let nextRevision = 0;
   const ts = nowISO();
   const clientToSp = new Map<string, string | null>();
   for (const c of data.clients) clientToSp.set(c.id, c.salespersonId);
@@ -451,7 +464,12 @@ export async function writeState(tenantId: string, data: AppData): Promise<void>
   const entryToPayout = new Map<string, string>();
   for (const po of data.payouts) for (const eid of po.commissionEntryIds) entryToPayout.set(eid, po.id);
 
-  await withTransaction(async (c: PoolClient) => {
+  await transaction(async (c: PoolClient) => {
+    await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [tenantId]);
+    const revisionRow = await c.query('SELECT data_revision FROM tenants WHERE id = $1 FOR UPDATE', [tenantId]);
+    if (Number(revisionRow.rows[0]?.data_revision || 0) !== Number(data.revision || 0)) throw new StateConflictError();
+    const advanced = await c.query('UPDATE tenants SET data_revision = data_revision + 1 WHERE id = $1 RETURNING data_revision', [tenantId]);
+    nextRevision = Number(advanced.rows[0].data_revision);
     // 0. capture externally-owned Kleegr/GHL mapping BEFORE we clear the tenant.
     //    The AppData snapshot does not carry these columns, so without this
     //    capture+restore an admin save would wipe every Kleegr/GHL link. Rows
@@ -467,16 +485,19 @@ export async function writeState(tenantId: string, data: AppData): Promise<void>
       pipeline_id: string | null;
       stage_id: string | null;
       opportunity_status: string | null;
+      ghl_synced_at: string | null;
     }>(
       `SELECT id, kleegr_contact_id, ghl_contact_id, kleegr_source,
-              kleegr_opportunity_id, ghl_opportunity_id, pipeline_id, stage_id, opportunity_status
+              kleegr_opportunity_id, ghl_opportunity_id, pipeline_id, stage_id, opportunity_status, ghl_synced_at
          FROM clients WHERE tenant_id = $1`,
       [tenantId],
     );
-    const { rows: capturedSpMap } = await c.query<{ id: string; kleegr_user_id: string | null }>(
-      `SELECT id, kleegr_user_id FROM salespeople WHERE tenant_id = $1`,
+    const { rows: capturedSpMap } = await c.query<{ id: string; kleegr_user_id: string | null; ghl_user_id: string | null; ghl_role: string | null; ghl_synced_at: string | null; ghl_active: boolean | null; manager_user_id: string | null }>(
+      `SELECT id, kleegr_user_id, ghl_user_id, ghl_role, ghl_synced_at, ghl_active, manager_user_id FROM salespeople WHERE tenant_id = $1`,
       [tenantId],
     );
+    const { rows: capturedUserLinks } = await c.query<{ id: string; salesperson_id: string }>(
+      'SELECT id, salesperson_id FROM users WHERE tenant_id = $1 AND salesperson_id IS NOT NULL', [tenantId]);
 
     // 1. clear this tenant's data (child-first); tenants row is preserved.
     //    NOTE: payout_batches / payout_batch_entries / payout_events are
@@ -537,17 +558,17 @@ export async function writeState(tenantId: string, data: AppData): Promise<void>
       }
     }
 
-    // 5. clients
-    for (const cl of data.clients) {
-      await c.query(
-        `INSERT INTO clients
-           (id, tenant_id, salesperson_id, company_name, contact_name, email, phone, signup_date,
-            setup_fee_amount, monthly_subscription_amount, status, canceled_date, notes, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-        [cl.id, tenantId, cl.salespersonId, cl.companyName, cl.contactName, cl.email, cl.phone, cl.signupDate,
-         cl.setupFee, cl.monthlySubscription, cl.status, cl.canceledDate ?? null, cl.notes, cl.createdAt || ts, ts],
-      );
-    }
+    // 5. Save contacts in one statement; real directories can have thousands.
+    await c.query(`INSERT INTO clients
+      (id, tenant_id, salesperson_id, company_name, contact_name, email, phone, signup_date,
+       setup_fee_amount, monthly_subscription_amount, status, canceled_date, notes, created_at, updated_at)
+      SELECT r.id, $1, r."salespersonId", r."companyName", r."contactName", r.email, r.phone, r."signupDate",
+        r."setupFee", r."monthlySubscription", r.status, r."canceledDate", r.notes,
+        COALESCE(NULLIF(r."createdAt", '')::timestamptz, $3::timestamptz), $3::timestamptz
+      FROM jsonb_to_recordset($2::jsonb) AS r(id text, "salespersonId" text, "companyName" text,
+        "contactName" text, email text, phone text, "signupDate" text, "setupFee" numeric,
+        "monthlySubscription" numeric, status text, "canceledDate" text, notes text, "createdAt" text)`,
+      [tenantId, JSON.stringify(data.clients), ts]);
 
     // 6. payments (salesperson derived from the client)
     for (const pay of data.payments) {
@@ -585,27 +606,24 @@ export async function writeState(tenantId: string, data: AppData): Promise<void>
     //     but only onto rows that still exist after the replace-all. This keeps
     //     a launched/synced tenant's GHL links intact across ordinary admin saves.
     const survivingClientIds = data.clients.map((cl) => cl.id);
-    for (const m of preserveExternalMapping(capturedClientMap, survivingClientIds)) {
-      await c.query(
-        `UPDATE clients SET
-            kleegr_contact_id     = $2,
-            ghl_contact_id        = $3,
-            kleegr_source         = $4,
-            kleegr_opportunity_id = $5,
-            ghl_opportunity_id    = $6,
-            pipeline_id           = $7,
-            stage_id              = $8,
-            opportunity_status    = $9
-          WHERE id = $1 AND tenant_id = $10`,
-        [m.id, m.kleegr_contact_id, m.ghl_contact_id, m.kleegr_source, m.kleegr_opportunity_id,
-         m.ghl_opportunity_id, m.pipeline_id, m.stage_id, m.opportunity_status, tenantId],
-      );
-    }
+    await c.query(`UPDATE clients cl SET kleegr_contact_id = m.kleegr_contact_id,
+      ghl_contact_id = m.ghl_contact_id, kleegr_source = m.kleegr_source,
+      kleegr_opportunity_id = m.kleegr_opportunity_id, ghl_opportunity_id = m.ghl_opportunity_id,
+      pipeline_id = m.pipeline_id, stage_id = m.stage_id, opportunity_status = m.opportunity_status,
+      ghl_synced_at = m.ghl_synced_at
+      FROM jsonb_to_recordset($2::jsonb) AS m(id text, kleegr_contact_id text, ghl_contact_id text,
+        kleegr_source text, kleegr_opportunity_id text, ghl_opportunity_id text, pipeline_id text,
+        stage_id text, opportunity_status text, ghl_synced_at timestamptz)
+      WHERE cl.tenant_id = $1 AND cl.id = m.id`,
+      [tenantId, JSON.stringify(preserveExternalMapping(capturedClientMap, survivingClientIds))]);
     const survivingSpIds = data.salespeople.map((s) => s.id);
     for (const m of preserveExternalMapping(capturedSpMap, survivingSpIds)) {
-      if (m.kleegr_user_id == null) continue;
-      await c.query(`UPDATE salespeople SET kleegr_user_id = $2 WHERE id = $1 AND tenant_id = $3`,
-        [m.id, m.kleegr_user_id, tenantId]);
+      await c.query(`UPDATE salespeople SET kleegr_user_id = $2, ghl_user_id = $4, ghl_role = $5, ghl_synced_at = $6, ghl_active = $7, manager_user_id = $8 WHERE id = $1 AND tenant_id = $3`,
+        [m.id, m.kleegr_user_id, tenantId, m.ghl_user_id, m.ghl_role, m.ghl_synced_at, m.ghl_active, m.manager_user_id]);
+    }
+    for (const link of capturedUserLinks) {
+      if (survivingSpIds.includes(link.salesperson_id)) await c.query(
+        'UPDATE users SET salesperson_id = $2 WHERE id = $1 AND tenant_id = $3', [link.id, link.salesperson_id, tenantId]);
     }
 
     // 9. audit trail — every snapshot save is recorded (financial systems need this)
@@ -628,150 +646,13 @@ export async function writeState(tenantId: string, data: AppData): Promise<void>
       ],
     );
   });
+  return nextRevision;
 }
 
 // ---------------------------------------------------------------------------
 // Seeding
 // ---------------------------------------------------------------------------
 
-const DEMO_AGENCY_ID = "agency_demo";
-
-export const DEMO_TENANTS = [
-  { id: "tenant_demo", slug: "demo", name: "Northwind Agency — Demo", company: "Northwind Agency", ghl: "ghl_loc_demo_001" },
-  { id: "tenant_acme", slug: "acme", name: "Acme Partners", company: "Acme Partners", ghl: "ghl_loc_acme_002" },
-] as const;
-
-/**
- * Re-key every record id (and every reference to one) with a tenant-specific
- * prefix. The tables use a global TEXT primary key, so two tenants seeded from
- * the same demo dataset would otherwise collide (e.g. both inserting
- * "sp_jordan"). Prefixing keeps each tenant's ids unique while preserving all
- * internal relationships. (There are no global unique constraints on email /
- * referral_code, so only ids need remapping.)
- */
-function prefixIds(d: AppData, prefix: string): AppData {
-  const P = (id: string) => `${prefix}${id}`;
-  return {
-    ...d,
-    salespeople: d.salespeople.map((s) => ({
-      ...s,
-      id: P(s.id),
-      commissionPlanId: s.commissionPlanId ? P(s.commissionPlanId) : null,
-    })),
-    plans: d.plans.map((pl) => ({
-      ...pl,
-      id: P(pl.id),
-      rules: pl.rules.map((r): Rule => ({ ...r, id: P(r.id) })),
-    })),
-    clients: d.clients.map((c) => ({
-      ...c,
-      id: P(c.id),
-      salespersonId: c.salespersonId ? P(c.salespersonId) : null,
-    })),
-    payments: d.payments.map((pay) => ({ ...pay, id: P(pay.id), clientId: P(pay.clientId) })),
-    commissions: d.commissions.map((e) => ({
-      ...e,
-      id: P(e.id),
-      salespersonId: P(e.salespersonId),
-      clientId: e.clientId ? P(e.clientId) : null,
-      paymentId: e.paymentId ? P(e.paymentId) : null,
-      ruleId: e.ruleId ? P(e.ruleId) : null,
-    })),
-    payouts: [],
-  };
-}
-
-/** A lightly-varied, re-keyed second dataset so two tenants visibly differ. */
-function variantData(slug: string, company: string, factor: number): AppData {
-  const d = buildDemoData();
-  d.settings.companyName = company;
-  // scale subscription a touch and trim the book so tenant B != tenant A
-  d.clients = d.clients.slice(0, Math.max(3, Math.round(d.clients.length * 0.6))).map((c) => ({
-    ...c,
-    monthlySubscription: Math.round(c.monthlySubscription * factor),
-  }));
-  const keep = new Set(d.clients.map((c) => c.id));
-  d.payments = d.payments.filter((p) => keep.has(p.clientId));
-  // keep only commissions whose client still exists (or salary rows, no client)
-  d.commissions = d.commissions.filter((e) => !e.clientId || keep.has(e.clientId));
-  d.payouts = [];
-  // re-key so this tenant's ids never collide with another tenant's
-  return prefixIds(d, `${slug}_`);
-}
-
-type DemoTenant = (typeof DEMO_TENANTS)[number];
-
-/** Idempotently ensure the owning agency row exists. */
-async function ensureAgency(): Promise<void> {
-  await query(
-    `INSERT INTO agency_accounts (id, name, status, created_at, updated_at)
-     VALUES ($1,$2,'active', now(), now()) ON CONFLICT (id) DO NOTHING`,
-    [DEMO_AGENCY_ID, "Demo Agency (App Owner)"],
-  );
-}
-
-/** True when a tenant already has business data (used to detect partial seeds). */
-async function tenantHasData(tenantId: string): Promise<boolean> {
-  const { rows } = await query<{ n: string }>(
-    `SELECT count(*)::text AS n FROM salespeople WHERE tenant_id = $1`,
-    [tenantId],
-  );
-  return Number(rows[0]?.n ?? 0) > 0;
-}
-
-/** Create/refresh one demo tenant: its row, an owner user, and its dataset. */
-async function seedTenant(index: number, t: DemoTenant): Promise<void> {
-  await query(
-    `INSERT INTO tenants (id, name, slug, ghl_location_id, agency_id, status, created_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,'active', now(), now())
-     ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, slug = EXCLUDED.slug`,
-    [t.id, t.name, t.slug, t.ghl, DEMO_AGENCY_ID],
-  );
-  await query(
-    `INSERT INTO users (id, tenant_id, name, email, role, status, created_at, updated_at)
-     VALUES ($1,$2,$3,$4,'owner','active', now(), now())
-     ON CONFLICT (tenant_id, email) DO NOTHING`,
-    [`user_owner_${t.slug}`, t.id, `${t.company} Owner`, `owner@${t.slug}.example.com`],
-  );
-  const data = index === 0 ? withCompany(buildDemoData(), t.company) : variantData(t.slug, t.company, 0.9);
-  await writeState(t.id, data);
-}
-
-/**
- * Ensure every demo tenant exists AND has data. Self-healing and idempotent:
- * a tenant is (re)seeded only if it is missing or empty, so an interrupted
- * cold-start seed is repaired on a later request without touching tenants that
- * are already populated (and each call stays small enough to finish quickly).
- */
-export async function seedIfEmpty(): Promise<{ seeded: boolean; tenants: string[] }> {
-  await ensureAgency();
-  const existing = await listTenants();
-  const bySlug = new Map(existing.map((t) => [t.slug, t]));
-
-  let seeded = false;
-  for (let i = 0; i < DEMO_TENANTS.length; i++) {
-    const t = DEMO_TENANTS[i];
-    const row = bySlug.get(t.slug);
-    const needsSeed = !row || !(await tenantHasData(row.id));
-    if (needsSeed) {
-      await seedTenant(i, t);
-      seeded = true;
-    }
-  }
-  await ensureAuthSeed();
-  return { seeded, tenants: DEMO_TENANTS.map((t) => t.slug) };
-}
-
-/** Force a full (re)seed of the agency + both demo tenants and their datasets. */
-export async function seedAll(): Promise<void> {
-  await ensureAgency();
-  for (let i = 0; i < DEMO_TENANTS.length; i++) {
-    await seedTenant(i, DEMO_TENANTS[i]);
-  }
-  await ensureAuthSeed();
-}
-
-function withCompany(d: AppData, company: string): AppData {
-  d.settings.companyName = company;
-  return d;
-}
+// Compatibility for older callers. Live workspaces are provisioned by verified launches only.
+export async function seedIfEmpty(): Promise<{ seeded: boolean; tenants: string[] }> { return { seeded: false, tenants: [] }; }
+export async function seedAll(): Promise<void> { throw new Error("demo_data_removed"); }

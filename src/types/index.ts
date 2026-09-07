@@ -12,6 +12,10 @@ export type PersonStatus = "active" | "inactive";
 export type ApprovalStatus = "pending" | "approved" | "rejected";
 
 export interface Salesperson {
+  ghlUserId?: string;
+  ghlRole?: string;
+  ghlActive?: boolean;
+  syncedAt?: string;
   id: string;
   name: string;
   email: string;
@@ -138,6 +142,8 @@ export interface CommissionPlan {
 export type ClientStatus = "active" | "canceled" | "refunded" | "paused";
 
 export interface Client {
+  ghlContactId?: string;
+  syncedAt?: string;
   id: string;
   companyName: string;
   contactName: string;
@@ -268,6 +274,7 @@ export interface AppSettings {
 }
 
 export interface AppData {
+  revision?: number;
   salespeople: Salesperson[];
   plans: CommissionPlan[];
   clients: Client[];

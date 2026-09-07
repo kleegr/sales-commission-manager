@@ -10,7 +10,7 @@
 // actions go through dedicated per-resource endpoints (e.g. /api/payouts).
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { hasDb } from "./_lib/db.js";
-import { ensureSchema, readScopedState, writeState, seedIfEmpty } from "./_lib/repository.js";
+import { ensureSchema, readScopedState, writeState, StateConflictError, seedIfEmpty } from "./_lib/repository.js";
 import { getSessionUser, isAdminRole } from "./_lib/auth.js";
 import { csrfOk } from "./_lib/http.js";
 
@@ -53,13 +53,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!data || !Array.isArray(data.salespeople)) {
         return res.status(400).json({ error: "invalid_payload" });
       }
-      await writeState(user.tenantId, data);
-      return res.status(200).json({ ok: true, tenant: user.tenantSlug });
+      const revision = await writeState(user.tenantId, data);
+      return res.status(200).json({ ok: true, tenant: user.tenantSlug, revision });
     }
 
     res.setHeader("Allow", "GET, PUT");
     return res.status(405).json({ error: "method_not_allowed" });
   } catch (err) {
+    if (err instanceof StateConflictError) return res.status(409).json({ error: "state_conflict", message: err.message });
     console.error("[scm:error] state:", err instanceof Error ? (err.stack ?? err.message) : String(err));
     return res.status(500).json({ error: "internal_error" });
   }

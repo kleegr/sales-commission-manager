@@ -43,102 +43,13 @@ const COOKIE_NAME = "scm_session";
 const SESSION_TTL_DAYS = 7;
 
 // ---------------------------------------------------------------------------
-// DEMO / REVIEW MODE  (feature-flagged, no-password bypass)
-//
-// When enabled, the app can be reviewed without logging in: the client picks a
-// tenant + role from the top "Review Mode" bar, and the server resolves the
-// matching SEEDED demo user for that (tenant, role) and treats it as the
-// session. This NEVER weakens real auth:
-//   - real password sessions still work and always take precedence;
-//   - the bypass only ever returns one of the demo users created by the seed
-//     (it cannot mint an arbitrary identity);
-//   - it is a review convenience only — it is OFF unless explicitly turned on.
-//
-// Default is OFF (production-safe). Demo/review mode is EXPLICIT OPT-IN ONLY:
-// set DEMO_MODE to one of 1/true/on/enabled/yes to turn it on for a review
-// deployment. Any other value — including unset/empty — keeps it OFF, so the
-// login wall stays up and the seeded demo tenants/users cannot be assumed
-// without a password. Turning it on is intended for pre-GoHighLevel review
-// environments that hold NO real customer data.
-// ---------------------------------------------------------------------------
+// Legacy compatibility exports. Demo authentication is permanently disabled.
 
-const DEMO_COOKIE_TENANT = "scm_demo_tenant";
-const DEMO_COOKIE_ROLE = "scm_demo_role";
-
-// The ONLY tenant slugs the no-password demo bypass may ever resolve. A client
-// header/cookie can pick AMONG these, but can never name a real (e.g. Kleegr)
-// tenant slug, so demo mode can never be used to impersonate a real customer's
-// workspace. Keep in sync with DEMO_TENANTS in repository.ts.
 export const DEMO_TENANT_SLUGS = ["demo", "acme"] as const;
-export function isDemoSlug(slug: string): boolean {
-  return (DEMO_TENANT_SLUGS as readonly string[]).includes(slug);
-}
-
-const DEMO_AFFIRMATIVE = ["1", "true", "on", "enabled", "yes"];
-
-/** True only in a Vercel *production* deployment (VERCEL_ENV=production). */
-export function isProductionEnv(): boolean {
-  return (process.env.VERCEL_ENV ?? "").trim().toLowerCase() === "production";
-}
-
-export function demoModeEnabled(): boolean {
-  const v = (process.env.DEMO_MODE ?? "").trim().toLowerCase();
-  // Explicit opt-in ONLY. Unset/empty (and any non-affirmative value) ⇒ OFF,
-  // which is the production-safe default. Demo mode must be deliberately turned
-  // on for a review deployment; it can never be on by accident.
-  if (!DEMO_AFFIRMATIVE.includes(v)) return false;
-
-  // Fail-safe HOST GUARD: the no-password demo bypass must be IMPOSSIBLE in a
-  // production deployment — even if DEMO_MODE is affirmatively set (e.g. a stray
-  // value left in the prod env) — UNLESS a second, explicit flag opts in for a
-  // deliberately public demo on a production URL. Making "demo in production" a
-  // two-key action means it can never be turned on by a single misconfigured env.
-  if (isProductionEnv()) {
-    const allow = (process.env.DEMO_MODE_ALLOW_IN_PRODUCTION ?? "").trim().toLowerCase();
-    if (!DEMO_AFFIRMATIVE.includes(allow)) return false;
-  }
-  return true;
-}
-
-/** Resolve a seeded demo user for the tenant+role chosen in the review bar. */
-export async function getDemoUser(req: VercelRequest): Promise<SessionUser | null> {
-  if (!demoModeEnabled()) return null;
-
-  const headerTenant = (req.headers["x-demo-tenant"] as string | undefined)?.trim();
-  const headerRole = (req.headers["x-demo-role"] as string | undefined)?.trim();
-  let tenantSlug = headerTenant || readCookie(req, DEMO_COOKIE_TENANT) || "demo";
-  // Never resolve a non-demo (real) tenant slug from a client header/cookie.
-  if (!isDemoSlug(tenantSlug)) tenantSlug = "demo";
-  let role = (headerRole || readCookie(req, DEMO_COOKIE_ROLE) || "owner") as Role;
-  if (!ROLES.includes(role)) role = "owner";
-
-  const pick = async (slug: string, r: Role | null) => {
-    const { rows } = await query<any>(
-      `SELECT u.id, u.tenant_id, u.name, u.email, u.role, u.salesperson_id,
-              t.slug AS tenant_slug, t.name AS tenant_name
-         FROM users u JOIN tenants t ON t.id = u.tenant_id
-        WHERE t.slug = $1 ${r ? "AND u.role = $2" : ""}
-        ORDER BY u.created_at ASC LIMIT 1`,
-      r ? [slug, r] : [slug],
-    );
-    return rows[0] ?? null;
-  };
-
-  // Preferred (tenant, role); then any user of that tenant; then the demo tenant.
-  const row = (await pick(tenantSlug, role)) ?? (await pick(tenantSlug, null)) ?? (await pick("demo", null));
-  if (!row) return null;
-
-  return {
-    id: row.id,
-    tenantId: row.tenant_id,
-    tenantSlug: row.tenant_slug,
-    tenantName: row.tenant_name,
-    name: row.name,
-    email: row.email,
-    role: row.role as Role,
-    salespersonId: row.salesperson_id ?? null,
-  };
-}
+export function isDemoSlug(slug: string): boolean { return (DEMO_TENANT_SLUGS as readonly string[]).includes(slug); }
+export function isProductionEnv(): boolean { return process.env.VERCEL_ENV === 'production'; }
+export function demoModeEnabled(): boolean { return false; }
+export async function getDemoUser(_req: VercelRequest): Promise<SessionUser | null> { return null; }
 
 // ---------------------------------------------------------------------------
 // Password hashing
@@ -323,7 +234,7 @@ export async function getSessionUserForToken(token: string): Promise<SessionUser
        FROM sessions s
        JOIN users u   ON u.id = s.user_id
        JOIN tenants t ON t.id = s.tenant_id
-      WHERE s.id = $1`,
+      WHERE s.id = $1 AND u.tenant_id = s.tenant_id AND u.status = 'active' AND t.status = 'active'`,
     [sha256(token)],
   );
   const row = rows[0];

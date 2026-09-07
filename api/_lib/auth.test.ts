@@ -58,13 +58,13 @@ setEnv({ DEMO_MODE: "off" });
 ok("demo OFF for a non-affirmative value", demoModeEnabled() === false);
 
 setEnv({ DEMO_MODE: "true", VERCEL_ENV: "preview" });
-ok("demo ON when affirmative and NOT production", demoModeEnabled() === true);
+ok("demo remains OFF for preview flags", demoModeEnabled() === false);
 
 setEnv({ DEMO_MODE: "on", VERCEL_ENV: "production" });
 ok("demo FORCED OFF in production even when DEMO_MODE=on", demoModeEnabled() === false);
 
 setEnv({ DEMO_MODE: "on", VERCEL_ENV: "production", DEMO_MODE_ALLOW_IN_PRODUCTION: "1" });
-ok("demo allowed in production ONLY with the explicit second flag", demoModeEnabled() === true);
+ok("demo remains OFF even with legacy production flags", demoModeEnabled() === false);
 
 setEnv(savedEnv); // restore the ambient environment for any later code
 

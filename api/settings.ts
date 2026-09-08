@@ -19,7 +19,7 @@ function toAppSettings(row: any) {
     return {
       theme: "light",
       companyName: "",
-      assumptions: { avgSetupFee: 2500, avgMonthly: 250, closingsPerMonth: 5, monthlyChurnPct: 3, months: 60 },
+      assumptions: { avgSetupFee: 0, avgMonthly: 0, closingsPerMonth: 0, monthlyChurnPct: 0, months: 60 },
     };
   }
   return {

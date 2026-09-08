@@ -10,7 +10,7 @@ interface SyncStatus {
   team?: { count: number; error?: string }; clients?: { count: number; error?: string };
 }
 
-export function DirectorySync({ resource }: { resource: 'team' | 'clients' }) {
+export function DirectorySync({ resource,onSynced }: { resource: 'team' | 'clients';onSynced?:()=>void }) {
   const { reload, tenant } = useApp();
   const { user } = useAuth();
   const [status, setStatus] = useState<SyncStatus | null>(null);
@@ -24,10 +24,11 @@ export function DirectorySync({ resource }: { resource: 'team' | 'clients' }) {
       const body = await res.json();
       setStatus(body);
       await reload();
+      onSynced?.();
       if (!res.ok) setError(body.message || 'The connection could not be refreshed.');
     } catch { setError('The connection could not be reached. Please retry.'); }
     finally { setBusy(false); }
-  }, [reload]);
+  }, [reload,onSynced]);
 
   useEffect(() => {
     if (!allowed) return;

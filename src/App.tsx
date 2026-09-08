@@ -1,3 +1,4 @@
+import {TrackerProvider,TrackerGate} from './components/TrackerGate';
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Layout } from "./components/layout/Layout";
 import { useAuth } from "./store/AuthContext";
@@ -64,30 +65,36 @@ export default function App() {
   const role = (user?.role ?? "salesperson") as Role;
 
   return (
-    <Layout>
+    <TrackerProvider><Layout>
       <Routes>
-        <Route path="/" element={<Guard><Dashboard /></Guard>} />
-        <Route path="/agency" element={<Guard><Agency /></Guard>} />
-        <Route path="/people" element={<Guard><People /></Guard>} />
-        <Route path="/people/:id" element={<Guard><SalespersonDetail /></Guard>} />
-        <Route path="/plans" element={<Guard><Plans /></Guard>} />
-        <Route path="/plans/new" element={<Guard><PlanBuilder /></Guard>} />
-        <Route path="/plans/:id/edit" element={<Guard><PlanBuilder /></Guard>} />
-        <Route path="/plans/:id/projection" element={<Guard><PlanProjection /></Guard>} />
-        <Route path="/clients" element={<Guard><Clients /></Guard>} />
-        <Route path="/clients/:id" element={<Guard><ClientDetail /></Guard>} />
-        <Route path="/payments" element={<Guard><Payments /></Guard>} />
-        <Route path="/ledger" element={<Guard><Ledger /></Guard>} />
-        <Route path="/payouts" element={<Guard><Payouts /></Guard>} />
-        <Route path="/reports" element={<Guard><Reports /></Guard>} />
-        <Route path="/goals" element={<Guard><Goals /></Guard>} />
+        <Route path="/" element={<Guard><TrackerGate resource="dashboard"><Dashboard /></TrackerGate></Guard>} />
+        <Route path="/agency" element={<Guard><TrackerGate resource="agency"><Agency /></TrackerGate></Guard>} />
+        <Route path="/people" element={<Guard><TrackerGate resource="people"><People /></TrackerGate></Guard>} />
+        <Route path="/people/:id" element={<Guard><TrackerGate resource="people"><SalespersonDetail /></TrackerGate></Guard>} />
+        <Route path="/plans" element={<Guard><TrackerGate resource="plans"><Plans /></TrackerGate></Guard>} />
+        <Route path="/plans/new" element={<Guard><TrackerGate resource="plans"><PlanBuilder /></TrackerGate></Guard>} />
+        <Route path="/plans/:id/edit" element={<Guard><TrackerGate resource="plans"><PlanBuilder /></TrackerGate></Guard>} />
+        <Route path="/plans/:id/projection" element={<Guard><TrackerGate resource="plans"><PlanProjection /></TrackerGate></Guard>} />
+        <Route path="/clients" element={<Guard><TrackerGate resource="leads"><Clients /></TrackerGate></Guard>} />
+        <Route path="/clients/:id" element={<Guard><TrackerGate resource="leads"><ClientDetail /></TrackerGate></Guard>} />
+        <Route path="/payments" element={<Guard><TrackerGate resource="payments"><Payments /></TrackerGate></Guard>} />
+        <Route path="/ledger" element={<Guard><TrackerGate resource="ledger"><Ledger /></TrackerGate></Guard>} />
+        <Route path="/payouts" element={<Guard><TrackerGate resource="payouts"><Payouts /></TrackerGate></Guard>} />
+        <Route path="/reports" element={<Guard><TrackerGate resource="reports"><Reports /></TrackerGate></Guard>} />
+        <Route path="/goals" element={<Guard><TrackerGate resource="goals"><Goals /></TrackerGate></Guard>} />
         <Route path="/documents" element={<Guard><Documents /></Guard>} />
-        <Route path="/portal" element={<Guard><Portal /></Guard>} />
-        <Route path="/present" element={<Guard><Presentation /></Guard>} />
+        <Route path="/portal" element={<Guard><TrackerGate resource="portal"><Portal /></TrackerGate></Guard>} />
+        <Route path="/present" element={<Guard><TrackerGate resource="plans"><Presentation /></TrackerGate></Guard>} />
         <Route path="/settings" element={<Guard><Settings /></Guard>} />
         <Route path="/settings/integrations/kleegr" element={<Guard><KleegrIntegration /></Guard>} />
+        <Route path="/workspace-overview" element={<Guard><TrackerGate resource="dashboard"><Dashboard /></TrackerGate></Guard>} />
+        <Route path="/campaigns" element={<Guard><TrackerGate resource="campaigns" /></Guard>} />
+<Route path="/opportunities" element={<Guard><TrackerGate resource="opportunities" /></Guard>} />
+<Route path="/media" element={<Guard><TrackerGate resource="media" /></Guard>} />
+<Route path="/tracker-settings" element={<Guard><TrackerGate resource="settings" /></Guard>} />
+<Route path="/sync-review" element={<Guard><TrackerGate resource="integrations" /></Guard>} />
         <Route path="*" element={<Navigate to={homePath(role)} replace />} />
       </Routes>
-    </Layout>
+    </Layout></TrackerProvider>
   );
 }

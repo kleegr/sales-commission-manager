@@ -14,6 +14,7 @@ import {
   RefreshCw,
   ToggleRight,
 } from "lucide-react";
+import {useTracker} from '../components/TrackerGate';
 import { useApp } from "../store/AppContext";
 import type { AppData, ProjectionAssumptions } from "../types";
 import {
@@ -32,65 +33,19 @@ import { useFeatures } from "../store/FeaturesContext";
 import { FEATURES, FEATURE_KEYS, type FeatureFlags } from "../lib/features";
 
 export default function Settings() {
-  const { data, dispatch, storeName, backend } = useApp();
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null);
-
-  const a = data.settings.assumptions;
-  const setAssumptions = (patch: Partial<ProjectionAssumptions>) =>
-    dispatch({ type: "SET_ASSUMPTIONS", assumptions: { ...a, ...patch } });
-
-  // Mirror settings to the real per-resource endpoint (PUT /api/settings) on a
-  // short debounce whenever they change on the Neon backend. The reducer keeps
-  // the UI instant (sidebar, theme); this writes the authoritative row through
-  // the new API. The legacy snapshot still persists settings too and acts as a
-  // fallback if the API call fails — it will be retired once every resource is
-  // on its own endpoint.
-  const settings = data.settings;
-  const firstSettingsRun = useRef(true);
-  useEffect(() => {
-    if (backend !== "neon") return; // local-only mode: the snapshot handles it
-    if (firstSettingsRun.current) {
-      firstSettingsRun.current = false;
-      return; // don't write on initial hydrate
-    }
-    const t = setTimeout(() => {
-      void saveSettings({
-        companyName: settings.companyName,
-        theme: settings.theme,
-        assumptions: settings.assumptions,
-      }).catch(() => {
-        /* snapshot already persisted as fallback */
-      });
-    }, 600);
-    return () => clearTimeout(t);
-  }, [settings, backend]);
+  const {data:storedData,reload,storeName} = useApp();
+  const {installed}=useTracker();
+  const [settings,setSettings]=useState(storedData.settings);
+  const [saving,setSaving]=useState(false);
+  const [importMsg,setImportMsg]=useState<{ok:boolean;text:string}|null>(null);
+  useEffect(()=>setSettings(storedData.settings),[storedData.settings]);
+  const data={...storedData,settings};
+  const a=settings.assumptions;
+  const setAssumptions=(patch:Partial<ProjectionAssumptions>)=>setSettings(old=>({...old,assumptions:{...old.assumptions,...patch}}));
+  async function save(){setSaving(true);setImportMsg(null);try{await saveSettings(settings);await reload();setImportMsg({ok:true,text:'Settings saved.'});}catch(e){setImportMsg({ok:false,text:e instanceof Error?e.message:'Settings could not be saved. Your changes have not been applied.'});}finally{setSaving(false);}}
 
   function exportJSON() {
     downloadJSON("commission-data.json", data);
-  }
-
-  function onImportFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const parsed = JSON.parse(String(reader.result)) as AppData;
-        if (!parsed || !Array.isArray(parsed.salespeople) || !Array.isArray(parsed.plans)) {
-          throw new Error("missing expected fields");
-        }
-        dispatch({ type: "IMPORT", data: parsed });
-        setImportMsg({ ok: true, text: "Data imported and commissions recalculated." });
-      } catch (err) {
-        setImportMsg({
-          ok: false,
-          text: "Couldn't import that file — it doesn't look like a valid export.",
-        });
-      }
-    };
-    reader.readAsText(file);
-    e.target.value = "";
   }
 
   return (
@@ -100,6 +55,7 @@ export default function Settings() {
       <div className="space-y-6">
         {/* Data source & tenant (multi-tenant / GoHighLevel sub-account) */}
         <WorkspacePanel />
+        <Button disabled={saving} onClick={()=>void save()}>{saving?"Saving…":"Save settings"}</Button>
 
         {/* Feature access (agency/owner control over this sub-account) */}
         <FeatureAccessPanel />
@@ -110,7 +66,7 @@ export default function Settings() {
           <Field label="Company name" hint="Shown in the sidebar and on the recruiting view.">
             <Input
               value={data.settings.companyName}
-              onChange={(e) => dispatch({ type: "SET_COMPANY", name: e.target.value })}
+              onChange={(e) => setSettings(old=>({...old,companyName:e.target.value}))}
               placeholder="Your company"
             />
           </Field>
@@ -118,13 +74,13 @@ export default function Settings() {
             <div className="flex gap-2">
               <Button
                 variant={data.settings.theme === "light" ? "primary" : "secondary"}
-                onClick={() => dispatch({ type: "SET_THEME", theme: "light" })}
+                onClick={() => setSettings(old=>({...old,theme:"light"}))}
               >
                 <Sun className="h-4 w-4" /> Light
               </Button>
               <Button
                 variant={data.settings.theme === "dark" ? "primary" : "secondary"}
-                onClick={() => dispatch({ type: "SET_THEME", theme: "dark" })}
+                onClick={() => setSettings(old=>({...old,theme:"dark"}))}
               >
                 <Moon className="h-4 w-4" /> Dark
               </Button>
@@ -190,8 +146,7 @@ export default function Settings() {
         <Card className="space-y-4">
           <SectionTitle right={<Database className="h-4 w-4 text-slate-400" />}>Data</SectionTitle>
           <p className="text-sm text-slate-500">
-            Active store: <span className="font-medium">{storeName}</span>. Export to
-            back up the current tenant's data or move it between environments.
+            Active store: <span className="font-medium">{storeName}</span>. Settings changes save directly to this workspace.
           </p>
 
           {importMsg && (
@@ -208,19 +163,8 @@ export default function Settings() {
           )}
 
           <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={exportJSON}>
-              <Download className="h-4 w-4" /> Export JSON
-            </Button>
-            <Button variant="secondary" onClick={() => fileRef.current?.click()}>
-              <Upload className="h-4 w-4" /> Import JSON
-            </Button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="application/json,.json"
-              className="hidden"
-              onChange={onImportFile}
-            />
+            {!installed&&<Button variant="secondary" onClick={exportJSON}><Download className="h-4 w-4"/>Export historical JSON</Button>}
+            <p className="text-sm text-slate-500">Export current records as CSV from their respective pages. Full restoration requires a reviewed database backup; importing a snapshot cannot overwrite financial history.</p>
           </div>
 
           <div className="grid grid-cols-2 gap-3 border-t border-slate-100 pt-4 text-sm dark:border-slate-800 sm:grid-cols-4">

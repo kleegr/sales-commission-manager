@@ -1,0 +1,5 @@
+export async function trackerGet(resource:string,params:Record<string,string>={},signal?:AbortSignal){
+  const r=await fetch(`/api/tracker?${new URLSearchParams({resource,...params})}`,{signal});const b=await r.json();if(!r.ok)throw new Error(b.message||b.error||'Data could not be loaded.');return b;
+}
+export async function trackerPost(action:string,data:unknown){const r=await fetch('/api/tracker',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,data})});const b=await r.json();if(!r.ok)throw new Error(b.message||b.error||'The change could not be saved.');return b;}
+export async function trackerCSV(resource:string,params:Record<string,string>={}){const r=await fetch(`/api/tracker?${new URLSearchParams({resource,...params,export:'csv'})}`);if(!r.ok){const b=await r.json();throw new Error(b.message||'Export failed.');}const url=URL.createObjectURL(await r.blob());const a=document.createElement('a');a.href=url;a.download=`${resource}.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}

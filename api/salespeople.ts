@@ -1,3 +1,4 @@
+import { trackerInstalled } from './_lib/tracker-common.js';
 // /api/salespeople
 //   GET            -> salespeople/affiliates/partners visible to the user (role-scoped)
 //   POST           -> create one person            (owner/admin)
@@ -31,6 +32,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await seedIfEmpty();
     const user = await getSessionUser(req);
     if (!user) return res.status(401).json({ error: "unauthorized" });
+    if (req.method !== "GET" && await trackerInstalled()) return res.status(409).json({error:"use_tracker_workflow",message:"Use the current Sales Tracker workflow. Historical snapshot and recalculation writes are disabled after migration."});
 
     const tenantId = user.tenantId;
 

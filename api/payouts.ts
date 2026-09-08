@@ -1,3 +1,4 @@
+import { trackerInstalled } from './_lib/tracker-common.js';
 // /api/payouts
 //   GET                       -> payouts visible to the current user (role-scoped) + history
 //   POST { action: "submit",  salespersonId, commissionEntryIds, notes }
@@ -26,6 +27,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await seedIfEmpty();
     const user = await getSessionUser(req);
     if (!user) return res.status(401).json({ error: "unauthorized" });
+    if (req.method !== "GET" && await trackerInstalled()) return res.status(409).json({error:"use_tracker_workflow",message:"Use the current Sales Tracker workflow. Historical snapshot and recalculation writes are disabled after migration."});
 
     const actor = { userId: user.id, role: user.role };
 

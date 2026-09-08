@@ -34,6 +34,8 @@ const SECTIONS: { heading: string; items: NavItem[] }[] = [
     items: [
       { to: "/people", label: "Team", icon: <Users className="h-4 w-4" /> },
       { to: "/plans", label: "Commission Plans", icon: <ScrollText className="h-4 w-4" /> },
+      { to: "/opportunities", label: "Opportunities", icon: <Target className="h-4 w-4" /> },
+      { to: "/campaigns", label: "Campaigns", icon: <Network className="h-4 w-4" /> },
       { to: "/clients", label: "Clients", icon: <Building2 className="h-4 w-4" /> },
       { to: "/payments", label: "Payments", icon: <CreditCard className="h-4 w-4" /> },
     ],
@@ -56,6 +58,7 @@ const SECTIONS: { heading: string; items: NavItem[] }[] = [
   {
     heading: "Resources",
     items: [
+      { to: "/media", label: "Media library", icon: <FileSignature className="h-4 w-4" /> },
       { to: "/portal", label: "My Portal", icon: <UserRound className="h-4 w-4" /> },
       { to: "/present", label: "Recruiting View", icon: <Presentation className="h-4 w-4" /> },
     ],
@@ -63,6 +66,8 @@ const SECTIONS: { heading: string; items: NavItem[] }[] = [
   {
     heading: "Settings",
     items: [
+      { to: "/tracker-settings", label: "Workspace rules", icon: <SettingsIcon className="h-4 w-4" /> },
+      { to: "/sync-review", label: "Sync & review", icon: <Plug className="h-4 w-4" /> },
       { to: "/settings", label: "Settings & Data", icon: <SettingsIcon className="h-4 w-4" /> },
       { to: "/settings/integrations/kleegr", label: "Kleegr Integration", icon: <Plug className="h-4 w-4" /> },
     ],

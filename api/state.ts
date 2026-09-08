@@ -1,3 +1,4 @@
+import { trackerInstalled } from './_lib/tracker-common.js';
 // /api/state
 //   GET -> the CURRENT USER's AppData, scoped to their tenant AND role.
 //   PUT -> persist a full AppData snapshot (owner/admin only) for their tenant.
@@ -23,6 +24,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const user = await getSessionUser(req);
     if (!user) return res.status(401).json({ error: "unauthorized" });
+    if (req.method !== "GET" && await trackerInstalled()) return res.status(409).json({error:"use_tracker_workflow",message:"Use the current Sales Tracker workflow. Historical snapshot and recalculation writes are disabled after migration."});
 
     // If a tenant is named in the query, it must match the session tenant.
     const requested = req.query.tenant ? String(req.query.tenant).trim() : null;

@@ -40,7 +40,15 @@ export const connectionEnvVar = envVar;
 
 /** True when a Neon/Postgres connection string is configured. */
 export function hasDb(): boolean {
-  return !!url;
+  return !!url || testDriver !== null;
+}
+
+interface TestDriver { query:(sql:string,params:unknown[])=>Promise<any>; transaction:<T>(fn:(client:any)=>Promise<T>)=>Promise<T> }
+let testDriver:TestDriver|null=null;
+/** Only the isolated test harness may install an embedded DB; never enabled by an HTTP request. */
+export function installTestDatabase(driver:TestDriver){
+  if(process.env.NODE_ENV!=='test'||process.env.VERCEL||url)throw new Error('Test database injection requires NODE_ENV=test, no Vercel environment and no database credentials.');
+  testDriver=driver;
 }
 
 let pool: Pool | null = null;
@@ -63,6 +71,7 @@ export async function query<T = any>(
   text: string,
   params: unknown[] = [],
 ): Promise<{ rows: T[]; rowCount: number }> {
+  if(testDriver)return testDriver.query(text,params);
   const res = await getPool().query(text, params as any[]);
   return { rows: res.rows as T[], rowCount: res.rowCount ?? 0 };
 }
@@ -71,6 +80,7 @@ export async function query<T = any>(
 export async function withTransaction<T>(
   fn: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
+  if(testDriver)return testDriver.transaction(fn);
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");

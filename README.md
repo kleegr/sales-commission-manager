@@ -1,3 +1,7 @@
+# Sales Tracker continuation
+
+The preserved live baseline now has a reviewed local extension for explicit enrollment, attribution, native referrals, immutable exact commission plans, receipts/refunds, payout reconciliation and scoped reports. It requires the explicit additive `0012_sales_tracker` migration; it does not migrate or import financial events on deployment startup. See [implementation status and limits](docs/IMPLEMENTATION_PROGRESS.md) and [activation/recovery instructions](docs/SALES_TRACKER_OPERATIONS.md). Run `npm test` for both baseline and tracker tests. Do not point Preview at the production database for testing.
+
 # Live GoHighLevel data
 
 Team now syncs the connected sub-account’s GHL users and Clients syncs its GHL contacts. Smart Productivity refreshes OAuth tokens; Commission Manager keeps the service key and tokens server-side. See [live directory setup](docs/LIVE_DIRECTORY.md). Demo seeding, demo login bypass, and browser data fallback have been removed. Older prototype/review instructions below are historical and no longer enable demo data.

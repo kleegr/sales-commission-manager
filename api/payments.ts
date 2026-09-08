@@ -1,3 +1,4 @@
+import { trackerInstalled } from './_lib/tracker-common.js';
 // /api/payments
 //   GET            -> payments visible to the user (role-scoped via the client)
 //   POST           -> add a payment + recompute its client's ledger
@@ -70,6 +71,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await seedIfEmpty();
     const user = await getSessionUser(req);
     if (!user) return res.status(401).json({ error: "unauthorized" });
+    if (req.method !== "GET" && await trackerInstalled()) return res.status(409).json({error:"use_tracker_workflow",message:"Use the current Sales Tracker workflow. Historical snapshot and recalculation writes are disabled after migration."});
     const tenantId = user.tenantId;
 
     // ---- GET: role-scoped list ------------------------------------------

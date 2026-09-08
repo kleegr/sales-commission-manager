@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App";
+import ReferralJoin from './pages/ReferralJoin';
 import Login from "./pages/Login";
 import { AppProvider } from "./store/AppContext";
 import { AuthProvider, useAuth } from "./store/AuthContext";
@@ -20,6 +21,8 @@ installApiAuthInterceptor();
 /** Decides between the login screen and the authenticated app shell. */
 function Root() {
   const { user, loading } = useAuth();
+
+  if (window.location.pathname === '/join') return <ReferralJoin />;
 
   if (loading) {
     return (

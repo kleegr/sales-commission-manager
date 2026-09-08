@@ -69,13 +69,13 @@ ok("documents visible to every role", ALL_ROLES.every((r) => canAccess(r, "/docu
 ok("settings is owner/admin only", canAccess("owner", "/settings") && canAccess("admin", "/settings"));
 ok("settings hidden from manager", !canAccess("sales_manager", "/settings"));
 ok("settings hidden from salesperson", !canAccess("salesperson", "/settings"));
-ok("people is owner/admin only", canAccess("owner", "/people") && !canAccess("sales_manager", "/people"));
+ok("owners and managers can read their scoped team", canAccess("owner", "/people") && canAccess("sales_manager", "/people"));
 
 console.log("\n[Roles \u00b7 canAccess: detail routes inherit their parent]");
 ok("/plans/new inherits /plans (owner allowed)", canAccess("owner", "/plans/new"));
 ok("/plans/:id/edit inherits /plans (salesperson denied)", !canAccess("salesperson", "/plans/abc/edit"));
 ok("/clients/:id inherits /clients (manager allowed)", canAccess("sales_manager", "/clients/c_1"));
-ok("/people/:id inherits /people (manager denied)", !canAccess("sales_manager", "/people/sp_1"));
+ok("/people/:id inherits scoped manager team access", canAccess("sales_manager", "/people/sp_1"));
 ok("unknown route denied by default", !canAccess("owner", "/totally-unknown"));
 
 console.log("\n[Roles \u00b7 labels]");

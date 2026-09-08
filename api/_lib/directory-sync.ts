@@ -1,4 +1,5 @@
-import { createHash } from 'node:crypto';
+import { createHash,randomUUID } from 'node:crypto';
+import { trackerInstalled } from './tracker-common.js';
 import { query, withTransaction } from './db.js';
 import { DirectoryError, directoryConfigured, resolveDirectoryTokens, fetchDirectoryUsers, fetchDirectoryContacts, type DirectoryPerson, type DirectoryContact } from './ghl-directory.js';
 
@@ -21,6 +22,16 @@ export async function getDirectoryStatus(tenantId: string): Promise<DirectorySta
 export async function persistTeam(tenantId: string, people: DirectoryPerson[], transaction = withTransaction): Promise<void> {
   await transaction(async c => {
     await c.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [tenantId]);
+    if (await trackerInstalled(c)) {
+      await c.query(`INSERT INTO external_users(tenant_id,external_id,name,email,phone,provider_role,active,synced_at)
+        SELECT $1,r.id,r.name,r.email,r.phone,r.role,true,now() FROM jsonb_to_recordset($2::jsonb) AS r(id text,name text,email text,phone text,role text)
+        ON CONFLICT(tenant_id,provider,external_id) DO UPDATE SET name=EXCLUDED.name,email=EXCLUDED.email,phone=EXCLUDED.phone,provider_role=EXCLUDED.provider_role,active=true,synced_at=now()`, [tenantId, JSON.stringify(people)]);
+      await c.query(`UPDATE external_users SET active=false,synced_at=now() WHERE tenant_id=$1 AND provider='ghl' AND NOT(external_id=ANY($2::text[]))`, [tenantId,people.map(p=>p.id)]);
+      await c.query(`UPDATE salespeople s SET name=e.name,email=e.email,phone=e.phone,ghl_role=e.provider_role,ghl_active=e.active,ghl_synced_at=e.synced_at,updated_at=now()
+        FROM external_users e WHERE s.tenant_id=$1 AND e.tenant_id=s.tenant_id AND e.provider='ghl' AND s.ghl_user_id=e.external_id`, [tenantId]);
+      await c.query('UPDATE tenants SET data_revision=data_revision+1 WHERE id=$1',[tenantId]);
+      return;
+    }
     const { rows } = await c.query<any>(`SELECT id, email, ghl_user_id, kleegr_user_id FROM salespeople WHERE tenant_id = $1`, [tenantId]);
     const matched = new Set<string>();
     const data = people.map(p => {
@@ -63,6 +74,17 @@ export async function persistContacts(tenantId: string, contacts: DirectoryConta
         company_name = EXCLUDED.company_name, contact_name = EXCLUDED.contact_name, email = EXCLUDED.email, phone = EXCLUDED.phone,
         ghl_contact_id = EXCLUDED.ghl_contact_id, ghl_synced_at = now(), updated_at = now()
       WHERE clients.tenant_id = EXCLUDED.tenant_id`, [tenantId, JSON.stringify(data)]);
+    if(await trackerInstalled(c)){
+      // Profile ownership is synchronized independently of commission attribution.
+      // An explicit local owner override remains authoritative until reviewed.
+      await c.query(`INSERT INTO attribution_events(id,tenant_id,client_id,kind,previous_id,participant_id,method,evidence,reason,policy_version)
+        SELECT $3||r.id,$1,cl.id,'owner',cl.salesperson_id,s.id,'provider_sync',r.external_id,'GHL current owner changed; original referrer preserved',1
+        FROM jsonb_to_recordset($2::jsonb) AS r(id text,external_id text,assigned_to text)
+        JOIN clients cl ON cl.tenant_id=$1 AND cl.id=r.id LEFT JOIN salespeople s ON s.tenant_id=$1 AND s.ghl_user_id=r.assigned_to
+        WHERE cl.salesperson_id IS DISTINCT FROM s.id AND NOT EXISTS(SELECT 1 FROM attribution_events a WHERE a.tenant_id=$1 AND a.client_id=cl.id AND a.kind='owner' AND a.method='manual')`,[tenantId,JSON.stringify(data),`sync_${randomUUID()}_`]);
+      await c.query(`UPDATE clients cl SET provider_attribution_fields=r.attribution_fields,owner_external_id=r.assigned_to,original_source=COALESCE(cl.original_source,r.original_source),salesperson_id=CASE WHEN EXISTS(SELECT 1 FROM attribution_events a WHERE a.tenant_id=$1 AND a.client_id=cl.id AND a.kind='owner' AND a.method='manual') THEN cl.salesperson_id ELSE (SELECT s.id FROM salespeople s WHERE s.tenant_id=$1 AND s.ghl_user_id=r.assigned_to) END
+        FROM jsonb_to_recordset($2::jsonb) AS r(id text,assigned_to text,original_source text,attribution_fields jsonb) WHERE cl.tenant_id=$1 AND cl.id=r.id`,[tenantId,JSON.stringify(data.map(p=>({...p,original_source:p.originalSource||null,attribution_fields:p.attributionFields||{}})))]);
+    }
     await c.query(`UPDATE tenants SET data_revision = data_revision + 1 WHERE id = $1`, [tenantId]);
   });
 }

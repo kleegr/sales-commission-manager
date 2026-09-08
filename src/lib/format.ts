@@ -56,7 +56,7 @@ export function isoToDate(iso: string): Date {
 export function addMonthsISO(iso: string, n: number): string {
   const d = isoToDate(iso);
   d.setMonth(d.getMonth() + n);
-  return d.toISOString().slice(0, 10);
+  return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-');
 }
 
 /** Whole weeks between two ISO dates (>=0). */
@@ -71,7 +71,7 @@ export function weeksBetween(startISO: string, endISO: string): number {
 export function addDaysISO(iso: string, n: number): string {
   const d = isoToDate(iso);
   d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
+  return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-');
 }
 
 /** Whole days between two ISO dates (can be negative if end precedes start). */

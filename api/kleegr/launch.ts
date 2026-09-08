@@ -22,6 +22,7 @@
 // ============================================================================
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { trackerInstalled, database } from '../_lib/tracker-common.js';
 import { hasDb } from "../_lib/db.js";
 import { ensureSchema } from "../_lib/repository.js";
 import { createSession, setSessionCookie } from "../_lib/auth.js";
@@ -136,7 +137,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     //     Admin/owner/manager roles are skipped inside (they are not rep-scoped),
     //     so for them this is a no-op.
     try {
-      await ensureSalespersonForUser(tenant.id, user, claims, mappedRole);
+      if (await trackerInstalled()) {
+        // A login and an enrolled commission participant are distinct identities.
+        // Preserve existing links; match only an explicitly enrolled stable provider ID.
+        await database.query(`UPDATE users u SET salesperson_id=s.id FROM salespeople s
+          WHERE u.id=$1 AND u.tenant_id=$2 AND u.salesperson_id IS NULL
+          AND s.tenant_id=u.tenant_id AND (s.kleegr_user_id=$3 OR s.ghl_user_id=$3)
+          AND s.enrolled_at IS NOT NULL`, [user.id,tenant.id,claims.sp_user_id]);
+      } else await ensureSalespersonForUser(tenant.id, user, claims, mappedRole);
     } catch (err) {
       console.error(
         "[scm:error] launch salesperson link:",
@@ -151,7 +159,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     //    Failure is reported on Team/Clients and never prevents signing in.
     try {
       if (directoryConfigured()) await syncDirectory(tenant.id);
-      else await runInitialSync({ launchToken, tenantId: tenant.id });
+      else if (!await trackerInstalled()) await runInitialSync({ launchToken, tenantId: tenant.id });
     } catch {
       /* sync is best-effort; per-resource failures are already isolated */
     }

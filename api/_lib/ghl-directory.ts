@@ -14,7 +14,7 @@ export interface DirectoryPerson {
 }
 export interface DirectoryContact {
   id: string; name: string; company: string; email: string; phone: string;
-  assignedTo: string | null; createdAt: string | null;
+  assignedTo: string | null; createdAt: string | null; originalSource?:string; attributionFields?:Record<string,string>;
 }
 interface TokenRecord { accessToken: string; expiresAt: string; companyId?: string; locationId?: string }
 interface Tokens { agency: TokenRecord | null; location: TokenRecord }
@@ -40,7 +40,8 @@ export function normalizeDirectoryContact(raw: any, locationId: string): Directo
   if (!id || (raw.locationId && raw.locationId !== locationId)) return null;
   return { id, name: str(raw.name) || str(raw.contactName) || [str(raw.firstName), str(raw.lastName)].filter(Boolean).join(' '),
     company: str(raw.companyName), email: str(raw.email).toLowerCase(), phone: str(raw.phone),
-    assignedTo: str(raw.assignedTo) || null, createdAt: str(raw.dateAdded) || null };
+    assignedTo: str(raw.assignedTo) || null, createdAt: str(raw.dateAdded) || null, originalSource:str(raw.source)||undefined,
+    attributionFields:Object.fromEntries((Array.isArray(raw.customFields)?raw.customFields:[]).filter((f:any)=>typeof f.id==='string'&&typeof f.value==='string'&&f.value.length<=500).map((f:any)=>[f.id,f.value])) };
 }
 
 async function jsonRequest(url: string, init: RequestInit, fetchImpl: typeof fetch): Promise<any> {

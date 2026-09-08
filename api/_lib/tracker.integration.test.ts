@@ -1,0 +1,143 @@
+import assert from 'node:assert/strict';
+import {SCHEMA_SQL} from './schema.js';
+import {MIGRATIONS_SQL} from './migrations.js';
+import {TRACKER_SCHEMA_SQL} from './tracker-schema.js';
+import {enroll,publishPlan,assignPlan,saveParticipant,saveTeam} from './tracker-people.js';
+import {recordPayment,recordRefund,allocateReceipt,recordAdjustment,closePartialPayout,createPayout,transitionPayout,settlePayout} from './tracker-finance.js';
+import {createLead,attributeLead,attributionCandidate,saveOpportunity,saveCampaign,referralClick,convertReferral} from './tracker-attribution.js';
+import {persistTeam} from './directory-sync.js';
+import {listResource,exportResource,report,csvCell} from './tracker-read.js';
+import {mutations} from '../tracker.js';
+import {previewSync,approveImport} from './tracker-sync.js';
+import {calculateExact,refundDelta,simulateExact,validatePlan,type ExactPlan} from '../../src/lib/exact-commission.js';
+import type {SessionUser} from './auth.js';
+
+// An isolated embedded Postgres instance. It cannot access Neon or call GHL.
+const moduleName=process.env.PGLITE_TEST_MODULE||'@electric-sql/pglite';
+const {PGlite}=await import(moduleName);const pg=new PGlite();
+const db={query:async(sql:string,params:any[]=[])=>pg.query(sql,params)};
+const tx=(fn:(c:any)=>Promise<any>)=>pg.transaction((c:any)=>fn({query:(s:string,p:any[]=[])=>c.query(s,p)}));
+const u:SessionUser={id:'owner',tenantId:'a',tenantSlug:'a',tenantName:'A',name:'Owner',email:'owner@example.test',role:'owner',salespersonId:null};const approver={...u,id:'approver',role:'admin' as const};
+let checks=0;async function check(name:string,fn:()=>any){await fn();checks++;console.log(`✓ ${name}`);}
+try{
+  await pg.exec(SCHEMA_SQL);await pg.exec(MIGRATIONS_SQL);
+  await pg.exec("INSERT INTO tenants(id,name,slug) VALUES('a','A','a'),('b','B','b'); INSERT INTO users(id,tenant_id,name,email,role) VALUES('owner','a','Owner','owner@example.test','owner'),('approver','a','Approver','approver@example.test','admin'); INSERT INTO salespeople(id,tenant_id,name,role) VALUES('historic','a','Historical partner','partner');");
+  await pg.exec(TRACKER_SCHEMA_SQL);await pg.exec(TRACKER_SCHEMA_SQL);
+  await pg.exec("INSERT INTO tracker_workspaces(tenant_id,currency) VALUES('a','USD'),('b','USD')");
+  await check('additive migration preserves and grandfathers existing enrollment',async()=>{assert.equal((await db.query("SELECT role FROM salespeople WHERE id='historic'")).rows[0].role,'partner');});
+  const users=[{id:'alice',name:'Alice',email:'alice@example.test',phone:'',role:'admin'},{id:'bob',name:'Bob',email:'bob@example.test',phone:'',role:'user'}];
+  await persistTeam('a',users,tx);await persistTeam('b',users,tx);
+  await check('A: import creates no enrollments or app logins',async()=>{assert.equal((await db.query('SELECT count(*)::int AS n FROM salespeople')).rows[0].n,1);assert.equal((await db.query('SELECT count(*)::int AS n FROM users')).rows[0].n,2);});
+  const alice=(await tx(c=>enroll(c,u,{externalIds:['alice'],role:'salesperson'}))).ids[0],bob=(await tx(c=>enroll(c,u,{externalIds:['bob'],role:'salesperson'}))).ids[0];
+  await check('A: stable identity enrollment is idempotent and tenant scoped',async()=>{assert.deepEqual((await tx(c=>enroll(c,u,{externalIds:['alice'],role:'affiliate'}))).ids,[alice]);const other=(await tx(c=>enroll(c,{...u,tenantId:'b'},{externalIds:['alice'],role:'affiliate'}))).ids[0];assert.notEqual(other,alice);assert.equal((await db.query('SELECT role FROM salespeople WHERE id=$1',[alice])).rows[0].role,'salesperson');});
+  const lead=(await tx(c=>createLead(c,u,{name:'Customer',email:'client@example.test',source:'campaign referral',date:'2026-01-01',ownerId:bob}))).id;
+  await tx(c=>attributeLead(c,u,{clientId:lead,kind:'referrer',participantId:alice,reason:'Verified original referral',evidence:'Signed referral record'}));
+  await check('B: Alice remains referrer while Bob owns the lead',async()=>{const r=(await db.query('SELECT * FROM clients WHERE id=$1',[lead])).rows[0];assert.equal(r.referrer_id,alice);assert.equal(r.salesperson_id,bob);assert.equal(r.original_source,'campaign referral');});
+  const plan:ExactPlan={currency:'USD',minorDigits:2,rules:[{id:'rate',name:'Collected cash commission',event:'payment',kind:'percent',value:'1000',beneficiary:'referrer',base:'gross',chargeFrom:1,holdDays:3,group:'standard',stacking:'exclusive',priority:1}]};
+  const version=await tx(c=>publishPlan(c,u,{name:'Standard',config:plan,effectiveFrom:'2026-01-01'}));
+  await tx(c=>assignPlan(c,u,{salespersonId:alice,versionId:version.id,effectiveFrom:'2026-01-01',effectiveTo:'2026-06-30'}));
+  const receipt={eventKey:'receipt-1',clientId:lead,date:'2026-01-02',amountMinor:'100000',currency:'USD',status:'confirmed'};
+  const pay=await tx(c=>recordPayment(c,u,receipt));
+  const earnings=(await db.query('SELECT * FROM commission_ledger WHERE payment_id=$1',[pay.id])).rows;const earning=earnings[0];
+  await check('C: $1,000 at 10% earns $100 with the configured hold; duplicate receipt does not earn twice',async()=>{assert.equal(String(earning.amount_minor),'10000');assert.equal(earning.salesperson_id,alice);assert.equal(earning.due_date,'2026-01-05');assert.equal((await tx(c=>recordPayment(c,u,receipt))).duplicate,true);assert.equal((await db.query('SELECT count(*)::int AS n FROM commission_ledger')).rows[0].n,1);});
+  await check('receipt keys reject different payloads',()=>assert.rejects(tx(c=>recordPayment(c,u,{...receipt,amountMinor:'200000'})),{code:'idempotency_conflict'}));
+  await check('D: a $400 partial receipt earns $40, independent of opportunity value',async()=>{const p=await tx(c=>recordPayment(c,u,{...receipt,eventKey:'partial',amountMinor:'40000'}));assert.equal(String((await db.query('SELECT amount_minor FROM commission_ledger WHERE payment_id=$1',[p.id])).rows[0].amount_minor),'4000');});
+  const payout=await tx(c=>createPayout(c,u,{salespersonId:alice,entryIds:[earning.id]}));
+  await check('G: reserved entries cannot enter a second draft',()=>assert.rejects(tx(c=>createPayout(c,u,{salespersonId:alice,entryIds:[earning.id]})),{code:'entries_unavailable'}));
+  await tx(c=>transitionPayout(c,u,{id:payout.id,action:'submit'}));
+  await check('H: owner cannot approve their own submitted payout by default',()=>assert.rejects(tx(c=>transitionPayout(c,u,{id:payout.id,action:'approve'})),{code:'separate_approver'}));
+  await tx(c=>transitionPayout(c,approver,{id:payout.id,action:'approve'}));
+  const settlement={id:payout.id,amountMinor:'10000',date:'2026-01-06',method:'bank',reference:'bank-1',recipient:'Alice',status:'confirmed'};
+  await tx(c=>settlePayout(c,approver,settlement));
+  await check('G: settlement confirmation is idempotent',async()=>{assert.equal((await tx(c=>settlePayout(c,approver,settlement))).duplicate,true);assert.equal((await db.query('SELECT count(*)::int AS n FROM payout_settlements')).rows[0].n,1);});
+  await tx(c=>recordRefund(c,u,{eventKey:'refund-1',paymentId:pay.id,amountMinor:'20000',date:'2026-01-07',reason:'Partial cancellation'}));
+  await check('E: $200 refund appends a $20 reversal and preserves paid history',async()=>{const old=(await db.query('SELECT * FROM commission_ledger WHERE id=$1',[earning.id])).rows[0],reverse=(await db.query('SELECT * FROM commission_ledger WHERE reverses_entry_id=$1',[earning.id])).rows[0];assert.equal(old.status,'paid');assert.equal(String(old.amount_minor),'10000');assert.equal(String(reverse.amount_minor),'-2000');assert.equal(reverse.recovery_status,'outstanding_offset');});
+  await check('refunds cannot exceed collected cash',()=>assert.rejects(tx(c=>recordRefund(c,u,{eventKey:'too-large',paymentId:pay.id,amountMinor:'90000',date:'2026-01-08',reason:'Invalid excess'}))));
+  const v2=await tx(c=>publishPlan(c,u,{planId:version.planId,config:{...plan,rules:[{...plan.rules[0],value:'1500'}]},effectiveFrom:'2026-07-01'}));await tx(c=>assignPlan(c,u,{salespersonId:alice,versionId:v2.id,effectiveFrom:'2026-07-01'}));
+  await check('F: 15% applies to later receipts while historical 10% remains frozen',async()=>{const later=await tx(c=>recordPayment(c,u,{...receipt,eventKey:'later',date:'2026-07-03'}));assert.equal(String((await db.query('SELECT amount_minor FROM commission_ledger WHERE payment_id=$1',[later.id])).rows[0].amount_minor),'15000');assert.equal(String((await db.query('SELECT amount_minor FROM commission_ledger WHERE id=$1',[earning.id])).rows[0].amount_minor),'10000');});
+  await check('overlapping assignments and cyclic hierarchies are rejected',async()=>{await assert.rejects(tx(c=>assignPlan(c,u,{salespersonId:alice,versionId:v2.id,effectiveFrom:'2026-07-02'})),{code:'overlapping_assignment'});await assert.rejects(tx(c=>saveParticipant(c,u,{id:alice,name:'Alice',role:'salesperson',status:'active',parentId:alice})),{code:'cycle'});});
+  const self={...u,id:'self',role:'salesperson' as const,salespersonId:bob};
+  await check('H: role-scoped reads exclude another participant’s earnings and directory',async()=>{assert.equal((await listResource(db,self,'ledger')).total,0);await assert.rejects(listResource(db,self,'directory'),{code:'forbidden'});await assert.rejects(tx(c=>recordPayment(c,self,receipt)),{code:'forbidden'});assert.equal((await listResource(db,{...u,tenantId:'b'},'payments')).total,0);});
+  await persistTeam('a',[users[1]],tx);
+  await check('I: completed directory sync preserves enrollment and attribution history',async()=>{const a=(await db.query('SELECT status,ghl_active FROM salespeople WHERE id=$1',[alice])).rows[0];assert.equal(a.status,'active');assert.equal(a.ghl_active,false);assert.equal((await db.query('SELECT referrer_id FROM clients WHERE id=$1',[lead])).rows[0].referrer_id,alice);});
+  await check('J: exact report sums reconcile and forecasts do not mutate the ledger',async()=>{const r=await report(db,u);assert.equal(r.earnings[0].earned_minor,'27000');assert.equal(r.receipts[0].net_collected_minor,'220000');const before=(await listResource(db,u,'ledger')).total;const sim=simulateExact(plan,{event:'payment',amountMinor:'100000',taxMinor:'0',feeMinor:'0',discountMinor:'0',currency:'USD',productId:'',chargeNumber:1,date:'2026-01-01',beneficiaries:{referrer:alice}},60,2,500);assert.equal(sim.length,60);assert.equal(sim[0].commissionMinor,'20000');assert.equal((await listResource(db,u,'ledger')).total,before);assert.ok(csvCell('=HYPERLINK("x")').startsWith('"\''));});
+  const campaign=await tx(c=>saveCampaign(c,u,{name:'Native referral',status:'active',conversionMode:'native',windowDays:30,participantIds:[alice],terms:'Contact consent'}));
+  const link=(await db.query('SELECT link_id FROM campaign_participants WHERE campaign_id=$1',[campaign.id])).rows[0].link_id;const click=await tx(c=>referralClick(c,link));
+  await tx(c=>convertReferral(c,{clickId:click.clickId,name:'Referred contact',email:'ref@example.test',consent:true}));await tx(c=>convertReferral(c,{clickId:click.clickId,name:'Referred contact',email:'ref@example.test',consent:true}));
+  await check('K: native link → click → unique conversion → lead → receipt → earning trace',async()=>{const conversion=(await db.query('SELECT * FROM referral_conversions WHERE click_id=$1',[click.clickId])).rows;assert.equal(conversion.length,1);const p=await tx(c=>recordPayment(c,u,{...receipt,clientId:conversion[0].client_id,eventKey:'referral-payment',date:'2026-07-05'}));const e=(await db.query('SELECT campaign_id,client_id FROM commission_ledger WHERE payment_id=$1',[p.id])).rows[0];assert.equal(e.campaign_id,campaign.id);assert.equal(e.client_id,conversion[0].client_id);});
+  await check('exact arithmetic handles cumulative partial refunds and validates split pools',()=>{assert.equal(refundDelta('1','3','0','1'),'0');assert.equal(refundDelta('1','3','1','1'),'-1');assert.equal(refundDelta('1','3','2','1'),'0');assert.throws(()=>validatePlan({...plan,rules:[{...plan.rules[0],splits:[{beneficiary:'referrer',bps:9000}]}]}));});
+  await check('database enforces immutable plan versions and paid history',async()=>{await assert.rejects(db.query("UPDATE plan_versions SET config='{}' WHERE id=$1",[version.id]));await assert.rejects(db.query("DELETE FROM commission_ledger WHERE id=$1",[earning.id]));await assert.rejects(db.query("UPDATE commission_ledger SET status='cancelled' WHERE id=$1",[earning.id]));});
+  await check('receipt preview makes no financial writes',async()=>{const before=(await listResource(db,u,'payments')).total;const result=await tx(c=>recordPayment(c,u,{...receipt,eventKey:'preview',preview:true}));assert.equal(result.persisted,false);assert.equal(result.totalCommissionMinor,'10000');assert.equal((await listResource(db,u,'payments')).total,before);});
+  await check('failed and cancelled receipts never generate earnings',async()=>{for(const status of ['failed','cancelled']){const p=await tx(c=>recordPayment(c,u,{...receipt,eventKey:status,status}));assert.equal((await db.query('SELECT id FROM commission_ledger WHERE payment_id=$1',[p.id])).rows.length,0);}});
+  await check('G: concurrent identical receipt requests create one canonical receipt',async()=>{const results=await Promise.all([tx(c=>recordPayment(c,u,{...receipt,eventKey:'concurrent'})),tx(c=>recordPayment(c,u,{...receipt,eventKey:'concurrent'}))]);assert.equal(results.filter(r=>r.duplicate).length,1);assert.equal((await db.query("SELECT count(*)::int AS n FROM payments WHERE event_key='concurrent'")).rows[0].n,1);});
+  await check('held future earnings cannot be reserved for payout',async()=>{const p=await tx(c=>recordPayment(c,u,{...receipt,eventKey:'future',date:'2099-01-01'}));const e=(await db.query('SELECT id FROM commission_ledger WHERE payment_id=$1',[p.id])).rows[0];await assert.rejects(tx(c=>createPayout(c,u,{salespersonId:alice,entryIds:[e.id]})),{code:'entries_unavailable'});});
+  await check('I: half-complete sync resumes at its checkpoint; late events cannot replace newer previews',async()=>{
+    await db.query("UPDATE tenants SET ghl_location_id='test-location',kleegr_connection_status='connected' WHERE id='a'");
+    const database={...db,transaction:tx};let mode=0;const reader:any=async(_l:string,_r:string,offset:number)=>{if(mode===1)throw new Error('isolated provider failure');return{rows:[{externalId:'opportunity-test',name:mode===3?'Stale':'Newer',updatedAt:mode===3?'2026-01-01':'2026-08-01'}],next:offset+100,done:mode!==0};};
+    const first=await previewSync(u,{resource:'opportunities'},database as any,reader);assert.equal(first.completed,false);mode=1;await assert.rejects(previewSync(u,{resource:'opportunities',runId:first.id},database as any,reader));assert.deepEqual((await db.query('SELECT cursor FROM sync_runs WHERE id=$1',[first.id])).rows[0].cursor,{offset:100});await assert.rejects(previewSync(u,{resource:'opportunities',runId:first.id},database as any,reader),{code:'retry_later'});
+    await db.query('UPDATE sync_runs SET next_retry_at=NULL WHERE id=$1',[first.id]);mode=2;const finished=await previewSync(u,{resource:'opportunities',runId:first.id},database as any,reader);assert.equal(finished.completed,true);mode=3;await previewSync(u,{resource:'opportunities'},database as any,reader);assert.equal((await db.query("SELECT payload FROM import_reviews WHERE external_id='opportunity-test'")).rows[0].payload.name,'Newer');assert.equal((await db.query("SELECT id FROM opportunities WHERE external_id='opportunity-test'")).rows.length,0);
+  });
+  await check('partial/unknown settlement remains reserved, blocks blind retries, and reconciles with evidence',async()=>{
+    const available=(await db.query("SELECT id FROM commission_ledger WHERE tenant_id='a' AND status='pending' AND due_date<=CURRENT_DATE::text AND amount_minor IS NOT NULL")).rows.map((e:any)=>e.id);
+    const batch=await tx(c=>createPayout(c,u,{salespersonId:alice,entryIds:available}));await tx(c=>transitionPayout(c,u,{id:batch.id,action:'submit'}));await tx(c=>transitionPayout(c,approver,{id:batch.id,action:'approve'}));
+    const part={...settlement,id:batch.id,reference:'part-1',amountMinor:'1000'};assert.equal((await tx(c=>settlePayout(c,approver,part))).status,'processing');
+    const unknown={...part,reference:'uncertain',status:'unknown'};assert.equal((await tx(c=>settlePayout(c,approver,unknown))).status,'unknown');await assert.rejects(tx(c=>settlePayout(c,approver,{...part,reference:'blind-retry'})),{code:'unknown_result'});
+    await tx(c=>settlePayout(c,approver,{...unknown,status:'confirmed',reconciliationReason:'Bank statement confirms receipt'}));const total=BigInt((await db.query('SELECT amount_minor FROM payout_batches WHERE id=$1',[batch.id])).rows[0].amount_minor);
+    assert.equal((await tx(c=>settlePayout(c,approver,{...part,reference:'balance',amountMinor:(total-2000n).toString()}))).status,'paid');
+    assert.equal((await db.query("SELECT recovery_status FROM commission_ledger WHERE reverses_entry_id=$1",[earning.id])).rows[0].recovery_status,'offset_applied');
+  });
+  await check('pending receipt confirmation retains identity and earns exactly once',async()=>{
+    const payload={...receipt,eventKey:'pending-confirm',status:'pending'};const pending=await tx(c=>recordPayment(c,u,payload));assert.equal((await db.query('SELECT id FROM commission_ledger WHERE payment_id=$1',[pending.id])).rows.length,0);
+    const confirmed=await tx(c=>recordPayment(c,u,{...payload,status:'confirmed',confirmExisting:true}));assert.equal(confirmed.id,pending.id);assert.equal((await tx(c=>recordPayment(c,u,{...payload,status:'confirmed',confirmExisting:true}))).duplicate,true);
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM commission_ledger WHERE payment_id=$1',[pending.id])).rows[0].n,1);
+  });
+  await check('late allocation previews first earnings and rejects a second allocation',async()=>{
+    const customer=await tx(c=>createLead(c,u,{name:'Unattributed customer',source:'Unknown',date:'2026-01-01'}));const payment=await tx(c=>recordPayment(c,u,{...receipt,eventKey:'late-allocation',clientId:customer.id,confirmUnattributed:true}));
+    await tx(c=>attributeLead(c,u,{clientId:customer.id,kind:'referrer',participantId:alice,reason:'Verified referral evidence',evidence:'Signed referral record'}));const preview=await tx(c=>allocateReceipt(c,u,{id:payment.id,reason:'Evidence reviewed',preview:true}));assert.equal(preview.totalCommissionMinor,'10000');assert.equal((await db.query('SELECT id FROM commission_ledger WHERE payment_id=$1',[payment.id])).rows.length,0);
+    await tx(c=>allocateReceipt(c,u,{id:payment.id,reason:'Evidence reviewed'}));assert.equal((await db.query('SELECT salesperson_id FROM payments WHERE id=$1',[payment.id])).rows[0].salesperson_id,alice);await assert.rejects(tx(c=>allocateReceipt(c,u,{id:payment.id,reason:'Again'})));
+  });
+  await check('partial payout closes without losing earned balance or overstating paid cash',async()=>{
+    const adjustment=await tx(c=>recordAdjustment(c,u,{salespersonId:bob,amountMinor:'10000',currency:'USD',date:'2026-01-01',eventKey:'bonus-test',reason:'Authorized qualification'}));assert.equal((await tx(c=>recordAdjustment(c,u,{salespersonId:bob,amountMinor:'10000',currency:'USD',date:'2026-01-01',eventKey:'bonus-test',reason:'Same evidence'}))).duplicate,true);
+    const negative=await tx(c=>recordAdjustment(c,u,{salespersonId:bob,amountMinor:'-1000',currency:'USD',date:'2026-01-01',eventKey:'offset-test',reason:'Authorized correction'}));
+    const batch=await tx(c=>createPayout(c,u,{salespersonId:bob,entryIds:[adjustment.id,negative.id]}));await tx(c=>transitionPayout(c,u,{id:batch.id,action:'submit'}));await tx(c=>transitionPayout(c,approver,{id:batch.id,action:'approve'}));await tx(c=>settlePayout(c,approver,{...settlement,id:batch.id,reference:'partial-close-test',amountMinor:'3000'}));
+    const closed=await tx(c=>closePartialPayout(c,approver,{id:batch.id,date:'2026-01-06',reason:'Statement confirms partial final settlement'}));assert.equal(closed.releasedMinor,'6000');assert.equal((await tx(c=>closePartialPayout(c,approver,{id:batch.id,date:'2026-01-06',reason:'Repeat'}))).duplicate,true);
+    const summary=(await report(db,u,{salespersonId:bob})).earnings[0];assert.equal(summary.earned_minor,'9000');assert.equal(summary.paid_minor,'3000');assert.equal(summary.payable_minor,'6000');
+    const carry=(await db.query("SELECT id FROM commission_ledger WHERE salesperson_id=$1 AND status='pending'",[bob])).rows.map((e:any)=>e.id);const remainder=await tx(c=>createPayout(c,u,{salespersonId:bob,entryIds:carry}));assert.equal(String((await db.query('SELECT amount_minor FROM payout_batches WHERE id=$1',[remainder.id])).rows[0].amount_minor),'6000');
+  });
+  await check('a verified failed payout releases reservations on cancellation',async()=>{
+    const entry=await tx(c=>recordAdjustment(c,u,{salespersonId:'historic',amountMinor:'1000',currency:'USD',date:'2026-01-01',eventKey:'failed-batch-test',reason:'Approved award'}));const batch=await tx(c=>createPayout(c,u,{salespersonId:'historic',entryIds:[entry.id]}));await tx(c=>transitionPayout(c,u,{id:batch.id,action:'submit'}));await tx(c=>transitionPayout(c,approver,{id:batch.id,action:'approve'}));await tx(c=>settlePayout(c,approver,{...settlement,id:batch.id,reference:'failed-test',amountMinor:'1000',status:'failed'}));await tx(c=>transitionPayout(c,u,{id:batch.id,action:'cancel',reason:'Confirmed bank rejection'}));assert.equal((await db.query('SELECT id FROM commission_ledger WHERE id=$1 AND status=\'pending\'',[entry.id])).rows.length,1);assert.equal((await db.query('SELECT entry_id FROM payout_reservations WHERE payout_id=$1',[batch.id])).rows.length,0);
+  });
+  await check('H: managers, exports, goals and media stay within their permitted team',async()=>{
+    await db.query("INSERT INTO users(id,tenant_id,name,email,role) VALUES('manager-a','a','Manager','manager@example.test','sales_manager')");
+    const team=await tx(c=>saveTeam(c,u,{name:'Alice team',managerId:'manager-a'}));await tx(c=>saveParticipant(c,u,{id:alice,name:'Alice',role:'salesperson',status:'active',teamId:team.id}));
+    const manager={...u,id:'manager-a',role:'sales_manager' as const};const visible=(await listResource(db,manager,'people')).rows;assert.deepEqual(visible.map((r:any)=>r.id),[alice]);const exported=await exportResource(db,manager,'people',{});assert.ok(exported.includes('Alice'));assert.ok(!exported.includes('Bob'));assert.equal((await listResource(db,manager,'ledger',{salespersonId:bob})).total,0);
+    const goal=await tx(c=>mutations.goal(c,u,{title:'Team collection',metric:'net_collected',teamId:team.id,targetMinor:'100000',currency:'USD',from:'2026-01-01',to:'2026-12-31'}));const goals=await listResource(db,manager,'goals');assert.equal(goals.rows[0].id,goal.id);assert.ok(BigInt(goals.rows[0].progress_minor)>0n);assert.equal((await listResource(db,self,'goals')).total,0);
+    await tx(c=>mutations.media(c,u,{title:'Admin instructions',url:'https://example.test/admin',audience:'admin'}));assert.equal((await listResource(db,self,'media')).total,0);
+    await assert.rejects(tx(c=>mutations.goal(c,manager,{title:'Forbidden'})),{code:'forbidden'});
+  });
+  await check('B: field evidence and code conflicts preserve manual attribution',async()=>{
+    await db.query("UPDATE salespeople SET referral_code='BOB-CODE' WHERE id=$1",[bob]);await db.query("UPDATE tracker_workspaces SET attribution_policy=attribution_policy||'{\"fieldIds\":[\"referral-field\"]}'::jsonb WHERE tenant_id='a'");await db.query("UPDATE clients SET provider_attribution_fields='{\"referral-field\":\"BOB-CODE\"}'::jsonb WHERE id=$1",[lead]);
+    const result=await tx(c=>attributionCandidate(c,u,{clientId:lead,method:'field_mapping',fieldId:'referral-field'}));assert.equal(result.reviewRequired,true);assert.equal((await db.query('SELECT referrer_id FROM clients WHERE id=$1',[lead])).rows[0].referrer_id,alice);
+    await assert.rejects(tx(c=>attributionCandidate(c,u,{clientId:lead,method:'field_mapping',fieldId:'unapproved'})),{code:'field_not_configured'});
+  });
+  await check('won deal goals count recorded closers without creating cash or commission',async()=>{
+    const before=(await listResource(db,u,'payments')).total;await tx(c=>saveOpportunity(c,u,{clientId:lead,name:'Won, not collected',valueMinor:'500000',currency:'USD',status:'won',ownerId:bob,closerId:bob}));
+    const goal=await tx(c=>mutations.goal(c,u,{title:'Bob wins',metric:'won_deals',salespersonId:bob,targetMinor:'2',from:'2020-01-01',to:'2099-01-01'}));const result=await listResource(db,self,'goals',{id:goal.id});assert.equal(result.rows[0].progress_minor,'1');assert.equal((await listResource(db,u,'payments')).total,before);
+  });
+  await check('simulator uses exact receipt and first-sale rewards with future hold dates',()=>{
+    const combined={...plan,rules:[...plan.rules,{...plan.rules[0],id:'sale-bonus',name:'First sale',event:'sale' as const,kind:'fixed' as const,value:'500',group:'sale',holdDays:10}]};const result=simulateExact(combined,{event:'payment',amountMinor:'100000',taxMinor:'0',feeMinor:'0',discountMinor:'0',currency:'USD',productId:'',chargeNumber:1,date:'2026-01-31',beneficiaries:{referrer:alice}},2,1,0);
+    assert.equal(result[0].commissionMinor,'10500');assert.equal(result[1].commissionMinor,'20500');assert.equal(result[1].date,'2026-02-28');assert.equal(result[1].cumulativeCommissionMinor,'31000');assert.ok(result[1].earnings.some((e:any)=>e.dueDate==='2026-03-10'));
+  });
+  await check('a different administrator who submits a draft cannot also approve it',async()=>{
+    const entry=(await db.query("SELECT id FROM commission_ledger WHERE salesperson_id='historic' AND status='pending' LIMIT 1")).rows[0];const batch=await tx(c=>createPayout(c,u,{salespersonId:'historic',entryIds:[entry.id]}));await tx(c=>transitionPayout(c,approver,{id:batch.id,action:'submit'}));await assert.rejects(tx(c=>transitionPayout(c,approver,{id:batch.id,action:'approve'})),{code:'separate_approver'});await tx(c=>transitionPayout(c,u,{id:batch.id,action:'cancel',reason:'Isolated test complete'}));
+  });
+  await check('C: explicit early release is idempotent and audited once',async()=>{
+    const held=(await db.query("SELECT id FROM commission_ledger WHERE due_date>'2099-01-01' LIMIT 1")).rows[0];const request={id:held.id,reason:'Approved isolated early release'};await tx(c=>mutations.release(c,u,request));assert.equal((await tx(c=>mutations.release(c,u,request))).duplicate,true);assert.equal((await db.query("SELECT count(*)::int AS n FROM audit_logs WHERE entity_id=$1 AND action='released_early'",[held.id])).rows[0].n,1);
+  });
+  await check('reviewed provider imports require canonical identity and deduplicate the same charge',async()=>{
+    const payload={externalId:'provider-row-1',contactId:'unmatched-external-contact',currency:'USD',amount:'1000',status:'succeeded',chargeId:'charge-test',providerAccount:'account-test',provider:'stripe',createdAt:'2026-01-02T12:00:00Z',updatedAt:'2026-01-02T12:00:00Z',amountRefunded:'0',liveMode:true};
+    await db.query("INSERT INTO import_reviews(id,tenant_id,resource,external_id,payload) VALUES('import-invalid','a','payments','invalid',$1::jsonb),('import-first','a','payments','first',$2::jsonb),('import-second','a','payments','second',$3::jsonb)",[JSON.stringify({...payload,providerAccount:{id:'unverified'}}),JSON.stringify(payload),JSON.stringify({...payload,externalId:'provider-row-2'})]);
+    const review={clientId:lead,amountUnits:'major',confirmMapping:true,reason:'Isolated verified mapping'};await assert.rejects(tx(c=>approveImport(c,u,{...review,id:'import-invalid'})),{code:'canonical_identity_required'});await tx(c=>approveImport(c,u,{...review,id:'import-first'}));await tx(c=>approveImport(c,u,{...review,id:'import-second'}));assert.equal((await db.query("SELECT count(*)::int AS n FROM payments WHERE event_key='provider:stripe:account-test:charge-test'")).rows[0].n,1);assert.equal((await db.query("SELECT count(*)::int AS n FROM commission_ledger WHERE event_key='provider:stripe:account-test:charge-test:0'")).rows[0].n,1);
+  });
+  console.log(`${checks} isolated Sales Tracker integration scenarios passed.`);
+}finally{await pg.close();}

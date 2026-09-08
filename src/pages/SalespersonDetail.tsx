@@ -109,7 +109,7 @@ export default function SalespersonDetail() {
           xKey="label"
           stacked
           series={[
-            { key: "Earned", name: "Earned", color: "#3366ff" },
+            { key: "Earned", name: "Earned", color: "#155eef" },
             { key: "Projected", name: "Projected", color: "#06b6d4" },
           ]}
         />

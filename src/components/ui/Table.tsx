@@ -19,7 +19,7 @@ export function Table({
 
 export function THead({ children }: { children: ReactNode }) {
   return (
-    <thead className="border-b border-slate-200 text-left dark:border-slate-800">
+    <thead className="border-b border-slate-200 bg-slate-50 text-left dark:border-slate-800 dark:bg-slate-800/40">
       {children}
     </thead>
   );
@@ -65,7 +65,7 @@ export function TH({
     <th
       {...rest}
       className={classNames(
-        "whitespace-nowrap px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400",
+        "whitespace-nowrap px-3 py-2.5 text-xs font-medium text-slate-500 dark:text-slate-400",
         className,
       )}
     >

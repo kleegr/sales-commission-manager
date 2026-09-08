@@ -183,7 +183,7 @@ export default function Presentation() {
                 <MoneyBarChart
                   data={yearData}
                   xKey="label"
-                  series={[{ key: "earned", name: "Earned", color: "#3366ff" }]}
+                  series={[{ key: "earned", name: "Earned", color: "#155eef" }]}
                   height={260}
                 />
               </div>

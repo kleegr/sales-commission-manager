@@ -65,7 +65,7 @@ export default function Dashboard() {
     Projected: p.projected,
   }));
 
-  const COLORS = ["#3366ff", "#22c55e", "#a855f7", "#f59e0b", "#06b6d4", "#ec4899"];
+  const COLORS = ["#155eef", "#22c55e", "#a855f7", "#f59e0b", "#06b6d4", "#ec4899"];
 
   return (
     <div>
@@ -128,7 +128,7 @@ export default function Dashboard() {
             xKey="label"
             stacked
             series={[
-              { key: "Earned", name: "Earned", color: "#3366ff" },
+              { key: "Earned", name: "Earned", color: "#155eef" },
               { key: "Projected", name: "Projected", color: "#06b6d4" },
             ]}
           />

@@ -324,7 +324,7 @@ export function ProjectionView({
             <MoneyAreaChart
               data={clientCumData}
               xKey="label"
-              series={[{ key: "cumulative", name: "Cumulative", color: "#3366ff" }]}
+              series={[{ key: "cumulative", name: "Cumulative", color: "#155eef" }]}
             />
           </Card>
           <Card>
@@ -343,7 +343,7 @@ export function ProjectionView({
             <MoneyAreaChart
               data={bookCumData}
               xKey="label"
-              series={[{ key: "cumulative", name: "Cumulative", color: "#3366ff" }]}
+              series={[{ key: "cumulative", name: "Cumulative", color: "#155eef" }]}
             />
           </Card>
           <Card>

@@ -55,7 +55,7 @@ export const RULE_TYPE_TONE: Record<
 
 /** Hex colors for charts, aligned with the badge tones above. */
 export const RULE_TYPE_COLOR: Record<RuleType, string> = {
-  setup_fee: "#3366ff", // brand blue
+  setup_fee: "#155eef", // brand blue
   signup_bonus: "#8b5cf6", // violet
   monthly_residual: "#16a34a", // emerald
   salary: "#f59e0b", // amber

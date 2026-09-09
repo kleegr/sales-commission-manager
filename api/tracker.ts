@@ -65,7 +65,7 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
       return res.json(await workspaceRead(u.tenantId,db=>listResource(db,u,resource,req.query)));
     }
     if(!csrfOk(req))return res.status(403).json({error:'csrf_check_failed'});
-    const b=typeof req.body==='string'?JSON.parse(req.body):req.body||{};if(JSON.stringify(b).length>(b.action==='mediaFile'?2900000:200000))throw new TrackerError('too_large','Request is too large.');
+    const b=typeof req.body==='string'?JSON.parse(req.body):req.body||{};if(JSON.stringify(b).length>(b.action==='mediaFile'?2900000:b.action==='importSalesmen'?1000000:200000))throw new TrackerError('too_large','Request is too large.');
     if(b.action==='previewSync')return res.json(await previewSync(u,b.data||{}));
     if(b.action==='simulate'){admin(u);const s=b.data||b;const version=(await database.query('SELECT config FROM plan_versions WHERE tenant_id=$1 AND id=$2',[u.tenantId,s.versionId])).rows[0];if(!version)throw new TrackerError('not_found','Plan version not found.');return res.json({rows:simulateExact(version.config,{event:'payment',amountMinor:s.amountMinor,taxMinor:s.taxMinor||'0',feeMinor:s.feeMinor||'0',discountMinor:'0',currency:version.config.currency,productId:s.productId||'',chargeNumber:1,date:dateOnly(s.date),beneficiaries:{referrer:'estimated-referrer',owner:'estimated-owner',closer:'estimated-closer',parent:'estimated-parent',grandparent:'estimated-grandparent'}},s.months,s.newCustomers,s.churnBps),currency:version.config.currency,estimated:true,persisted:false});}
     const mutate=mutations[b.action];if(!mutate)throw new TrackerError('unknown_action','Action is not available.');

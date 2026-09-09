@@ -19,7 +19,7 @@ export async function saveSalesman(db:SQL,u:SessionUser,b:any){
  admin(u);await ready(db);await lock(db,u.tenantId);
  const existing=b.id?await participant(db,u,b.id):null;
  const p=profile(b),name=existing?.ghl_user_id?existing.name:[required(b.firstName,'First name',100),required(b.lastName,'Last name',100)].join(' '),email=existing?.ghl_user_id?existing.email:validEmail(b.email);
- if(!b.id&&(await db.query('SELECT id FROM salespeople WHERE tenant_id=$1 AND lower(trim(email))=$2',[u.tenantId,email])).rows.length)throw new TrackerError('duplicate_email','A salesman with this email already exists. Open their profile instead.',409);
+ if((await db.query('SELECT id FROM salespeople WHERE tenant_id=$1 AND lower(trim(email))=$2 AND id<>$3',[u.tenantId,email,b.id||''])).rows.length)throw new TrackerError('duplicate_email','A salesman with this email already exists. Open their profile instead.',409);
  const saved=await saveParticipant(db,u,{...b,name,email,role:b.role||'salesperson',status:b.status||'active'});
  await db.query('UPDATE salespeople SET tracker_profile=$3::jsonb,phone=CASE WHEN ghl_user_id IS NULL THEN $4 ELSE phone END WHERE tenant_id=$1 AND id=$2',[u.tenantId,saved.id,JSON.stringify(p),p.phone||'']);
  if(b.versionId)await assignPlan(db,u,{salespersonId:saved.id,versionId:b.versionId,effectiveFrom:b.effectiveFrom});

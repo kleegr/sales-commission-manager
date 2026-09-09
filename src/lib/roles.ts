@@ -26,21 +26,9 @@ export const ROLE_LABEL: Record<Role, string> = {
 export const ADMIN_ROLES: Role[] = ["owner", "admin"];
 export const SELF_ROLES: Role[] = ["salesperson", "affiliate", "partner"];
 
-/**
- * Where a role lands after login, and where the route guard sends a role that
- * hits a page it may not see.
- *
- *   owner (agency owner / super admin) -> the AGENCY portal: the cross-sub-account
- *     overview is the agency owner's home/"dashboard". The single-sub-account
- *     Dashboard at "/" is the sub-account Admin's home, NOT the agency owner's,
- *     which is why the owner is intentionally not granted "/" below — landing
- *     there made the agency owner look like an ordinary sub-account user and hid
- *     the agency/sub-account overview entirely.
- *   admin / sales_manager -> the single-sub-account Dashboard.
- *   salesperson / affiliate / partner -> their self-service portal.
- */
+/** Open the current workspace for owners; participants keep their own portal. */
 export function homePath(role: Role): string {
-  if (role === "owner") return "/agency";
+  if (role === "owner") return "/workspace-overview";
   if (role === "admin" || role === "sales_manager") return "/";
   return "/portal";
 }

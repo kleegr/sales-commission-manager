@@ -4,7 +4,7 @@ import {admin,isAdmin,visibleIds,TrackerError,type SQL} from './tracker-common.j
 export interface ResourceSpec {table:string;columns:string;search:string;scope?:string;admin?:boolean;date?:string}
 const resources:Record<string,ResourceSpec>={
   directory:{table:'external_users',columns:'r.*,s.id AS participant_id',search:"r.name||' '||r.email||' '||r.external_id",admin:true},
-  people:{table:'salespeople',columns:'r.id,r.name,r.email,r.role,r.status,r.ghl_user_id,r.ghl_role,r.ghl_active,r.ghl_synced_at,r.team_id,r.manager_user_id,r.parent_salesperson_id,r.enrolled_at,r.referral_code',search:"r.name||' '||r.email",scope:'r.id'},
+  people:{table:'salespeople',columns:'r.id,r.name,r.email,r.role,r.status,r.ghl_user_id,r.ghl_role,r.ghl_active,r.ghl_synced_at,r.team_id,r.manager_user_id,r.parent_salesperson_id,r.enrolled_at,r.referral_code',search:"r.name||' '||r.email",scope:'r.id',date:'r.created_at'},
   teams:{table:'teams',columns:'r.*',search:'r.name',admin:true},
   logins:{table:'users',columns:'r.id,r.name,r.email,r.role,r.status,r.salesperson_id',search:"r.name||' '||r.email",admin:true},
   legacyPlans:{table:'commission_plans',columns:'r.*',search:'r.name',admin:true},
@@ -16,7 +16,7 @@ const resources:Record<string,ResourceSpec>={
   links:{table:'campaign_participants',columns:'r.*',search:'r.link_id',scope:'r.salesperson_id'},
   payments:{table:'payments',columns:'r.*,EXISTS(SELECT 1 FROM commission_ledger e WHERE e.tenant_id=r.tenant_id AND e.payment_id=r.id) AS has_earnings',search:"r.id||' '||COALESCE(r.event_key,'')||' '||r.notes",scope:'r.salesperson_id',date:'r.payment_date'},
   ledger:{table:'commission_ledger',columns:'r.*',search:"r.id||' '||COALESCE(r.explanation,'')",scope:'r.salesperson_id',date:'r.payment_date'},
-  payouts:{table:'payout_batches',columns:"r.*,(SELECT COALESCE(sum(s.amount_minor),0)::text FROM payout_settlements s WHERE s.tenant_id=r.tenant_id AND s.payout_id=r.id AND s.status='confirmed') AS settled_amount_minor",search:'r.id',scope:'r.salesperson_id',date:'r.created_at'},
+  payouts:{table:'payout_batches',columns:"r.*,(SELECT COALESCE(sum(s.amount_minor),0)::text FROM payout_settlements s WHERE s.tenant_id=r.tenant_id AND s.payout_id=r.id AND s.status='confirmed') AS settled_amount_minor",search:"r.id||' '||COALESCE((SELECT sp.name FROM salespeople sp WHERE sp.tenant_id=r.tenant_id AND sp.id=r.salesperson_id),'')",scope:'r.salesperson_id',date:'r.created_at'},
   settlements:{table:'payout_settlements',columns:'r.*',search:'r.reference',scope:'settlement',date:'r.settled_at'},
   attribution:{table:'attribution_events',columns:'r.*',search:"r.reason||' '||r.evidence",scope:'client',date:'r.occurred_at'},
   reviews:{table:'attribution_reviews',columns:'r.*',search:'r.reason',admin:true,date:'r.created_at'},
@@ -46,6 +46,7 @@ export async function filteredQuery(db:SQL,u:SessionUser,resource:string,f:any={
     else if(s.scope==='plan')where.push(`EXISTS(SELECT 1 FROM plan_assignments a WHERE a.tenant_id=r.tenant_id AND a.plan_version_id=r.id AND a.salesperson_id=ANY(${q}::text[]))`);
     else if(s.scope)where.push(`${s.scope}=ANY(${q}::text[])`);else where.push('false');
   }
+  if(f.folderId&&resource==='media')where.push(`r.folder_id=${add(String(f.folderId))}`);
   if(f.q)where.push(`(${s.search}) ILIKE ${add('%'+String(f.q).slice(0,200)+'%')}`);
   if(f.id)where.push(`r.${resource==='directory'?'external_id':resource==='links'?'link_id':'id'}=${add(String(f.id))}`);
   const periodDate=s.date?(s.date==='r.payment_date'?s.date:`NULLIF(${s.date}::text,'')::timestamptz::date::text`):null;
@@ -53,6 +54,7 @@ export async function filteredQuery(db:SQL,u:SessionUser,resource:string,f:any={
   if(f.to&&periodDate)where.push(`${periodDate}<=${add(String(f.to))}`);
   if(f.status&&resource==='payments')where.push(`r.receipt_status=${add(String(f.status))}`);
   if(f.status&&resource==='directory')where.push(`r.active=${add(f.status==='active')}`);
+  if(f.payoutTab&&resource==='payouts'){const groups:Record<string,string[]>={pending:['draft','submitted'],approved:['approved','processing','failed','unknown'],paid:['paid','partially_paid'],denied:['rejected','cancelled']};if(groups[f.payoutTab])where.push(`r.status=ANY(${add(groups[f.payoutTab])}::text[])`);}
   if(f.status&&['people','leads','opportunities','campaigns','payouts','ledger','reviews','imports','goals','sync'].includes(resource))where.push(`r.${resource==='leads'?'attribution_status':'status'}=${add(String(f.status))}`);
   if(f.currency&&['payments','ledger','payouts','opportunities','goals'].includes(resource))where.push(`r.currency=${add(String(f.currency))}`);
   if(f.salespersonId&&resource==='people')where.push(`r.id=${add(String(f.salespersonId))}`);
@@ -76,7 +78,7 @@ export async function listResource(db:SQL,u:SessionUser,resource:string,f:any={}
   const q=await filteredQuery(db,u,resource,f),page=Math.max(1,Math.min(100000,Number(f.page)||1)),limit=Math.max(1,Math.min(100,Number(f.limit)||50));
   const total=Number((await db.query(`SELECT count(*)::text AS n ${q.base}`,q.values)).rows[0].n);
   const key=resource==='directory'?'r.external_id':resource==='links'?'r.link_id':'r.id';
-  const rows=(await db.query(`SELECT ${q.columns} ${q.base} ORDER BY ${f.sort==='name'&&['people','directory','teams','opportunities','campaigns','plans','legacyPlans'].includes(resource)?(resource==='plans'?'p.name':'r.name'):key} ${f.direction==='desc'?'DESC':'ASC'}, ${key} LIMIT $${q.values.length+1} OFFSET $${q.values.length+2}`,[...q.values,Math.floor(limit),Math.floor((page-1)*limit)])).rows;
+  const rows=(await db.query(`SELECT ${q.columns} ${q.base} ORDER BY ${f.sort==='recent'&&resources[resource].date?resources[resource].date:f.sort==='name'&&['people','directory','teams','opportunities','campaigns','plans','legacyPlans'].includes(resource)?(resource==='plans'?'p.name':'r.name'):key} ${f.direction==='desc'?'DESC':'ASC'}, ${key} LIMIT $${q.values.length+1} OFFSET $${q.values.length+2}`,[...q.values,Math.floor(limit),Math.floor((page-1)*limit)])).rows;
   if(resource==='campaigns')for(const campaign of rows){
     const ids=await visibleIds(db,u);
     campaign.clicks=(await db.query('SELECT count(*)::text AS n FROM referral_clicks WHERE tenant_id=$1 AND campaign_id=$2 AND ($3::text[] IS NULL OR salesperson_id=ANY($3::text[]))',[u.tenantId,campaign.id,ids])).rows[0].n;
@@ -129,7 +131,7 @@ export async function report(db:SQL,u:SessionUser,f:any={}){
   const byOwner=(await db.query(`SELECT r.salesperson_id AS id,count(*)::text AS n ${inventory.base} AND r.salesperson_id IS NOT NULL GROUP BY r.salesperson_id`,inventory.values)).rows;
   const cashByPerson=(await db.query(`SELECT r.salesperson_id AS id,r.currency,sum(r.amount_minor)::text AS amount ${payments.base} AND r.receipt_status='confirmed' AND r.amount_minor IS NOT NULL GROUP BY r.salesperson_id,r.currency`,payments.values)).rows;
   const earningsByPerson=(await db.query(`SELECT r.salesperson_id AS id,r.currency,sum(r.amount_minor)::text AS amount ${ledger.base} AND r.amount_minor IS NOT NULL AND r.is_projection=false GROUP BY r.salesperson_id,r.currency`,ledger.values)).rows;
-  const people=await filteredQuery(db,u,'people',f);const names=(await db.query(`SELECT r.id,r.name ${people.base}`,people.values)).rows;
+  const people=await filteredQuery(db,u,'people',{...f,from:'',to:''});const names=(await db.query(`SELECT r.id,r.name ${people.base}`,people.values)).rows;
   const performance=names.map(p=>({id:p.id,name:p.name,closed:byCloser.find(r=>r.id===p.id)?.n||'0',generated:byGenerator.find(r=>r.id===p.id)?.n||'0',assigned:byOwner.find(r=>r.id===p.id)?.n||'0',revenue:cashByPerson.filter(r=>r.id===p.id),earnings:earningsByPerson.filter(r=>r.id===p.id)})).sort((a,b)=>Number(b.generated)-Number(a.generated)||a.name.localeCompare(b.name)).slice(0,50);
   const attention=isAdmin(u)?(await db.query(`SELECT (SELECT count(*)::text FROM payout_batches WHERE tenant_id=$1 AND status='submitted') AS pending_approvals,(SELECT count(*)::text FROM import_reviews WHERE tenant_id=$1 AND status='pending') AS pending_imports,(SELECT count(*)::text FROM attribution_reviews WHERE tenant_id=$1 AND status='pending') AS attribution_conflicts,(SELECT count(*)::text FROM sync_runs WHERE tenant_id=$1 AND status='failed') AS failed_syncs`,[u.tenantId])).rows[0]:null;
   const recent=isAdmin(u)?(await db.query('SELECT entity_type,action,created_at FROM audit_logs WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 10',[u.tenantId])).rows:[];

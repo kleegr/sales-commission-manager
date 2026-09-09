@@ -1,3 +1,4 @@
+import {saveSalesman,importSalesmen,createStructure,preferences,mediaFolder,saveMediaFile,readFile,experienceRead} from './_lib/tracker-experience.js';
 import type {VercelRequest,VercelResponse} from '@vercel/node';
 import {getSessionUser} from './_lib/auth.js';
 import {csrfOk} from './_lib/http.js';
@@ -14,6 +15,7 @@ import {previewSync,approveImport} from './_lib/tracker-sync.js';
 export const config={maxDuration:60};
 async function workspaceRead<T>(tenantId:string,fn:(db:SQL)=>Promise<T>){return database.transaction(async db=>{await db.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');const w=(await db.query('SELECT timezone FROM tracker_workspaces WHERE tenant_id=$1',[tenantId])).rows[0];if(w)await db.query("SELECT set_config('TimeZone',$1,true)",[w.timezone]);return fn(db);});}
 export const mutations:Record<string,(db:SQL,u:any,b:any)=>Promise<any>>={
+  salesman:saveSalesman,importSalesmen,structure:createStructure,preferences,mediaFolder,mediaFile:saveMediaFile,
   enroll,participant:saveParticipant,team:saveTeam,plan:publishPlan,assignment:assignPlan,
   lead:createLead,editLead,attribution:attributeLead,attributionCandidate,opportunity:saveOpportunity,campaign:saveCampaign,
   payment:recordPayment,refund:recordRefund,award:recordAward,adjustment:recordAdjustment,allocateReceipt,closePartialPayout,payout:createPayout,payoutAction:transitionPayout,settlement:settlePayout,approveImport,
@@ -56,12 +58,14 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
         const rows=[];for(const t of tenants){const summary=await workspaceRead(t.id,db=>report(db,{...u,tenantId:t.id},{})),w=(await database.query('SELECT payout_terms FROM tracker_workspaces WHERE tenant_id=$1',[t.id])).rows[0];rows.push({id:t.id,name:t.name,locationId:t.ghl_location_id,lastSync:t.kleegr_last_sync_at,minorDigits:w?.payout_terms?.minorDigits??2,receipts:summary.receipts,earnings:summary.earnings,cohort:summary.cohort});}
         return res.json({scope:agency?'agency':'tenant',rows,total,page});
       }
+      if(resource==='file'){const file=await workspaceRead(u.tenantId,db=>readFile(db,u,String(req.query.id||'')));res.setHeader('Content-Type',file.mime);res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Content-Disposition',`attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`);return res.send(Buffer.from(file.content));}
+      if(['preferences','folders','salesmen','overview'].includes(resource))return res.json(await workspaceRead(u.tenantId,db=>experienceRead(db,u,resource,req.query)));
       if(resource==='report')return res.json(await workspaceRead(u.tenantId,db=>report(db,u,req.query)));
       if(req.query.export==='csv'){res.setHeader('Content-Type','text/csv; charset=utf-8');res.setHeader('Content-Disposition',`attachment; filename="${resource}.csv"`);return res.send(await workspaceRead(u.tenantId,db=>exportResource(db,u,resource,req.query)));}
       return res.json(await workspaceRead(u.tenantId,db=>listResource(db,u,resource,req.query)));
     }
     if(!csrfOk(req))return res.status(403).json({error:'csrf_check_failed'});
-    const b=typeof req.body==='string'?JSON.parse(req.body):req.body||{};if(JSON.stringify(b).length>200000)throw new TrackerError('too_large','Request is too large.');
+    const b=typeof req.body==='string'?JSON.parse(req.body):req.body||{};if(JSON.stringify(b).length>(b.action==='mediaFile'?2900000:b.action==='importSalesmen'?1000000:200000))throw new TrackerError('too_large','Request is too large.');
     if(b.action==='previewSync')return res.json(await previewSync(u,b.data||{}));
     if(b.action==='simulate'){admin(u);const s=b.data||b;const version=(await database.query('SELECT config FROM plan_versions WHERE tenant_id=$1 AND id=$2',[u.tenantId,s.versionId])).rows[0];if(!version)throw new TrackerError('not_found','Plan version not found.');return res.json({rows:simulateExact(version.config,{event:'payment',amountMinor:s.amountMinor,taxMinor:s.taxMinor||'0',feeMinor:s.feeMinor||'0',discountMinor:'0',currency:version.config.currency,productId:s.productId||'',chargeNumber:1,date:dateOnly(s.date),beneficiaries:{referrer:'estimated-referrer',owner:'estimated-owner',closer:'estimated-closer',parent:'estimated-parent',grandparent:'estimated-grandparent'}},s.months,s.newCustomers,s.churnBps),currency:version.config.currency,estimated:true,persisted:false});}
     const mutate=mutations[b.action];if(!mutate)throw new TrackerError('unknown_action','Action is not available.');

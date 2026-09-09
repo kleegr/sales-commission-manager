@@ -29,7 +29,7 @@ const ALL_ROLES: Role[] = [
 ];
 
 console.log("\n[Roles \u00b7 homePath]");
-ok("agency owner lands on the agency portal", homePath("owner") === "/agency");
+ok("owner lands in the current workspace", homePath("owner") === "/workspace-overview");
 ok("owner does NOT land on the single-tenant dashboard", homePath("owner") !== "/");
 ok("sub-account admin lands on the dashboard/workspace", homePath("admin") === "/");
 ok("sales manager lands on the (team) dashboard", homePath("sales_manager") === "/");

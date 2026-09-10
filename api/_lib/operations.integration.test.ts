@@ -98,6 +98,43 @@ try{
  await check('checkout requires confirmed payment and queues multi-product baskets for review',async()=>{payment.status='pending';assert.equal((await reconcileCheckout(db,'a',registered.id,reader)).status,'awaiting_payment');payment.status='succeeded';order.items.push({product:{_id:'other'}});await assert.rejects(()=>reconcileCheckout(db,'a',registered.id,reader),/Multi-product/);order.items.pop();});
  await check('verified live checkout posts one receipt, attributes the customer and deduplicates retries',async()=>{await db.query("UPDATE campaigns SET tracking_policy=jsonb_set(tracking_policy,'{automation}','\"live\"') WHERE id=$1",[campaign]);order._id='order-live';order.liveMode=true;payment.entityId=order._id;payment.liveMode=true;payment._id='transaction-live';const e=await tx((sql:any)=>registerCheckout(sql,click.clickId,{orderId:order._id,trackingId:order.trackingId}));const before=await number('payments');assert.equal((await reconcileCheckout(db,'a',e.id,reader)).status,'auto_posted');await reconcileCheckout(db,'a',e.id,reader);assert.equal(await number('payments'),before+1);const lead=(await db.query("SELECT * FROM clients WHERE ghl_contact_id='customer-auto'")).rows[0];assert.equal(lead.referrer_id,sp);payment.amountRefunded=20;await reconcileCheckout(db,'a',e.id,reader);await reconcileCheckout(db,'a',e.id,reader);assert.equal(await number('payments'),before+2);});
 
+ await check('campaign dashboard separates test sales from live money and includes refunds',async()=>{
+  const {campaignActivity}=await import('./campaign-activity.js');const r=await campaignActivity(db,u,{campaignId:campaign});
+  assert.equal(r.total,2);assert.equal(r.summary.find((s:any)=>s.mode==='test').revenue_minor,'10000');assert.equal(r.summary.find((s:any)=>s.mode==='test').commission_minor,'1000');
+  assert.equal(r.summary.find((s:any)=>s.mode==='live').revenue_minor,'8000');assert.equal(r.summary.find((s:any)=>s.mode==='live').commission_minor,'800');
+  assert.equal(r.rows[0].salesperson_name,'Sales Test');assert.equal((await campaignActivity(db,u,{campaignId:campaign,mode:'test'})).total,1);
+  assert.equal((await campaignActivity(db,{...u,tenantId:'b'},{}).catch(()=>({total:0}))).total,0);
+  assert.equal((await campaignActivity(db,{...u,role:'salesperson',salespersonId:'not-assigned'},{})).total,0);
+  assert.equal((await campaignActivity(db,{...u,role:'salesperson',salespersonId:sp},{})).total,2);
+  assert.equal((await campaignActivity(db,u,{from:'2099-01-01'})).total,0);
+  assert.equal((await campaignActivity(db,u,{salespersonId:'other'})).total,0);
+ });
+
+ await check('one salesman can promote two campaigns with different links and commission rates',async()=>{
+  const {createStructure}=await import('./tracker-experience.js');const {campaignActivity}=await import('./campaign-activity.js');const {listResource}=await import('./tracker-read.js');
+  const person=(await tx((c:any)=>saveParticipant(c,u,{name:'Multi Campaign Salesman',email:'multi@example.test',role:'salesperson',status:'active'}))).id;
+  const campaigns=[];
+  for(const rate of ['1000','2000']){
+   const campaign=(await tx((c:any)=>createStructure(c,u,{name:`Campaign ${rate}`,status:'active',effectiveFrom:'2026-01-01',config:{...plan,rules:[{...plan.rules[0],value:rate}]},participantIds:[person],conversionMode:'external',destinationUrl:'https://example.com/checkout'}))).id;
+   await db.query("UPDATE campaigns SET tracking_policy=tracking_policy||$2::jsonb WHERE id=$1",[campaign,JSON.stringify({automation:'auto',source:{selection:{id:'funnel-a',checkout:{products:[{productId:'product-a'}]}}}})]);
+   const link=(await listResource(db,u,'links',{campaignId:campaign,salespersonId:person})).rows[0];assert.equal(link.campaign_context.name,`Campaign ${rate}`);campaigns.push(link.link_id);
+   const click=await tx((c:any)=>referralClick(c,link.link_id));const order={_id:`order-${rate}`,altId:'location-a',trackingId:`tracking-${rate}-1234567890`,source:{id:'funnel-a'},liveMode:false,currency:'USD',createdAt:new Date().toISOString(),contactId:`contact-${rate}`,items:[{product:{_id:'product-a'}}]};
+   const payment={_id:`payment-${rate}`,entityId:order._id,altId:'location-a',contactId:order.contactId,liveMode:false,currency:'USD',amount:100,status:'succeeded',chargeId:`charge-${rate}`,paymentProviderType:'stripe',paymentProviderConnectedAccount:'account-auto',createdAt:order.createdAt};
+   const reader:any=async(_l:string,resource:string)=>({payload:resource==='order'?order:{data:[payment],totalCount:1}});
+   const e=await tx((c:any)=>registerCheckout(c,click.clickId,{orderId:order._id,trackingId:order.trackingId}));await reconcileCheckout(db,'a',e.id,reader);await reconcileCheckout(db,'a',e.id,reader);
+   const report=await campaignActivity(db,u,{campaignId:campaign});assert.equal(report.total,1);assert.equal(report.rows[0].commission_minor,rate);assert.equal(report.rows[0].mode,'test');assert.equal(report.rows[0].salesperson_id,person);
+   // The same real customer can buy through another campaign without rewriting their original attribution.
+   order._id=`live-${rate}`;order.liveMode=true;order.contactId='customer-auto';payment.entityId=order._id;payment.contactId=order.contactId;payment.liveMode=true;payment._id=`live-payment-${rate}`;payment.chargeId=`live-charge-${rate}`;
+   const live=await tx((c:any)=>registerCheckout(c,click.clickId,{orderId:order._id,trackingId:order.trackingId}));await reconcileCheckout(db,'a',live.id,reader);await reconcileCheckout(db,'a',live.id,reader);
+   const liveReport=await campaignActivity(db,u,{campaignId:campaign,mode:'live'});assert.equal(liveReport.total,1);assert.equal(liveReport.rows[0].commission_minor,rate);assert.equal(liveReport.rows[0].salesperson_id,person);
+   assert.equal((await db.query("SELECT referrer_id FROM clients WHERE ghl_contact_id='customer-auto'")).rows[0].referrer_id,sp);
+   order._id=`order-${rate}`;order.contactId=`contact-${rate}`;payment.entityId=order._id;payment.contactId=order.contactId;
+
+   order.liveMode=true;await assert.rejects(()=>reconcileCheckout(db,'a',e.id,reader),/does not match/);
+  }
+  assert.notEqual(campaigns[0],campaigns[1]);assert.equal((await listResource(db,{...u,role:'salesperson',salespersonId:sp},'links',{salespersonId:person})).total,0);
+ });
+
  }
  console.log(`${count} connected operations scenarios passed.`);
 }finally{await pg.close();}

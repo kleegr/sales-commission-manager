@@ -62,7 +62,7 @@ export async function createStructure(db:SQL,u:SessionUser,b:any){
  admin(u);await lock(db,u.tenantId);
  const version=await publishPlan(db,u,{name:b.name,description:b.description,effectiveFrom:b.effectiveFrom,config:b.config,preview:b.preview});
  if(b.preview)return version;
- const created=await saveCampaign(db,u,{...b,status:b.status||'draft',conversionMode:b.conversionMode||'native',windowDays:b.windowDays||30,versionId:version.id});
+ const created=await saveCampaign(db,u,{...b,startsAt:b.startsAt||b.effectiveFrom,status:b.status||'draft',conversionMode:b.conversionMode||'native',windowDays:b.windowDays||30,versionId:version.id});
  for(const spId of new Set<string>(b.participantIds||[]))await assignPlan(db,u,{salespersonId:spId,versionId:version.id,effectiveFrom:b.effectiveFrom,campaignId:created.id});
  return{id:created.id,versionId:version.id};
 }

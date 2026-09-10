@@ -1,3 +1,4 @@
+import {campaignActivity} from './_lib/campaign-activity.js';
 import {retryCheckout} from './_lib/automatic-checkout.js';
 import {campaignCatalog,loadCampaignPage} from './_lib/campaign-sources.js';
 import {DirectoryError} from './_lib/ghl-directory.js';
@@ -21,6 +22,7 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
   if(resource==='package'){if(!manager&&!accountant)throw new TrackerError('forbidden','Administrator or accountant access is required.',403);const month=String(req.query.month||'');monthRange(month);const bytes=await database.transaction(async db=>{await db.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');const w=(await db.query('SELECT timezone FROM tracker_workspaces WHERE tenant_id=$1',[u.tenantId])).rows[0];if(w)await db.query("SELECT set_config('TimeZone',$1,true)",[w.timezone]);return monthlyPackage(db,{...u,role:'admin'},month);});res.setHeader('Content-Type','application/zip');res.setHeader('Content-Disposition',`attachment; filename="sales-tracker-${month}.zip"`);return res.send(bytes);}
   if(resource==='taxFile'){const f=await database.transaction(db=>taxDownload(db,u,String(req.query.id||'')));res.setHeader('Content-Type','application/pdf');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Content-Disposition',`attachment; filename*=UTF-8''${encodeURIComponent(f.filename)}`);return res.send(f.content);}
   if(resource==='tax'){if(accountant||u.role==='sales_manager')throw new TrackerError('forbidden','Tax records require administrator or participant access.',403);return res.json({rows:(await database.query('SELECT id,salesperson_id,kind,filename,status,review_note,created_at FROM tracker_tax_documents WHERE tenant_id=$1 AND ($2::boolean OR salesperson_id=$3) ORDER BY created_at DESC LIMIT 100',[u.tenantId,manager,u.salespersonId])).rows});}
+  if(resource==='campaignActivity')return res.json(await campaignActivity(database,u,req.query));
   admin(u);
   if(resource==='transfers')return res.json({rows:(await database.query('SELECT * FROM tracker_transfer_attempts WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 100',[u.tenantId])).rows});
   if(resource==='campaignCatalog')return res.json(await campaignCatalog(database,u,String(req.query.kind||'funnel'),Math.max(1,Math.min(100,Math.floor(Number(req.query.page)||1)))));

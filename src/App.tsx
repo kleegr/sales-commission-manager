@@ -1,4 +1,6 @@
-import Operations from './pages/tracker/Operations';
+import {lazy,Suspense} from 'react';
+import {PreferencesProvider} from './components/tracker/Experience';
+const Operations = lazy(()=>import('./pages/tracker/Operations'));
 import {TrackerProvider,TrackerGate} from './components/TrackerGate';
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Layout } from "./components/layout/Layout";
@@ -8,26 +10,26 @@ import { featureAllowsPath } from "./lib/features";
 import { canAccess, homePath, type Role } from "./lib/roles";
 import { EmptyState } from "./components/ui";
 import { Lock } from "lucide-react";
-import Dashboard from "./pages/Dashboard";
-import People from "./pages/People";
-import SalespersonDetail from "./pages/SalespersonDetail";
-import Plans from "./pages/Plans";
-import PlanBuilder from "./pages/PlanBuilder";
-import PlanProjection from "./pages/PlanProjection";
-import Clients from "./pages/Clients";
-import ClientDetail from "./pages/ClientDetail";
-import Payments from "./pages/Payments";
-import Ledger from "./pages/Ledger";
-import Payouts from "./pages/Payouts";
-import Reports from "./pages/Reports";
-import Goals from "./pages/Goals";
-import SalespersonPortal from "./pages/SalespersonPortal";
-import AffiliatePortal from "./pages/AffiliatePortal";
-import Agency from "./pages/Agency";
-import Documents from "./pages/Documents";
-import Presentation from "./pages/Presentation";
-import Settings from "./pages/Settings";
-import KleegrIntegration from "./pages/KleegrIntegration";
+const Dashboard = lazy(()=>import('./pages/Dashboard'));
+const People = lazy(()=>import('./pages/People'));
+const SalespersonDetail = lazy(()=>import('./pages/SalespersonDetail'));
+const Plans = lazy(()=>import('./pages/Plans'));
+const PlanBuilder = lazy(()=>import('./pages/PlanBuilder'));
+const PlanProjection = lazy(()=>import('./pages/PlanProjection'));
+const Clients = lazy(()=>import('./pages/Clients'));
+const ClientDetail = lazy(()=>import('./pages/ClientDetail'));
+const Payments = lazy(()=>import('./pages/Payments'));
+const Ledger = lazy(()=>import('./pages/Ledger'));
+const Payouts = lazy(()=>import('./pages/Payouts'));
+const Reports = lazy(()=>import('./pages/Reports'));
+const Goals = lazy(()=>import('./pages/Goals'));
+const SalespersonPortal = lazy(()=>import('./pages/SalespersonPortal'));
+const AffiliatePortal = lazy(()=>import('./pages/AffiliatePortal'));
+const Agency = lazy(()=>import('./pages/Agency'));
+const Documents = lazy(()=>import('./pages/Documents'));
+const Presentation = lazy(()=>import('./pages/Presentation'));
+const Settings = lazy(()=>import('./pages/Settings'));
+const KleegrIntegration = lazy(()=>import('./pages/KleegrIntegration'));
 
 /** Route guard: redirect to the role's home if it may not see this path, or
  *  show a "feature turned off" notice if the tenant has the feature disabled.
@@ -66,7 +68,7 @@ export default function App() {
   const role = (user?.role ?? "salesperson") as Role;
 
   return (
-    <TrackerProvider><Layout>
+    <TrackerProvider><PreferencesProvider><Layout><Suspense fallback={<p className="st-loading" role="status">Loading page…</p>}>
       <Routes>
         <Route path="/operations" element={<Guard><Operations /></Guard>} />
         <Route path="/" element={<Guard><TrackerGate resource="dashboard"><Dashboard /></TrackerGate></Guard>} />
@@ -97,6 +99,6 @@ export default function App() {
 <Route path="/sync-review" element={<Guard><TrackerGate resource="integrations" /></Guard>} />
         <Route path="*" element={<Navigate to={homePath(role)} replace />} />
       </Routes>
-    </Layout></TrackerProvider>
+    </Suspense></Layout></PreferencesProvider></TrackerProvider>
   );
 }

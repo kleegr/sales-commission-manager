@@ -8,7 +8,7 @@ import {admin,audit,database,dateOnly,id,lock,participant,required,trackerInstal
 import {enroll,saveParticipant,saveTeam,publishPlan,assignPlan} from './_lib/tracker-people.js';
 import {recordPayment,recordRefund,recordAward,recordAdjustment,allocateReceipt,closePartialPayout,createPayout,transitionPayout,settlePayout} from './_lib/tracker-finance.js';
 import {createLead,editLead,attributeLead,attributionCandidate,saveOpportunity,saveCampaign,safeDestination} from './_lib/tracker-attribution.js';
-import {listResource,report,exportResource} from './_lib/tracker-read.js';
+import {listResource,report,exportResource,payoutBalances} from './_lib/tracker-read.js';
 import {simulateExact,minor} from '../src/lib/exact-commission.js';
 import {previewSync,approveImport} from './_lib/tracker-sync.js';
 
@@ -60,6 +60,7 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
       }
       if(resource==='file'){const file=await workspaceRead(u.tenantId,db=>readFile(db,u,String(req.query.id||'')));res.setHeader('Content-Type',file.mime);res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Content-Disposition',`attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`);return res.send(Buffer.from(file.content));}
       if(['preferences','folders','salesmen','overview'].includes(resource))return res.json(await workspaceRead(u.tenantId,db=>experienceRead(db,u,resource,req.query)));
+      if(resource==='balances')return res.json(await workspaceRead(u.tenantId,db=>payoutBalances(db,u,req.query)));
       if(resource==='report')return res.json(await workspaceRead(u.tenantId,db=>report(db,u,req.query)));
       if(req.query.export==='csv'){res.setHeader('Content-Type','text/csv; charset=utf-8');res.setHeader('Content-Disposition',`attachment; filename="${resource}.csv"`);return res.send(await workspaceRead(u.tenantId,db=>exportResource(db,u,resource,req.query)));}
       return res.json(await workspaceRead(u.tenantId,db=>listResource(db,u,resource,req.query)));

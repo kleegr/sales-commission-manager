@@ -1,3 +1,4 @@
+import {lazy} from 'react';
 import CampaignActivity from '../../components/tracker/CampaignActivity';
 import {useState} from 'react';
 import {Upload,Plus} from 'lucide-react';
@@ -9,7 +10,7 @@ import {useTracker} from '../../components/TrackerGate';
 import {trackerPost,trackerCSV} from '../../lib/tracker-client';
 import {calculateExact,decimalToMinor,displayMinor,validatePlan,type ExactPlan} from '../../lib/exact-commission';
 import {Action,Badge,Empty,ExportIcon,Field,Header,Message,Pager,SearchBox,Steps,Tabs,useRemote,usePreferences} from '../../components/tracker/Experience';
-import TrackerPage from '../TrackerPage';
+const TrackerPage=lazy(()=>import('../TrackerPage'));
 export default function Structures(){
  const [tab,setTab]=useState('structures'),[q,setQ]=useState(''),[page,setPage]=useState(1),[revision,setRevision]=useState(0),[dialog,setDialog]=useState(false),[links,setLinks]=useState<any>(null),[notice,setNotice]=useState(''),[error,setError]=useState('');
  const [activity,setActivity]=useState<any>(null);

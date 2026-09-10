@@ -12,7 +12,8 @@ export type Role =
   | "sales_manager"
   | "salesperson"
   | "affiliate"
-  | "partner";
+  | "partner"
+  | "accountant";
 
 export const ROLE_LABEL: Record<Role, string> = {
   owner: "Agency Owner",
@@ -21,6 +22,7 @@ export const ROLE_LABEL: Record<Role, string> = {
   salesperson: "Salesperson",
   affiliate: "Affiliate",
   partner: "Partner",
+  accountant: "Accountant (read only)",
 };
 
 export const ADMIN_ROLES: Role[] = ["owner", "admin"];
@@ -28,6 +30,7 @@ export const SELF_ROLES: Role[] = ["salesperson", "affiliate", "partner"];
 
 /** Open the current workspace for owners; participants keep their own portal. */
 export function homePath(role: Role): string {
+  if (role === "accountant") return "/operations";
   if (role === "owner") return "/workspace-overview";
   if (role === "admin" || role === "sales_manager") return "/";
   return "/portal";
@@ -43,6 +46,7 @@ export function homePath(role: Role): string {
 // guard redirect owner -> /agency cleanly and hides the redundant Dashboard
 // nav item for the agency role.
 const ACCESS: Array<{ path: string; roles: Role[] }> = [
+  {path:"/operations",roles:["owner","admin","accountant","salesperson","affiliate","partner"]},
   {path:"/workspace-overview",roles:["owner","admin","sales_manager"]},
   {path:"/campaigns",roles:["owner","admin","sales_manager","salesperson","affiliate","partner"]},
   {path:"/opportunities",roles:["owner","admin","sales_manager"]},

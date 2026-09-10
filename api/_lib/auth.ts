@@ -25,6 +25,7 @@ export const ROLES = [
   "salesperson",
   "affiliate",
   "partner",
+  "accountant",
 ] as const;
 export type Role = (typeof ROLES)[number];
 
@@ -219,7 +220,10 @@ export function isEmbeddedClient(value: unknown): boolean {
 
 export async function getSessionUser(req: VercelRequest): Promise<SessionUser | null> {
   const real = await getRealSessionUser(req);
-  if (real) return real;
+  if (real) {
+    if (real.role === "accountant" && !["GET", "HEAD"].includes(req.method || "GET") && !String(req.url || "").startsWith("/api/auth/logout")) return null;
+    return real;
+  }
   // No valid password session — fall back to the review-mode demo user (or
   // null when demo mode is disabled, which keeps the login wall in place).
   return getDemoUser(req);

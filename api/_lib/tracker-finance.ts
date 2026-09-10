@@ -3,6 +3,10 @@ import {admin,audit,client,dateOnly,id,lock,participant,required,TrackerError,wo
 import {calculateExact,minor,refundDelta,type EarningsInput,type ExactPlan} from '../../src/lib/exact-commission.js';
 const receiptSignature=(b:any)=>JSON.stringify([b.clientId,b.date,b.amountMinor,b.currency,b.status,b.productId||'',b.taxMinor||'0',b.feeMinor||'0',b.discountMinor||'0',b.opportunityId||null,b.source==='ghl'?'ghl':'manual',b.assignmentParticipantId||null,b.confirmUnattributed===true]);
 
+async function ancestry(db:SQL,u:SessionUser,referrer:string,input:EarningsInput){
+ const seen=new Set<string>();let cursor:string|null=referrer;
+ for(let level=0;cursor&&level<=10;level++){if(seen.has(cursor))throw new TrackerError('hierarchy_cycle','Resolve the referral hierarchy cycle before calculating.');seen.add(cursor);const person=await participant(db,u,cursor);if(level>0){const key=level===1?'parent':level===2?'grandparent':`tier_${level}`;input.beneficiaries[key as keyof typeof input.beneficiaries]=person.id;}cursor=person.parent_salesperson_id;}
+}
 export async function recordPayment(db:SQL,u:SessionUser,b:any){
   admin(u);await lock(db,u.tenantId);const w=await workspace(db,u),eventKey=required(b.eventKey,'Receipt idempotency key',200);
   const duplicate=(await db.query('SELECT * FROM payments WHERE tenant_id=$1 AND event_key=$2',[u.tenantId,eventKey])).rows[0];
@@ -17,7 +21,7 @@ export async function recordPayment(db:SQL,u:SessionUser,b:any){
   const productId=String(b.productId||'');
   const chargeNumber=Number((await db.query("SELECT count(*)::text AS n FROM payments WHERE tenant_id=$1 AND client_id=$2 AND receipt_status='confirmed' AND parent_payment_id IS NULL AND financial_inputs->>'productId'=$3",[u.tenantId,lead.id,productId])).rows[0].n)+1;
   const inputs:EarningsInput={event:'payment',amountMinor:amount.toString(),taxMinor:String(b.taxMinor||'0'),feeMinor:String(b.feeMinor||'0'),discountMinor:String(b.discountMinor||'0'),currency:b.currency,productId,chargeNumber,date,beneficiaries:{referrer:lead.referrer_id||undefined,owner:lead.salesperson_id||undefined,closer:lead.closer_id||undefined}};
-  if(lead.referrer_id){const generator=await participant(db,u,lead.referrer_id);inputs.beneficiaries.parent=generator.parent_salesperson_id||undefined;if(generator.parent_salesperson_id)inputs.beneficiaries.grandparent=(await participant(db,u,generator.parent_salesperson_id)).parent_salesperson_id||undefined;}
+  if(lead.referrer_id)await ancestry(db,u,lead.referrer_id,inputs);
   if([inputs.taxMinor,inputs.feeMinor,inputs.discountMinor].some(v=>minor(v)<0n)||minor(inputs.taxMinor)+minor(inputs.feeMinor)>amount)throw new TrackerError('invalid_breakdown','Tax and fees must not exceed collected cash.');
   const paymentId=confirming?duplicate.id:id('pay');
   const versions:{version:any;earnings:ReturnType<typeof calculateExact>}[]=[];
@@ -69,7 +73,7 @@ export async function allocateReceipt(db:SQL,u:SessionUser,b:any){
   const versions=(await db.query(`SELECT v.*,a.id AS assignment_id FROM plan_assignments a JOIN plan_versions v ON v.tenant_id=a.tenant_id AND v.id=a.plan_version_id WHERE a.tenant_id=$1 AND a.salesperson_id=$2 AND a.effective_from<=$3::date AND (a.effective_to IS NULL OR a.effective_to>=$3::date) AND (a.product_id IS NULL OR a.product_id=$4) AND (a.campaign_id IS NULL OR a.campaign_id=$5)`,[u.tenantId,basis,p.payment_date,p.financial_inputs.productId||'',p.campaign_id])).rows;
   if(versions.length!==1)throw new TrackerError('assignment_required','Exactly one reviewed assignment must cover the original receipt date.');const v=versions[0];
   const input:EarningsInput={...p.financial_inputs,event:'payment',amountMinor:String(p.amount_minor),currency:p.currency,date:p.payment_date,beneficiaries:{referrer:lead.referrer_id||undefined,owner:lead.salesperson_id||undefined,closer:lead.closer_id||undefined}};
-  if(lead.referrer_id){const generator=await participant(db,u,lead.referrer_id);input.beneficiaries.parent=generator.parent_salesperson_id||undefined;if(generator.parent_salesperson_id)input.beneficiaries.grandparent=(await participant(db,u,generator.parent_salesperson_id)).parent_salesperson_id||undefined;}
+  if(lead.referrer_id)await ancestry(db,u,lead.referrer_id,input);
   const earnings=calculateExact(v.config,input);
   const first=(await db.query("SELECT id FROM payments WHERE tenant_id=$1 AND client_id=$2 AND receipt_status='confirmed' AND parent_payment_id IS NULL ORDER BY created_at,id LIMIT 1",[u.tenantId,lead.id])).rows[0];if(first?.id===p.id)earnings.push(...calculateExact(v.config,{...input,event:'sale'}));
   if(!earnings.length)throw new TrackerError('no_qualifying_rules','No rules qualify for this receipt.');
@@ -93,7 +97,7 @@ export async function recordAward(db:SQL,u:SessionUser,b:any){
   const previous=(await db.query('SELECT id FROM commission_ledger WHERE tenant_id=$1 AND applied_inputs->>\'awardKey\'=$2',[u.tenantId,key])).rows;if(previous.length)return{duplicate:true,ids:previous.map(r=>r.id)};
   if(b.event==='fixed_compensation'&&(await db.query(`SELECT id FROM commission_ledger WHERE tenant_id=$1 AND salesperson_id=$2 AND payment_type='fixed_compensation' AND applied_inputs->>'periodFrom'<=$4 AND applied_inputs->>'periodTo'>=$3`,[u.tenantId,sp.id,periodFrom,periodTo])).rows.length)throw new TrackerError('overlapping_period','A fixed compensation award already covers part of this period.');
   const inputs:EarningsInput={event:b.event,amountMinor:'0',taxMinor:'0',feeMinor:'0',discountMinor:'0',currency:w.currency,productId:String(b.productId||''),chargeNumber:1,date,beneficiaries:{referrer:sp.id,owner:lead?.salesperson_id||sp.id,closer:lead?.closer_id||undefined}};
-  inputs.beneficiaries.parent=sp.parent_salesperson_id||undefined;if(sp.parent_salesperson_id)inputs.beneficiaries.grandparent=(await participant(db,u,sp.parent_salesperson_id)).parent_salesperson_id||undefined;
+  await ancestry(db,u,sp.id,inputs);
   const earnings=calculateExact(version.config,inputs);if(!earnings.length)throw new TrackerError('no_qualifying_rules','No rules in this version qualify for this event.');
   const ids:string[]=[];for(const [index,e]of earnings.entries()){if((await participant(db,u,e.beneficiaryId)).status!=='active')throw new TrackerError('inactive_beneficiary','Resolve inactive award beneficiaries before posting.');const earningId=id('award');ids.push(earningId);await db.query(`INSERT INTO commission_ledger(id,tenant_id,salesperson_id,client_id,commission_plan_id,commission_rule_id,payment_date,payment_type,amount_minor,currency,event_key,plan_version_id,applied_inputs,explanation,status,due_date,campaign_id,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,'pending',$15,$16,now(),now())`,[earningId,u.tenantId,e.beneficiaryId,lead?.id||null,version.plan_id,e.ruleId,date,b.event,e.amountMinor,w.currency,`${key}:${index}`,version.id,JSON.stringify({...inputs,awardKey:key,periodFrom,periodTo,plan:version.config,evidence:reason}),`${e.explanation} Qualification: ${reason}. This is a commission award, not payroll.`,e.dueDate,lead?.campaign_id||null]);}
   await audit(db,u,'award',ids[0],'qualified_award_posted',{event:b.event,periodFrom,periodTo,reason,versionId:version.id});return{ids};

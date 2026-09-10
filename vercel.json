@@ -4,8 +4,14 @@
   "outputDirectory": "dist",
   "framework": null,
   "rewrites": [
-    { "source": "/kleegr/launch", "destination": "/api/kleegr/launch" },
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+    {
+      "source": "/kleegr/launch",
+      "destination": "/api/kleegr/launch"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
   ],
   "headers": [
     {
@@ -16,6 +22,12 @@
           "value": "frame-ancestors 'self' https://*.gohighlevel.com https://*.leadconnectorhq.com https://*.msgsndr.com https://smart-productivity-pied.vercel.app https://crm.kleegr.com https://*.kleegr.com"
         }
       ]
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/operations-daily",
+      "schedule": "0 6 * * *"
     }
   ]
 }

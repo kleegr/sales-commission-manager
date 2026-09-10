@@ -20,11 +20,12 @@ export function ratio(n: bigint, numerator: bigint, denominator: bigint): bigint
   const v = n * numerator, sign = v < 0n ? -1n : 1n, a = v < 0n ? -v : v;
   return sign * ((a + denominator / 2n) / denominator);
 }
-export type Beneficiary = 'referrer' | 'owner' | 'closer' | 'parent' | 'grandparent';
+export type Beneficiary = 'referrer' | 'owner' | 'closer' | 'parent' | 'grandparent' | `tier_${number}`;
 export interface ExactRule {
   id: string; name: string; event: 'payment' | 'lead' | 'sale' | 'fixed_compensation';
   kind: 'percent' | 'fixed'; value: string; beneficiary: Beneficiary;
   base: 'gross' | 'net'; productId?: string; chargeFrom: number; chargeTo?: number;
+  releaseTiming?: 'days' | 'month_end' | 'manual';
   holdDays: number; group: string; stacking: 'exclusive' | 'stack'; priority: number;
   splits?: {beneficiary: Beneficiary; bps: number}[];
   tiers?: {thresholdMinor: string; bps: number}[];
@@ -36,7 +37,7 @@ export interface EarningsInput {
   beneficiaries: Partial<Record<Beneficiary, string>>;
 }
 export interface ExactEarning {ruleId:string; beneficiaryId:string; amountMinor:string; dueDate:string; explanation:string; inputs:EarningsInput}
-const BENEFICIARIES = ['referrer', 'owner', 'closer', 'parent', 'grandparent'];
+export const BENEFICIARIES = ['referrer', 'owner', 'closer', 'parent', 'grandparent',...Array.from({length:8},(_,i)=>`tier_${i+3}`)];
 export function validatePlan(plan: ExactPlan): void {
   if (!plan || !/^[A-Z]{3}$/.test(plan.currency) || ![0,2,3].includes(plan.minorDigits)) throw new Error('Select a currency and supported decimal precision.');
   if (!Array.isArray(plan.rules) || !plan.rules.length || plan.rules.length > 100) throw new Error('Provide 1–100 rules.');
@@ -44,6 +45,7 @@ export function validatePlan(plan: ExactPlan): void {
   for (const r of plan.rules) {
     if (!r.id || ids.has(r.id)) throw new Error('Rule IDs must be unique.'); ids.add(r.id);
     if (!r.name || !['payment','lead','sale','fixed_compensation'].includes(r.event) || !['percent','fixed'].includes(r.kind) || !BENEFICIARIES.includes(r.beneficiary) || !['gross','net'].includes(r.base) || !['exclusive','stack'].includes(r.stacking) || !r.group || !Number.isInteger(r.priority)) throw new Error('A rule has invalid qualification or stacking settings.');
+    if(r.releaseTiming&&!['days','month_end','manual'].includes(r.releaseTiming))throw new Error('Choose a supported release timing.');
     const v = minor(r.value); if (v < 0n || (r.kind === 'percent' && v > 10000n)) throw new Error('Percentages must be 0–100% (basis points); fixed amounts cannot be negative.');
     if (!Number.isInteger(r.chargeFrom) || r.chargeFrom < 1 || (r.chargeTo !== undefined && (!Number.isInteger(r.chargeTo) || r.chargeTo < r.chargeFrom)) || !Number.isInteger(r.holdDays) || r.holdDays < 0 || r.holdDays > 3650) throw new Error('Invalid charge range or hold period.');
     if (r.event !== 'payment' && r.kind !== 'fixed') throw new Error('Non-payment rewards must be fixed amounts.');
@@ -70,11 +72,11 @@ export function calculateExact(plan:ExactPlan, input:EarningsInput):ExactEarning
     const splits = r.splits || [{beneficiary:r.beneficiary,bps:10000}];
     if (splits.some(s=>!input.beneficiaries[s.beneficiary])) throw new Error(`Resolve ${r.name}'s beneficiaries before posting earnings.`);
     groups.add(r.group);
-    const due = new Date(`${input.date}T00:00:00Z`);due.setUTCDate(due.getUTCDate()+r.holdDays);
+    const due = new Date(`${input.date}T00:00:00Z`);if(r.releaseTiming==='month_end'){due.setUTCMonth(due.getUTCMonth()+1,0);}due.setUTCDate(due.getUTCDate()+r.holdDays);if(r.releaseTiming==='manual')due.setUTCFullYear(9999,11,31);
     let allocated=0n;
     splits.forEach((s,i)=> {const amount = i===splits.length-1 ? pool-allocated : pool*BigInt(s.bps)/10000n;allocated+=amount;
       out.push({ruleId:r.id,beneficiaryId:input.beneficiaries[s.beneficiary]!,amountMinor:amount.toString(),dueDate:due.toISOString().slice(0,10),inputs:input,
-        explanation:`${r.name}: ${r.kind==='percent'?`${rate/100n}${rate%100n?'.'+(rate%100n).toString().padStart(2,'0'):''}% of ${displayMinor(base.toString(),plan.currency,plan.minorDigits)}`:`fixed ${displayMinor(rate.toString(),plan.currency,plan.minorDigits)}`} = ${displayMinor(amount.toString(),plan.currency,plan.minorDigits)} after ${s.bps/100}% pool share. Earned ${input.date}; eligible ${due.toISOString().slice(0,10)}. Charge ${input.chargeNumber}. Gross is cash after discounts; net excludes supplied tax and fees. Value tiers apply to this receipt.`});});
+        explanation:`${r.name}: ${r.kind==='percent'?`${rate/100n}${rate%100n?'.'+(rate%100n).toString().padStart(2,'0'):''}% of ${displayMinor(base.toString(),plan.currency,plan.minorDigits)}`:`fixed ${displayMinor(rate.toString(),plan.currency,plan.minorDigits)}`} = ${displayMinor(amount.toString(),plan.currency,plan.minorDigits)} after ${s.bps/100}% pool share. Earned ${input.date}; eligible ${due.toISOString().slice(0,10)}. ${r.releaseTiming==='manual'?'Requires an audited manual release.':r.releaseTiming==='month_end'?'Hold begins at month end.':''} Charge ${input.chargeNumber}. Gross is cash after discounts; net excludes supplied tax and fees. Value tiers apply to this receipt.`});});
   }
   return out;
 }

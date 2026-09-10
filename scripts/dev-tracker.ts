@@ -22,6 +22,10 @@ const mutate=(action:string,b:any)=>pg.transaction((c:any)=>mutations[action](wr
 await mutate('setup',{currency:'USD',minorDigits:2,timezone:'Asia/Karachi'});
 await mutate('salesman',{firstName:'Jordan',lastName:'Test',email:'jordan@example.test'});
 await mutate('lead',{name:'Contact Example',email:'contact@example.test',source:'isolated verification',date:'2026-09-09'});
+const fixtureSalesman=(await pg.query("SELECT id FROM salespeople WHERE tenant_id='test' LIMIT 1")).rows[0] as any;
+const {recordAdjustment}=await import('../api/_lib/tracker-finance.js');
+for(const [key,amount]of [['local-positive','125000'],['local-offset','-25000']])await pg.transaction((c:any)=>recordAdjustment(wrap(c),testUser as any,{salespersonId:fixtureSalesman.id,amountMinor:amount,currency:'USD',date:'2026-01-01',eventKey:key,reason:'Isolated browser payout verification only'}));
+
 
 // Fake catalog for testing the source wizard; it cannot reach a provider.
 process.env.KLEEGR_READ_GATEWAY_ENABLED='1';process.env.KLEEGR_TOKEN_SERVICE_KEY='isolated-catalog-signing-key';

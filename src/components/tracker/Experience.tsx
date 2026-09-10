@@ -1,10 +1,10 @@
-import {useEffect,useState,type ReactNode} from 'react';
+import {useEffect,useState,useRef,type ReactNode} from 'react';
 import {Search,ChevronDown,Inbox,Download,Plus} from 'lucide-react';
 import {trackerGet} from '../../lib/tracker-client';
 export const defaults={title:'Sales Tracker',salesmanLabel:'Salesman',structureLabel:'Sales Commission Structure',payoutLabel:'Payout',mediaLabel:'Media',windowDays:'30',touch:'first',payoutTerms:'',portalMessage:''};
 export function useRemote(resource:string,params:Record<string,string>={},revision=0){
- const key=JSON.stringify(params),[state,setState]=useState<{data:any;loading:boolean;error:string}>({data:null,loading:true,error:''});
- useEffect(()=>{const c=new AbortController();setState(s=>({...s,loading:true,error:''}));const timer=setTimeout(()=>trackerGet(resource,JSON.parse(key),c.signal).then(data=>{if(!c.signal.aborted)setState({data,loading:false,error:''});}).catch(e=>{if(!c.signal.aborted)setState({data:null,loading:false,error:e.message});}),150);return()=>{c.abort();clearTimeout(timer);};},[resource,key,revision]);return state;
+ const key=JSON.stringify(params),lastKey=useRef(''),[state,setState]=useState<{data:any;loading:boolean;error:string}>({data:null,loading:true,error:''});
+ useEffect(()=>{const c=new AbortController(),identity=resource+key,changed=lastKey.current!==identity;lastKey.current=identity;setState(s=>({...s,loading:changed||!s.data,error:''}));const timer=setTimeout(()=>trackerGet(resource,JSON.parse(key),c.signal).then(data=>{if(!c.signal.aborted)setState({data,loading:false,error:''});}).catch(e=>{if(!c.signal.aborted)setState({data:null,loading:false,error:e.message});}),150);return()=>{c.abort();clearTimeout(timer);};},[resource,key,revision]);return state;
 }
 export function usePreferences(){const [revision,setRevision]=useState(0);useEffect(()=>{const listener=()=>setRevision(r=>r+1);window.addEventListener('tracker-preferences',listener);return()=>window.removeEventListener('tracker-preferences',listener);},[]);const result=useRemote('preferences',{},revision);return{...result,values:{...defaults,...result.data?.preferences}};}
 export function Header({title,description,children}:{title:string;description?:string;children?:ReactNode}){return <div className="st-heading"><div><h1>{title}</h1>{description&&<p>{description}</p>}</div><div className="st-actions">{children}</div></div>;}
@@ -21,3 +21,5 @@ export function Field({label,children,hint}:{label:string;children:ReactNode;hin
 export function Steps({labels,step}:{labels:string[];step:number}){return <ol className="st-steps">{labels.map((label,i)=><li className={step>=i?'is-current':''} key={label}><b>{i+1}</b>{label}</li>)}</ol>;}
 export function ExportIcon(){return <Download size={16}/>;}
 export function downloadText(text:string,name:string,type='text/csv'){const url=URL.createObjectURL(new Blob([text],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+
+export function useLiveRevision(){const [revision,setRevision]=useState(0);useEffect(()=>{const refresh=()=>{if(document.visibilityState==='visible')setRevision(n=>n+1);};const timer=setInterval(refresh,15000);document.addEventListener('visibilitychange',refresh);return()=>{clearInterval(timer);document.removeEventListener('visibilitychange',refresh);};},[]);return [revision,()=>setRevision(n=>n+1)] as const;}

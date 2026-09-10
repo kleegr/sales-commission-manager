@@ -1,13 +1,13 @@
-import Salesmen from '../pages/tracker/Salesmen';
-import Dashboard from '../pages/tracker/Dashboard';
-import Structures from '../pages/tracker/Structures';
-import Payouts from '../pages/tracker/Payouts';
-import Media from '../pages/tracker/Media';
-import Settings from '../pages/tracker/Settings';
-import {createContext,useContext,useEffect,useState,type ReactNode} from 'react';
+const Salesmen = lazy(()=>import('../pages/tracker/Salesmen'));
+const Dashboard = lazy(()=>import('../pages/tracker/Dashboard'));
+const Structures = lazy(()=>import('../pages/tracker/Structures'));
+const Payouts = lazy(()=>import('../pages/tracker/Payouts'));
+const Media = lazy(()=>import('../pages/tracker/Media'));
+const Settings = lazy(()=>import('../pages/tracker/Settings'));
+import {lazy,createContext,useContext,useEffect,useState,type ReactNode} from 'react';
 import {trackerGet} from '../lib/tracker-client';
-import TrackerPage from '../pages/TrackerPage';
-import TrackerAgency from '../pages/TrackerAgency';
+const TrackerPage = lazy(()=>import('../pages/TrackerPage'));
+const TrackerAgency = lazy(()=>import('../pages/TrackerAgency'));
 const Context=createContext<{installed:boolean;workspace:any;loading:boolean;error:string;refresh:()=>void}>({installed:false,workspace:null,loading:true,error:'',refresh:()=>{}});
 export function TrackerProvider({children}:{children:ReactNode}){const [status,setStatus]=useState({installed:false,workspace:null,loading:true,error:''});const [revision,setRevision]=useState(0);useEffect(()=>{const c=new AbortController();trackerGet('status',{},c.signal).then(b=>setStatus({...b,loading:false,error:''})).catch(e=>{if(!c.signal.aborted)setStatus(s=>({...s,loading:false,error:e.message}));});return()=>c.abort();},[revision]);return <Context.Provider value={{...status,refresh:()=>setRevision(n=>n+1)}}>{children}</Context.Provider>;}
 export const useTracker=()=>useContext(Context);

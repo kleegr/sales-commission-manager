@@ -1,3 +1,4 @@
+import {lazy} from 'react';
 import SalesmanLinks from '../../components/tracker/SalesmanLinks';
 import {useState} from 'react';
 import {Link} from 'react-router-dom';
@@ -10,7 +11,7 @@ import {trackerPost,trackerCSV} from '../../lib/tracker-client';
 import {displayMinor} from '../../lib/exact-commission';
 import {parseSalesmanCSV} from '../../lib/salesman-csv';
 import {Action,AddMenu,Avatar,Badge,Empty,ExportIcon,Field,Header,Message,Pager,SearchBox,Steps,Tabs,useRemote,usePreferences,downloadText} from '../../components/tracker/Experience';
-import TrackerPage from '../TrackerPage';
+const TrackerPage=lazy(()=>import('../TrackerPage'));
 
 export default function Salesmen(){
  const {user}=useAuth(),admin=['admin','owner'].includes(user?.role||''),{workspace}=useTracker(),pref=usePreferences();

@@ -1,8 +1,9 @@
+import {lazy} from 'react';
 import {useState} from 'react';
 import {Link} from 'react-router-dom';
 import {trackerPost} from '../../lib/tracker-client';
 import {Action,Field,Header,Message,usePreferences,defaults} from '../../components/tracker/Experience';
-import TrackerPage from '../TrackerPage';
+const TrackerPage=lazy(()=>import('../TrackerPage'));
 export default function TrackerSettings(){
  const [tab,setTab]=useState('defaults'),pref=usePreferences(),[draft,setDraft]=useState<Record<string,string>>({}),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false);
  const value={...pref.values,...draft},set=(k:string,v:string)=>{setDraft(d=>({...d,[k]:v}));setNotice('');};

@@ -108,8 +108,8 @@ async function goalProgress(db:SQL,u:SessionUser,goal:any){
   else if(['net_collected','commission_earned'].includes(goal.metric)){values.push(goal.currency);sql=`SELECT COALESCE(sum(amount_minor),0)::text AS n FROM ${goal.metric==='net_collected'?'payments':'commission_ledger'} WHERE tenant_id=$1 AND payment_date>=$2 AND payment_date<=$3 AND currency=$${values.length}${scope} AND ${goal.metric==='net_collected'?"receipt_status='confirmed'":'is_projection=false'}`;}
   return sql?(await db.query(sql,values)).rows[0].n:null;
 }
-export async function report(db:SQL,u:SessionUser,f:any={}){
-  const ledger=await filteredQuery(db,u,'ledger',f),payments=await filteredQuery(db,u,'payments',f);
+export async function payoutBalances(db:SQL,u:SessionUser,f:any={}){
+  const ledger=await filteredQuery(db,u,'ledger',f);
   const earnings=(await db.query(`SELECT r.currency,COALESCE(sum(r.amount_minor),0)::text AS earned_minor,
     COALESCE(sum(r.amount_minor) FILTER(WHERE r.status='pending' AND r.due_date<=CURRENT_DATE::text AND NOT EXISTS(SELECT 1 FROM payout_reservations pr WHERE pr.tenant_id=r.tenant_id AND pr.entry_id=r.id)),0)::text AS payable_minor,
     COALESCE(sum(r.amount_minor) FILTER(WHERE r.amount_minor<0 AND r.payment_type='refund'),0)::text AS reversed_minor,
@@ -118,6 +118,11 @@ export async function report(db:SQL,u:SessionUser,f:any={}){
     COALESCE(sum(r.amount_minor) FILTER(WHERE r.status='pending' AND r.due_date>CURRENT_DATE::text),0)::text AS held_minor,
     COALESCE(sum(r.amount_minor) FILTER(WHERE r.recovery_status='outstanding_offset'),0)::text AS outstanding_offset_minor
     ${ledger.base} AND r.amount_minor IS NOT NULL AND r.is_projection=false GROUP BY r.currency`,ledger.values)).rows;
+  return {earnings};
+}
+export async function report(db:SQL,u:SessionUser,f:any={}){
+  const ledger=await filteredQuery(db,u,'ledger',f),payments=await filteredQuery(db,u,'payments',f);
+  const {earnings}=await payoutBalances(db,u,f);
   const receipts=(await db.query(`SELECT r.currency,COALESCE(sum(r.amount_minor) FILTER(WHERE r.parent_payment_id IS NULL),0)::text AS collected_minor,COALESCE(sum(r.amount_minor) FILTER(WHERE r.parent_payment_id IS NOT NULL),0)::text AS refunded_minor,COALESCE(sum(r.amount_minor),0)::text AS net_collected_minor ${payments.base} AND r.amount_minor IS NOT NULL AND r.receipt_status='confirmed' GROUP BY r.currency`,payments.values)).rows;
   const leads=await filteredQuery(db,u,'leads',f),opps=await filteredQuery(db,u,'opportunities',{...f,from:'',to:''});
   const cohort=(await db.query(`SELECT count(*)::text AS leads,count(*) FILTER(WHERE r.referrer_id IS NOT NULL)::text AS attributed_leads,count(*) FILTER(WHERE r.customer_since IS NOT NULL)::text AS customers ${leads.base}`,leads.values)).rows[0];

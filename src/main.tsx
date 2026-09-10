@@ -1,9 +1,9 @@
-import React from "react";
+import React, {lazy,Suspense} from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
-import App from "./App";
-import ReferralJoin from './pages/ReferralJoin';
-import Login from "./pages/Login";
+const App = lazy(()=>import('./App'));
+const ReferralJoin = lazy(()=>import('./pages/ReferralJoin'));
+const Login = lazy(()=>import('./pages/Login'));
 import { AppProvider } from "./store/AppContext";
 import { AuthProvider, useAuth } from "./store/AuthContext";
 import { FeaturesProvider } from "./store/FeaturesContext";
@@ -50,7 +50,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <BrowserRouter>
       <SpPermissionsProvider>
         <AuthProvider>
-          <Root />
+          <Suspense fallback={<p role="status" className="st-loading">Loading application…</p>}><Root /></Suspense>
         </AuthProvider>
       </SpPermissionsProvider>
     </BrowserRouter>

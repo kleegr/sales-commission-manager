@@ -151,5 +151,30 @@ try{
   await check('media folders and file downloads enforce workspace and participant access',async()=>{const folder=await tx(c=>mediaFolder(c,u,{name:'Private assets'}));const file=await tx(c=>saveMediaFile(c,u,{title:'Agreement',fileName:'agreement.pdf',mime:'application/pdf',base64:Buffer.from('%PDF-1.4 isolated test').toString('base64'),folderId:folder.id,audience:'admin'}));const row=(await listResource(db,u,'media',{id:file.id})).rows[0],fileId=new URL(row.url,'https://test.example').searchParams.get('id')!;assert.equal((await readFile(db,u,fileId)).name,'agreement.pdf');await assert.rejects(readFile(db,self,fileId),{code:'not_found'});await assert.rejects(readFile(db,{...u,tenantId:'b'},fileId),{code:'not_found'});assert.equal((await experienceRead(db,self,'folders',{})).rows.length,0);assert.equal((await experienceRead(db,u,'folders',{})).rows.length,1);await assert.rejects(tx(c=>saveMediaFile(c,u,{title:'Bad',fileName:'bad.png',mime:'image/png',base64:Buffer.from('<html>bad</html>').toString('base64')})),{code:'invalid_file'});});
   await check('preferences persist without changing financial configuration or old structures',async()=>{const old=(await db.query('SELECT * FROM tracker_workspaces WHERE tenant_id=$1',[u.tenantId])).rows[0];await tx(c=>preferences(c,u,{title:'Sales Tracker',windowDays:'90',portalMessage:'Welcome'}));assert.equal((await experienceRead(db,u,'preferences',{})).preferences.windowDays,'90');assert.deepEqual((await db.query('SELECT * FROM tracker_workspaces WHERE tenant_id=$1',[u.tenantId])).rows[0],old);await assert.rejects(tx(c=>preferences(c,self,{title:'No'})),{code:'forbidden'});await assert.rejects(tx(c=>preferences(c,u,{windowDays:'999'})),{code:'invalid_window'});});
   await check('dashboard overview and payout tabs use scoped real data',async()=>{assert.ok(Array.isArray((await experienceRead(db,u,'overview',{})).trend));assert.equal((await listResource(db,u,'payouts',{payoutTab:'denied'})).rows.every((r:any)=>['rejected','cancelled'].includes(r.status)),true);});
+
+  await check('connected source selections are scoped, preserve page identity and generate stable attributed links',async()=>{
+    const {campaignCatalog,validateCampaignSource,normalizeAssets}=await import('./campaign-sources.js');
+    const oldFetch=globalThis.fetch,oldKey=process.env.KLEEGR_TOKEN_SERVICE_KEY,oldFlag=process.env.KLEEGR_READ_GATEWAY_ENABLED;
+    process.env.KLEEGR_TOKEN_SERVICE_KEY='isolated-signing-key';process.env.KLEEGR_READ_GATEWAY_ENABLED='1';
+    await db.query("UPDATE tenants SET ghl_location_id='location-a' WHERE id='a'");
+    const payload={funnels:[{_id:'f1',name:'Real-shaped funnel',type:'funnel',locationId:'location-a',url:'/offer',steps:[{id:'p1',name:'Checkout',url:'/checkout'}]},{_id:'w1',name:'Website',type:'website',steps:[]},{_id:'foreign',type:'funnel',locationId:'location-b',steps:[]}]};
+    globalThis.fetch=async()=>Response.json({locationId:'location-a',resource:'funnels',payload});
+    try{
+      assert.equal(normalizeAssets(payload,'funnel','location-a').rows.length,1);assert.equal(normalizeAssets(payload,'website','location-a').rows.length,1);
+      const asset=(await campaignCatalog(db,u,'funnel',1)).rows[0];const source={selection:asset.selection,proof:asset.proof,pageId:'p1'};
+      const body={name:'Connected source test',status:'active',conversionMode:'external',source,windowDays:30,participantIds:[alice,bob],destinationUrl:'https://example.com/checkout?offer=1#buy'};
+      assert.throws(()=>validateCampaignSource('b',body,body.destinationUrl),{code:'invalid_source'});
+      assert.throws(()=>validateCampaignSource('a',{...body,source:{...source,pageId:'wrong'}},body.destinationUrl),{code:'landing_page_required'});
+      assert.throws(()=>validateCampaignSource('a',body,'https://example.com/wrong'),{code:'landing_page_mismatch'});
+      assert.throws(()=>validateCampaignSource('a',{...body,source:{...source,selection:{...source.selection,name:'tampered'}}},body.destinationUrl),{code:'invalid_source'});
+      const created=await tx(c=>saveCampaign(c,u,body));const links=(await listResource(db,u,'links',{campaignId:created.id})).rows;
+      assert.equal(links.length,2);assert.notEqual(links[0].link_id,links[1].link_id);assert.ok(links[0].salesperson_name);
+      const stored=(await db.query('SELECT tracking_policy FROM campaigns WHERE id=$1',[created.id])).rows[0].tracking_policy.source;
+      await tx(c=>saveCampaign(c,u,{...body,id:created.id,source:stored}));assert.deepEqual((await listResource(db,u,'links',{campaignId:created.id})).rows.map((r:any)=>r.link_id),links.map((r:any)=>r.link_id));
+      const click=await tx(c=>referralClick(c,links[0].link_id)),url=new URL(click.destination!);assert.equal(url.pathname,'/checkout');assert.equal(url.searchParams.get('offer'),'1');assert.equal(url.hash,'#buy');assert.equal(url.searchParams.get('referralClick'),click.clickId);
+      assert.equal((await db.query('SELECT campaign_id FROM referral_clicks WHERE id=$1',[click.clickId])).rows[0].campaign_id,created.id);
+    }finally{globalThis.fetch=oldFetch;if(oldKey===undefined)delete process.env.KLEEGR_TOKEN_SERVICE_KEY;else process.env.KLEEGR_TOKEN_SERVICE_KEY=oldKey;if(oldFlag===undefined)delete process.env.KLEEGR_READ_GATEWAY_ENABLED;else process.env.KLEEGR_READ_GATEWAY_ENABLED=oldFlag;}
+  });
+
   console.log(`${checks} isolated Sales Tracker integration scenarios passed.`);
 }finally{await pg.close();}

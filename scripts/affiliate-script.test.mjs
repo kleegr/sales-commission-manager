@@ -19,7 +19,7 @@ const storage=new Storage();storage.setItem('orderResponse',JSON.stringify({orde
 
 // A checkout bundle may retain fetch before the bridge installs and persist only encrypted receipts.
 const jsonEvents=[];
-class OrderResponse {constructor(url,body){this.url=url;this.body=body;}async json(){return this.body;}}
+class OrderResponse {constructor(url,body){this.url=url;this.body=body;}async json(){return this.body;}async text(){return JSON.stringify(this.body);}}
 const cachedFetch=async url=>new OrderResponse(url,{order:{_id:'early-fetch-order',trackingId:'early-fetch-tracking-12345'},contact:{email:'never-send@example.com'}});
 const jsonContext={...context,Response:OrderResponse,window:{fetch:async(url,init)=>{const body=JSON.parse(init.body);jsonEvents.push(body);return Response.json(body.action==='visit'?{clickId:'early-click',expiresAt:Date.now()+100000}:body.action==='order'?{status:'test_calculated'}:{ok:true});}},localStorage:{getItem:()=>null,setItem:()=>{}}};
 vm.runInNewContext(code,jsonContext);await new Promise(r=>setTimeout(r,10));
@@ -32,3 +32,9 @@ await (await cachedFetch('https://services.leadconnectorhq.com/payments/stripe/v
 await (await cachedFetch('https://attacker.example/funnels/order-form/order')).json();
 assert.equal(jsonEvents.length,before);
 console.log('Pre-captured fetch is observed through exact order-response JSON decoding; customer fields and unrelated responses are untouched.');
+
+const textResponse=new OrderResponse('https://backend.leadconnectorhq.com/funnels/order-form/order',{order:{_id:'text-order',trackingId:'text-tracking-123456'},contact:{email:'never-send@example.com'}});
+const textBody=await textResponse.text();await new Promise(r=>setTimeout(r,10));
+assert.equal(JSON.parse(textBody).contact.email,'never-send@example.com');
+assert.deepEqual(jsonEvents.at(-1),{action:'order',clickId:'early-click',orderId:'text-order',trackingId:'text-tracking-123456'});
+console.log('GHL ofetch text decoding captures order identifiers while preserving the original text response.');

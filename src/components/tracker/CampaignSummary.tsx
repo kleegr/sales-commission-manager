@@ -5,7 +5,7 @@ export default function CampaignSummary({campaign:c}:{campaign:any}){
  const links=useRemote('links',{campaignId:c.id,limit:'100'});
  const policy=c.tracking_policy||{};
  const date=(v:string,fallback:string)=>v?new Date(String(v).slice(0,10)+'T12:00:00Z').toLocaleDateString(undefined,{timeZone:'UTC',year:'numeric',month:'short',day:'numeric'}):fallback;
- const tracking:Record<string,string>={verified_test:'Test checkout verified',verified:'Tracking verified',unverified:'Setup needs verification'};
+ const tracking:Record<string,string>={verified_test:'Test checkout verified',verified_sale:'Live purchase verified',verified_native:'Referral form verified',verified:'Tracking verified',configured:'Setup needs verification',unverified:'Setup needs verification'};
  const modes:Record<string,string>={auto:'Automatic — test and live purchases',test:'Test purchases only',live:'Live purchases',off:'Visits only'};
  return <div className="st-dialog st-campaign-summary">
  <div className="st-summary-intro"><Badge value={c.status}/><p>{c.description||'Campaign setup and referral activity.'}</p></div>

@@ -1,3 +1,4 @@
+import {gatewayPage,readGatewayEnabled} from './kleegr-read.js';
 import type {SessionUser} from './auth.js';
 import {admin,audit,database,dateOnly,id,lock,required,TrackerError,workspace,type Database,type SQL} from './tracker-common.js';
 import {resolveDirectoryTokens} from './ghl-directory.js';
@@ -6,14 +7,17 @@ import {recordPayment} from './tracker-finance.js';
 
 /** Only explicit resource previews use these endpoints. Directory's verified contract is unchanged. */
 export async function readProviderPage(locationId:string,resource:string,cursor:number,fetchImpl:typeof fetch=fetch){
-  const tokens=await resolveDirectoryTokens(locationId,fetchImpl),params=new URLSearchParams({limit:'100'});
+  const tokens=readGatewayEnabled()?null:await resolveDirectoryTokens(locationId,fetchImpl),params=new URLSearchParams({limit:'100'});
   if(resource==='payments'){params.set('altId',locationId);params.set('altType','location');params.set('offset',String(cursor));}
   else if(resource==='opportunities'){params.set('locationId',locationId);params.set('page',String(cursor/100+1));}
   else throw new TrackerError('unsupported_resource','Preview supports opportunities and payment transactions.');
+  let body:any;
+  if(readGatewayEnabled()){body=(await gatewayPage(locationId,resource,cursor,fetchImpl)).payload;}else{
   let response:Response;
-  try{response=await fetchImpl(`https://services.leadconnectorhq.com/${resource==='payments'?'payments/transactions':'opportunities/search'}?${params}`,{headers:{Authorization:`Bearer ${tokens.location.accessToken}`,Version:'v3',accept:'application/json'},redirect:'error',signal:AbortSignal.timeout(20000)});}catch{throw new TrackerError('provider_unreachable','Provider request failed; the saved checkpoint can be retried.',502);}
+  try{response=await fetchImpl(`https://services.leadconnectorhq.com/${resource==='payments'?'payments/transactions':'opportunities/search'}?${params}`,{headers:{Authorization:`Bearer ${tokens!.location.accessToken}`,Version:'v3',accept:'application/json'},redirect:'error',signal:AbortSignal.timeout(20000)});}catch{throw new TrackerError('provider_unreachable','Provider request failed; the saved checkpoint can be retried.',502);}
   if(!response.ok)throw new TrackerError(response.status===429?'rate_limited':response.status===403?'scope_required':'provider_error',response.status===403?`The connected app needs ${resource==='payments'?'payments/transactions.readonly':'opportunities.readonly'} access for this resource.`:'The provider could not complete this page. Previously reviewed data was preserved.',response.status===429?429:502);
-  const body:any=await response.json(),raw=resource==='payments'?body.data:body.opportunities;
+  body=await response.json();}
+  const raw=resource==='payments'?body.data:body.opportunities;
   if(!Array.isArray(raw))throw new TrackerError('invalid_page','The provider returned an unexpected page.');
   const rows=raw.map((r:any)=>{
     if((r.locationId&&r.locationId!==locationId)||(r.altId&&r.altId!==locationId))throw new TrackerError('tenant_mismatch','Provider returned a record outside this location.');

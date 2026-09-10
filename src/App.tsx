@@ -1,3 +1,4 @@
+import Operations from './pages/tracker/Operations';
 import {TrackerProvider,TrackerGate} from './components/TrackerGate';
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Layout } from "./components/layout/Layout";
@@ -67,6 +68,7 @@ export default function App() {
   return (
     <TrackerProvider><Layout>
       <Routes>
+        <Route path="/operations" element={<Guard><Operations /></Guard>} />
         <Route path="/" element={<Guard><TrackerGate resource="dashboard"><Dashboard /></TrackerGate></Guard>} />
         <Route path="/agency" element={<Guard><TrackerGate resource="agency"><Agency /></TrackerGate></Guard>} />
         <Route path="/people" element={<Guard><TrackerGate resource="people"><People /></TrackerGate></Guard>} />

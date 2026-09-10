@@ -1,3 +1,4 @@
+import {gatewayPage,readGatewayEnabled} from './kleegr-read.js';
 // Server-only GHL reads. Smart Productivity owns OAuth refresh/persistence.
 // The caller supplies a location from a verified tenant, never a browser query.
 import { kleegrBaseUrl } from './kleegr.js';
@@ -65,6 +66,7 @@ function usableToken(value: any): value is TokenRecord {
 }
 
 export async function resolveDirectoryTokens(locationId: string, fetchImpl: typeof fetch = fetch): Promise<Tokens> {
+  if (readGatewayEnabled()) return {location:{accessToken:'gateway-managed',expiresAt:new Date(Date.now()+60000).toISOString(),locationId},agency:null};
   const key = process.env.KLEEGR_TOKEN_SERVICE_KEY?.trim();
   if (!key) throw new DirectoryError('token_service_not_configured', 'The Smart Productivity token connection is not configured.', 503);
   if (!locationId) throw new DirectoryError('location_required', 'Open this app from a connected Smart Productivity sub-account.', 409);
@@ -88,6 +90,7 @@ async function ghlRequest(path: string, token: string, body: unknown, fetchImpl:
 
 export async function fetchDirectoryUsers(locationId: string, tokens: Tokens, fetchImpl: typeof fetch = fetch): Promise<DirectoryPerson[]> {
   const records = new Map<string, DirectoryPerson>();
+  if(readGatewayEnabled()){for(let page=0;page<MAX_PAGES;page++){const result=await gatewayPage(locationId,'users',page*PAGE_SIZE,fetchImpl),payload=result.payload;if(!Array.isArray(payload.users))throw new DirectoryError('invalid_users','The gateway returned no user list.');let added=0;for(const raw of payload.users){const person=normalizePerson(raw,locationId);if(person){if(!records.has(person.id))added++;records.set(person.id,person);}}if(result.locationUsersFallback||result.rawCount<PAGE_SIZE||(Number.isFinite(payload.count)&&(page+1)*PAGE_SIZE>=payload.count))return [...records.values()];if(!added&&payload.users.length>0)throw new DirectoryError('pagination_stalled','User pagination did not advance.');}throw new DirectoryError('directory_too_large','The user list exceeds the sync limit.');}
   // Search Users is the paginated agency API. The location-token endpoint is
   // still supported for installations that have no agency-level token.
   for (let page = 0; page < MAX_PAGES; page++) {
@@ -109,7 +112,7 @@ export async function fetchDirectoryUsers(locationId: string, tokens: Tokens, fe
 export async function fetchDirectoryContacts(locationId: string, tokens: Tokens, fetchImpl: typeof fetch = fetch): Promise<DirectoryContact[]> {
   const records = new Map<string, DirectoryContact>();
   for (let page = 1; page <= MAX_PAGES; page++) {
-    const payload = await ghlRequest('/contacts/search', tokens.location.accessToken, { locationId, page, pageLimit: PAGE_SIZE }, fetchImpl);
+    const payload = readGatewayEnabled() ? (await gatewayPage(locationId,'contacts',(page-1)*PAGE_SIZE,fetchImpl)).payload : await ghlRequest('/contacts/search', tokens.location.accessToken, { locationId, page, pageLimit: PAGE_SIZE }, fetchImpl);
     if (!Array.isArray(payload.contacts)) throw new DirectoryError('invalid_contacts', 'GoHighLevel did not return a contact list.');
     let added = 0;
     for (const raw of payload.contacts) { const contact = normalizeDirectoryContact(raw, locationId); if (contact) { if (!records.has(contact.id)) added++; records.set(contact.id, contact); } }

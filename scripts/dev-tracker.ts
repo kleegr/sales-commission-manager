@@ -11,6 +11,7 @@ const {installTestDatabase}=await import('../api/_lib/db.js');installTestDatabas
 const {ensureSchema}=await import('../api/_lib/repository.js');await ensureSchema();
 const {TRACKER_SCHEMA_SQL}=await import('../api/_lib/tracker-schema.js');await pg.exec(TRACKER_SCHEMA_SQL);
 const {EXPERIENCE_SCHEMA_SQL}=await import('../api/_lib/tracker-experience-schema.js');await pg.exec(EXPERIENCE_SCHEMA_SQL);
+const {OPERATIONS_SCHEMA_SQL}=await import('../api/_lib/operations-schema.js');await pg.exec(OPERATIONS_SCHEMA_SQL);
 const token='isolated-test-session';
 await pg.exec(`INSERT INTO tenants(id,name,slug,ghl_location_id,kleegr_sub_account_id,kleegr_connection_status) VALUES('test','Isolated test workspace','isolated-test','fake-location','fake-subaccount','connected'); INSERT INTO users(id,tenant_id,name,email,role) VALUES('admin','test','Test administrator','admin@example.test','admin'),('approver','test','Separate approver','approver@example.test','admin'),('manager','test','Test manager','manager@example.test','sales_manager'); INSERT INTO external_users(tenant_id,external_id,name,email,provider_role) VALUES('test','alice','Alice Test','alice@example.test','admin'),('test','bob','Bob Test','bob@example.test','user');`);
 await pg.query("INSERT INTO sessions(id,user_id,tenant_id,expires_at) VALUES($1,'admin','test',now()+interval '1 day')",[createHash('sha256').update(token).digest('hex')]);

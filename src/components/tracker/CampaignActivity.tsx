@@ -4,9 +4,9 @@ import {useTracker} from '../TrackerGate';
 import {displayMinor} from '../../lib/exact-commission';
 import {Action,Empty,Message,Pager,Tabs,useRemote} from './Experience';
 
-export default function CampaignActivity({campaignId='',salespersonId='',from='',to=''}:{campaignId?:string;salespersonId?:string;from?:string;to?:string}){
+export default function CampaignActivity({campaignId='',salespersonId='',from='',to='',initialMode='all'}:{campaignId?:string;salespersonId?:string;from?:string;to?:string;initialMode?:string}){
  const {workspace}=useTracker(),digits=workspace?.payout_terms?.minorDigits??2;
- const [person,setPerson]=useState(salespersonId),[mode,setMode]=useState('all'),[page,setPage]=useState(1),[revision,setRevision]=useState(0);
+ const [person,setPerson]=useState(salespersonId),[mode,setMode]=useState(initialMode),[page,setPage]=useState(1),[revision,setRevision]=useState(0);
  const [data,setData]=useState<any>(null),[error,setError]=useState('');
  const people=useRemote('people',{limit:'100',sort:'name'}),params=new URLSearchParams({resource:'campaignActivity',campaignId,salespersonId:salespersonId||person,from,to,mode,page:String(page)}).toString();
  useEffect(()=>{const controller=new AbortController();let active=false;setData(null);setError('');

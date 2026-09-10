@@ -1,4 +1,5 @@
-import {campaignCatalog} from './_lib/campaign-sources.js';
+import {retryCheckout} from './_lib/automatic-checkout.js';
+import {campaignCatalog,loadCampaignPage} from './_lib/campaign-sources.js';
 import {DirectoryError} from './_lib/ghl-directory.js';
 import type {VercelRequest,VercelResponse} from '@vercel/node';
 import {getSessionUser} from './_lib/auth.js';
@@ -31,6 +32,7 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
    if(!Array.isArray(rows))throw new TrackerError('unsupported_response','The provider response needs a mapping update.');
    return res.json({rows:rows.map((r:any)=>({id:r.id||r._id,name:r.name||r.title,url:r.url||null})),page,hasMore:kind==='calendars'?false:rows.length===pageSize});
   }
+  if(resource==='checkoutEvents')return res.json({rows:(await database.query("SELECT id,status,reason,created_at,payload->'results' AS results FROM tracker_inbox WHERE tenant_id=$1 AND provider='ghl-checkout' AND payload->>'clickId' IN(SELECT id FROM referral_clicks WHERE tenant_id=$1 AND campaign_id=$2) ORDER BY created_at DESC LIMIT 50",[u.tenantId,String(req.query.campaignId||'')])).rows});
   if(resource==='sources')return res.json({rows:(await database.query('SELECT id,campaign_id,name,kind,url,status,verified_at FROM tracker_sources WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 100',[u.tenantId])).rows});
   if(resource==='inbox')return res.json({rows:(await database.query('SELECT id,source_id,provider,external_id,kind,payload,status,reason,created_at FROM tracker_inbox WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 100',[u.tenantId])).rows});
   if(resource==='notices')return res.json({rows:(await database.query('SELECT * FROM tracker_notices WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 100',[u.tenantId])).rows});
@@ -41,6 +43,8 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
   throw new TrackerError('not_found','Resource not found.',404);
  }
  if(!csrfOk(req))throw new TrackerError('csrf_check_failed','Reload and retry.',403);const body=typeof req.body==='string'?JSON.parse(req.body):req.body||{};if(JSON.stringify(body).length>(body.action==='submitTax'?2800000:20000))throw new TrackerError('too_large','Request exceeds the size limit.',413);const b=body.data||{};
+ if(body.action==='loadCampaignPage'){admin(u);return res.json(await loadCampaignPage(database,u,b));}
+ if(body.action==='retryCheckout')return res.json(await retryCheckout(database,u,b));
  if(body.action==='sendEmail')return res.json(await sendQueuedEmail(database,u,b));
  if(body.action==='initiateTransfer')return res.json(await initiateTransfer(database,u,b));
  if(body.action==='reconcileTransfer')return res.json(await reconcileTransfer(database,u,b));

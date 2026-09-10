@@ -1,3 +1,4 @@
+import {reconcileCheckout} from './_lib/automatic-checkout.js';
 import type {VercelRequest,VercelResponse} from '@vercel/node';
 import {database,id} from './_lib/tracker-common.js';
 import {hashSecret,matchesSecret,notificationScan,operationsInstalled,queueWelcome} from './_lib/operations.js';
@@ -7,6 +8,8 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
  const secret=process.env.CRON_SECRET||'';if(req.method!=='GET'||secret.length<24||!matchesSecret(String(req.headers.authorization||'').replace(/^Bearer /,''),hashSecret(secret)))return res.status(401).json({error:'unauthorized'});
  res.setHeader('Cache-Control','no-store');if(!await operationsInstalled(database))return res.json({skipped:'migration_required'});
  const start=Date.now();let scanned=0,sent=0,failed=0;
+ const checkouts=(await database.query("SELECT id,tenant_id FROM tracker_inbox WHERE provider='ghl-checkout' AND status IN('awaiting_payment','auto_posted') AND created_at>now()-interval '90 days' ORDER BY COALESCE(payload->>'lastCheckedAt',created_at::text) LIMIT 5")).rows;
+ for(const e of checkouts){if(Date.now()-start>10000)break;await database.query("UPDATE tracker_inbox SET payload=payload||jsonb_build_object('lastCheckedAt',now()) WHERE id=$1",[e.id]);try{await reconcileCheckout(database,e.tenant_id,e.id);}catch(err){failed++;await database.query('UPDATE tracker_inbox SET reason=$2 WHERE id=$1',[e.id,err instanceof Error?err.message.slice(0,500):'Checkout verification needs review']);}}
  const configs=(await database.query('SELECT * FROM tracker_provider_config WHERE notifications_enabled=true ORDER BY tenant_id LIMIT 20')).rows;
  for(const c of configs){if(Date.now()-start>35000)break;
   const owner=(await database.query("SELECT id,name,email,role FROM users WHERE tenant_id=$1 AND role IN('owner','admin') AND status='active' ORDER BY id LIMIT 1",[c.tenant_id])).rows[0];if(!owner)continue;

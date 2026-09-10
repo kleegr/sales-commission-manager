@@ -11,7 +11,7 @@ export function normalizeAssets(payload:any,kind:string,location:string){
  const raw=payload[resource]||payload.data?.[resource]||payload.data;
  if(!Array.isArray(raw))throw new TrackerError('unsupported_response','The provider response needs a mapping update.');
  const rows=raw.filter((r:any)=>(r.id||r._id)&&!r.deleted&&(!r.locationId||r.locationId===location)).filter((r:any)=>resource!=='funnels'||(kind==='store'?r.isStoreActive===true:kind==='website'?r.type==='website':r.type==='funnel'));
- return {rawCount:raw.length,rows:rows.map((r:any)=>({id:String(r.id||r._id),name:String(r.name||r.title||'Untitled'),url:typeof r.url==='string'?r.url:'',pages:(Array.isArray(r.steps)?r.steps:[]).map((p:any)=>({id:String(p.id),name:String(p.name||'Untitled page'),path:String(p.url||'')}))}))};
+ return {rawCount:raw.length,rows:rows.map((r:any)=>({id:String(r.id||r._id),name:String(r.name||r.title||'Untitled'),url:typeof r.url==='string'?r.url:'',pages:(Array.isArray(r.steps)?r.steps:[]).map((p:any)=>({id:String(p.id),name:String(p.name||'Untitled page'),path:String(p.url||''),pageIds:Array.isArray(p.pages)?p.pages.filter((v:any)=>typeof v==='string'):[]}))}))};
 }
 export async function campaignCatalog(db:SQL,u:SessionUser,kind:string,page:number){
  if(!sourceKinds.includes(kind))throw new TrackerError('invalid_source','Choose a valid source type.');
@@ -34,4 +34,15 @@ export function validateCampaignSource(tenant:string,b:any,destination:string|nu
  const path=page?.path||selection.url;
  if(path){const expected=new URL(path,'https://placeholder.invalid');const actual=new URL(destination);if(actual.pathname!==expected.pathname||(path.startsWith('https://')&&actual.origin!==expected.origin))throw new TrackerError('landing_page_mismatch','The published URL must point to the selected landing page.');}
  return {selection,proof,pageId:page?.id||null};
+}
+
+export async function loadCampaignPage(db:SQL,u:SessionUser,b:any){
+ const selected=b.source?.selection,page=selected?.pages?.find((p:any)=>p.id===b.source?.pageId);
+ validateCampaignSource(u.tenantId,{source:b.source,conversionMode:'external'},new URL(page?.path||'/', 'https://placeholder.invalid').toString());
+ const pageId=page?.pageIds?.[0];if(!pageId)throw new TrackerError('page_required','Refresh the asset list and select a published landing page.');
+ const location=(await db.query('SELECT ghl_location_id FROM tenants WHERE id=$1',[u.tenantId])).rows[0]?.ghl_location_id;
+ const details=(await gatewayPage(location,'pageDetails',0,fetch,{pageId})).payload;
+ if(details.funnelId!==selected.id||details.stepId!==page.id)throw new TrackerError('source_mismatch','Published page does not match this selected funnel step.');
+ const selection={...selected,pages:selected.pages.map((p:any)=>p.id===page.id?{...p,path:details.url||p.path}:p),checkout:{pageId,url:details.url,products:details.products}};
+ return {source:{selection,proof:signature(u.tenantId,selection),pageId:page.id},destinationUrl:details.url,products:details.products};
 }

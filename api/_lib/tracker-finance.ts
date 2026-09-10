@@ -1,19 +1,23 @@
 import type {SessionUser} from './auth.js';
 import {admin,audit,client,dateOnly,id,lock,participant,required,TrackerError,workspace,type SQL} from './tracker-common.js';
 import {calculateExact,minor,refundDelta,type EarningsInput,type ExactPlan} from '../../src/lib/exact-commission.js';
-const receiptSignature=(b:any)=>JSON.stringify([b.clientId,b.date,b.amountMinor,b.currency,b.status,b.productId||'',b.taxMinor||'0',b.feeMinor||'0',b.discountMinor||'0',b.opportunityId||null,b.source==='ghl'?'ghl':'manual',b.assignmentParticipantId||null,b.confirmUnattributed===true]);
+const receiptSignature=(b:any)=>JSON.stringify([b.clientId,b.date,b.amountMinor,b.currency,b.status,b.productId||'',b.taxMinor||'0',b.feeMinor||'0',b.discountMinor||'0',b.opportunityId||null,b.source==='ghl'?'ghl':'manual',b.assignmentParticipantId||null,b.confirmUnattributed===true,b.verifiedReferral||null]);
 
 async function ancestry(db:SQL,u:SessionUser,referrer:string,input:EarningsInput){
  const seen=new Set<string>();let cursor:string|null=referrer;
  for(let level=0;cursor&&level<=10;level++){if(seen.has(cursor))throw new TrackerError('hierarchy_cycle','Resolve the referral hierarchy cycle before calculating.');seen.add(cursor);const person=await participant(db,u,cursor);if(level>0){const key=level===1?'parent':level===2?'grandparent':`tier_${level}`;input.beneficiaries[key as keyof typeof input.beneficiaries]=person.id;}cursor=person.parent_salesperson_id;}
 }
-export async function recordPayment(db:SQL,u:SessionUser,b:any){
+export async function recordPayment(db:SQL,u:SessionUser,b:any,verifiedReferral?:{campaignId:string;referrerId:string}){
+  // Only trusted server integrations may supply order-level referral evidence. Ignore request-body overrides.
+  b={...b,verifiedReferral:verifiedReferral||undefined};
+
   admin(u);await lock(db,u.tenantId);const w=await workspace(db,u),eventKey=required(b.eventKey,'Receipt idempotency key',200);
   const duplicate=(await db.query('SELECT * FROM payments WHERE tenant_id=$1 AND event_key=$2',[u.tenantId,eventKey])).rows[0];
   const confirming=duplicate?.receipt_status==='pending'&&b.status==='confirmed'&&b.confirmExisting===true;
   if(confirming&&(duplicate.client_id!==b.clientId||String(duplicate.amount_minor)!==b.amountMinor||duplicate.currency!==b.currency||duplicate.payment_date!==b.date))throw new TrackerError('receipt_mismatch','Confirmation must retain the original receipt identity, amount, currency and date.');
   if(duplicate&&!confirming){if(receiptSignature(JSON.parse(duplicate.financial_inputs.requestFingerprint))!==receiptSignature(b))throw new TrackerError('idempotency_conflict','This receipt key was already used with different financial details.',409);return{id:duplicate.id,duplicate:true};}
-  const lead=await client(db,u,required(b.clientId,'Lead')),date=dateOnly(b.date),amount=minor(b.amountMinor);
+  if(verifiedReferral){const allowed=(await db.query("SELECT 1 FROM campaign_participants cp JOIN campaigns c ON c.tenant_id=cp.tenant_id AND c.id=cp.campaign_id WHERE cp.tenant_id=$1 AND cp.campaign_id=$2 AND cp.salesperson_id=$3 AND cp.active=true AND c.status='active'",[u.tenantId,verifiedReferral.campaignId,verifiedReferral.referrerId])).rows.length;if(!allowed)throw new TrackerError('invalid_referral','The verified order referral is no longer assigned to this campaign.');}
+  const savedLead=await client(db,u,required(b.clientId,'Lead')),lead=verifiedReferral?{...savedLead,referrer_id:verifiedReferral.referrerId,campaign_id:verifiedReferral.campaignId}:savedLead,date=dateOnly(b.date),amount=minor(b.amountMinor);
   if(amount<=0n||b.currency!==w.currency)throw new TrackerError('invalid_amount','Use a positive amount in the workspace currency.');
   if(!['confirmed','failed','pending','cancelled'].includes(b.status))throw new TrackerError('invalid_status','Choose the actual receipt status.');
   if(b.opportunityId && !(await db.query('SELECT id FROM opportunities WHERE tenant_id=$1 AND id=$2 AND client_id=$3',[u.tenantId,b.opportunityId,lead.id])).rows[0])throw new TrackerError('invalid_opportunity','Opportunity must belong to this lead.');

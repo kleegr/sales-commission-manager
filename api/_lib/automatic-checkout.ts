@@ -19,6 +19,7 @@ export async function registerCheckout(db:SQL,clickId:string,b:any){
  const eventId=id('checkout');await db.query("INSERT INTO tracker_inbox(id,tenant_id,provider,external_id,kind,payload,status) VALUES($1,$2,'ghl-checkout',$3,'checkout',$4::jsonb,'awaiting_payment')",[eventId,c.tenant_id,key,JSON.stringify({clickId,orderId:b.orderId,trackingId:b.trackingId,mode:c.tracking_policy.automation})]);
  return{id:eventId,tenantId:c.tenant_id,status:'awaiting_payment'};
 }
+const pContactName=(c:any)=>String(c.name||[c.firstName,c.lastName].filter(Boolean).join(' ')||'Checkout customer').slice(0,200);
 const asObject=(v:any)=>typeof v==='string'?JSON.parse(v):v;
 const liveMode=(v:any)=>{if(![true,false,'true','false'].includes(v))throw new TrackerError('mode_required','Provider test/live mode is missing.');return v===true||v==='true';};
 const dateInZone=(v:string,zone:string)=>{const p=new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(v));return ['year','month','day'].map(k=>p.find(x=>x.type===k)!.value).join('-');};
@@ -26,11 +27,13 @@ const dateInZone=(v:string,zone:string)=>{const p=new Intl.DateTimeFormat('en-CA
 /** Only provider-read evidence supplies customer, source, product, amount and payment state. */
 export async function reconcileCheckout(db:Database,tenantId:string,eventId:string,reader= gatewayPage){
  const event=(await db.query("SELECT * FROM tracker_inbox WHERE tenant_id=$1 AND id=$2 AND provider='ghl-checkout'",[tenantId,eventId])).rows[0];if(!event)throw new TrackerError('not_found','Checkout not found.',404);
- const c=await checkoutContext(db,event.payload.clickId),mode=event.payload.mode;
+ const c=await checkoutContext(db,event.payload.clickId);
  const orderBody=(await reader(c.ghl_location_id,'order',0,fetch,{orderId:event.payload.orderId})).payload,order=orderBody.order||orderBody;
+ const mode=event.payload.mode==='auto'?(liveMode(order.liveMode)?'live':'test'):event.payload.mode;
  const source=asObject(order.source)||{},tracking=String(order.trackingId||'');
  if(order.altId!==c.ghl_location_id||order._id!==event.payload.orderId||tracking!==event.payload.trackingId||source.id!==c.tracking_policy.source?.selection.id||liveMode(order.liveMode)!==(mode==='live'))throw new TrackerError('checkout_evidence_mismatch','The provider order does not match the campaign, tracking identifier or test/live mode.');
  const when=Date.parse(order.createdAt);if(!Number.isFinite(when)||when<new Date(c.created_at).getTime()-30000||when>new Date(c.expires_at).getTime())throw new TrackerError('checkout_outside_window','Order is outside the referral window.');
+ await db.query("UPDATE tracker_inbox SET payload=jsonb_set(payload,'{mode}',to_jsonb($3::text)) WHERE tenant_id=$1 AND id=$2 AND payload->>'mode'='auto'",[tenantId,eventId,mode]);
  const transactions=(await reader(c.ghl_location_id,'orderPayments',0,fetch,{orderId:order._id,mode})).payload;
  if(!Array.isArray(transactions.data)||transactions.totalCount>100)throw new TrackerError('payment_review_required','Payment pagination needs review.');
  const succeeded=transactions.data.filter((p:any)=>p.status==='succeeded');if(!succeeded.length)return{status:'awaiting_payment'};
@@ -58,17 +61,17 @@ export async function reconcileCheckout(db:Database,tenantId:string,eventId:stri
    }
    const existing=(await sql.query('SELECT * FROM clients WHERE tenant_id=$1 AND (ghl_contact_id=$2 OR kleegr_contact_id=$2)',[tenantId,contactId])).rows;
    if(existing.length>1)throw new TrackerError('ambiguous_client','Resolve duplicate customer identities before posting.');
-   let lead=existing[0];if(lead?.referrer_id&&(lead.referrer_id!==c.salesperson_id||lead.campaign_id!==c.campaign_id))throw new TrackerError('attribution_conflict','Existing customer attribution requires review.');
+   let lead=existing[0]; // Keep existing customer attribution; this verified order carries its own campaign/referrer.
    if(!lead){const leadId=id('lead');await sql.query("INSERT INTO clients(id,tenant_id,contact_name,email,ghl_contact_id,original_source,created_at,updated_at) VALUES($1,$2,$3,$4,$5,'ghl_checkout',now(),now())",[leadId,tenantId,p.contactName||contact.name||'Checkout customer',p.contactEmail||contact.email||'',contactId]);lead={id:leadId};}
    if(!lead.referrer_id){await sql.query("UPDATE clients SET referrer_id=$3,campaign_id=$4,attribution_method='referral_link',attribution_evidence=$5,attribution_at=now(),attribution_status='attributed' WHERE tenant_id=$1 AND id=$2",[tenantId,lead.id,c.salesperson_id,c.campaign_id,event.payload.clickId]);await audit(sql,u,'client',lead.id,'checkout_attributed',{clickId:event.payload.clickId,orderId:order._id});}
    await sql.query("INSERT INTO referral_conversions(id,tenant_id,campaign_id,click_id,client_id,dedupe_key,source,consent_at) SELECT $1,$2,$3,$4,$5,$6,'verified_checkout',$7::timestamptz WHERE NOT EXISTS(SELECT 1 FROM referral_conversions WHERE tenant_id=$2 AND campaign_id=$3 AND client_id=$5) ON CONFLICT DO NOTHING",[id('conversion'),tenantId,c.campaign_id,event.payload.clickId,lead.id,`ghl-contact:${contactId}`,order.createdAt]);
    const key=`provider:${p.paymentProviderType}:${p.paymentProviderConnectedAccount}:${p.chargeId}`;
-   const saved=await recordPayment(sql,u,{clientId:lead.id,eventKey:key,externalId:p._id,source:'ghl',date,amountMinor:amount,currency,status:'confirmed',productId,notes:'Automatically verified GHL checkout'});
+   const saved=await recordPayment(sql,u,{clientId:lead.id,eventKey:key,externalId:p._id,source:'ghl',date,amountMinor:amount,currency,status:'confirmed',productId,notes:'Automatically verified GHL checkout'},{campaignId:c.campaign_id,referrerId:c.salesperson_id});
    const refunded=decimalToMinor(String(p.amountRefunded||'0'),digits),previous=(await sql.query('SELECT COALESCE(-sum(amount_minor),0)::text AS total FROM payments WHERE tenant_id=$1 AND parent_payment_id=$2',[tenantId,saved.id])).rows[0].total;
    if(minor(refunded)>minor(previous))await recordRefund(sql,u,{paymentId:saved.id,eventKey:`refund-total:${p._id}:${refunded}`,amountMinor:(minor(refunded)-minor(previous)).toString(),date:dateInZone(p.updatedAt||p.createdAt,w.timezone),reason:'Verified cumulative GHL refund'});
    results.push({transactionId:p._id,paymentId:saved.id,amountMinor:amount,currency});
   }
-  const status=mode==='live'?'auto_posted':'test_calculated';await sql.query('UPDATE tracker_inbox SET status=$3,payload=payload||$4::jsonb,reason=NULL,reviewed_at=now() WHERE tenant_id=$1 AND id=$2',[tenantId,eventId,status,JSON.stringify({results})]);
+  const status=mode==='live'?'auto_posted':'test_calculated';await sql.query('UPDATE tracker_inbox SET status=$3,payload=payload||$4::jsonb,reason=NULL,reviewed_at=now() WHERE tenant_id=$1 AND id=$2',[tenantId,eventId,status,JSON.stringify({results,orderSummary:{customerName:pContactName(contact),productName:item.name||'',createdAt:order.createdAt}})]);
   await sql.query("UPDATE campaigns SET verification_status=$3 WHERE tenant_id=$1 AND id=$2",[tenantId,c.campaign_id,mode==='live'?'verified_sale':'verified_test']);return{status};
  });
 }

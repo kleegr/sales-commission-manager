@@ -22,6 +22,11 @@ const mutate=(action:string,b:any)=>pg.transaction((c:any)=>mutations[action](wr
 await mutate('setup',{currency:'USD',minorDigits:2,timezone:'Asia/Karachi'});
 await mutate('salesman',{firstName:'Jordan',lastName:'Test',email:'jordan@example.test'});
 await mutate('lead',{name:'Contact Example',email:'contact@example.test',source:'isolated verification',date:'2026-09-09'});
+
+// Fake catalog for testing the source wizard; it cannot reach a provider.
+process.env.KLEEGR_READ_GATEWAY_ENABLED='1';process.env.KLEEGR_TOKEN_SERVICE_KEY='isolated-catalog-signing-key';
+globalThis.fetch=async(input:any)=>{const url=new URL(String(input));if(url.pathname!=='/api/auth/ghl/read')throw new Error('External requests disabled in isolated harness');const resource=url.searchParams.get('resource');return Response.json({locationId:'fake-location',resource,payload:{funnels:[{_id:'test-funnel',name:'Checkout verification funnel',type:'funnel',locationId:'fake-location',url:'/offer',steps:[{id:'test-page',name:'Checkout',url:'/checkout'},{id:'thanks-page',name:'Thank you',url:'/thanks'}]},{_id:'test-site',name:'Verification website',type:'website',steps:[{id:'home',name:'Home',url:'/home'}]}]}});};
+
 const {preview}=await import('vite');const {default:config}=await import('../vite.config.js');
 const server=await preview({...config,configFile:false,preview:{host:'127.0.0.1',port:4184,strictPort:true},plugins:[...(config.plugins||[]),{name:'isolated-api',configurePreviewServer(vite:any){vite.middlewares.use(async(req:any,res:any,next:any)=>{
   const url=new URL(req.url,'http://127.0.0.1:4184');if(!url.pathname.startsWith('/api/'))return next();

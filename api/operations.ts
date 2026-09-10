@@ -1,3 +1,4 @@
+import {campaignCatalog} from './_lib/campaign-sources.js';
 import {DirectoryError} from './_lib/ghl-directory.js';
 import type {VercelRequest,VercelResponse} from '@vercel/node';
 import {getSessionUser} from './_lib/auth.js';
@@ -21,6 +22,7 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
   if(resource==='tax'){if(accountant||u.role==='sales_manager')throw new TrackerError('forbidden','Tax records require administrator or participant access.',403);return res.json({rows:(await database.query('SELECT id,salesperson_id,kind,filename,status,review_note,created_at FROM tracker_tax_documents WHERE tenant_id=$1 AND ($2::boolean OR salesperson_id=$3) ORDER BY created_at DESC LIMIT 100',[u.tenantId,manager,u.salespersonId])).rows});}
   admin(u);
   if(resource==='transfers')return res.json({rows:(await database.query('SELECT * FROM tracker_transfer_attempts WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 100',[u.tenantId])).rows});
+  if(resource==='campaignCatalog')return res.json(await campaignCatalog(database,u,String(req.query.kind||'funnel'),Math.max(1,Math.min(100,Math.floor(Number(req.query.page)||1)))));
   if(resource==='catalog'){
    if(!readGatewayEnabled())throw new TrackerError('gateway_not_active','Activate the Smart Productivity read gateway first.',409);
    const kind=String(req.query.kind||'funnels');if(!['funnels','forms','surveys','calendars'].includes(kind))throw new TrackerError('invalid_resource','Choose funnels, forms, surveys or calendars.');

@@ -13,7 +13,7 @@ const resources:Record<string,ResourceSpec>={
   leads:{table:'clients',columns:'r.id,r.contact_name,r.company_name,r.email,r.phone,r.ghl_contact_id,r.signup_date,r.original_source,r.salesperson_id,r.referrer_id,r.closer_id,r.attribution_method,r.attribution_evidence,r.attribution_status,r.campaign_id,r.customer_since,r.created_at',search:"r.contact_name||' '||r.company_name||' '||r.email",scope:'lead',date:'r.created_at'},
   opportunities:{table:'opportunities',columns:'r.*',search:'r.name',scope:'opportunity',date:'r.created_at'},
   campaigns:{table:'campaigns',columns:'r.*',search:'r.name',scope:'campaign',date:'r.created_at'},
-  links:{table:'campaign_participants',columns:'r.*',search:'r.link_id',scope:'r.salesperson_id'},
+  links:{table:'campaign_participants',columns:'r.*,(SELECT sp.name FROM salespeople sp WHERE sp.tenant_id=r.tenant_id AND sp.id=r.salesperson_id) AS salesperson_name',search:'r.link_id',scope:'r.salesperson_id'},
   payments:{table:'payments',columns:'r.*,EXISTS(SELECT 1 FROM commission_ledger e WHERE e.tenant_id=r.tenant_id AND e.payment_id=r.id) AS has_earnings',search:"r.id||' '||COALESCE(r.event_key,'')||' '||r.notes",scope:'r.salesperson_id',date:'r.payment_date'},
   ledger:{table:'commission_ledger',columns:'r.*',search:"r.id||' '||COALESCE(r.explanation,'')",scope:'r.salesperson_id',date:'r.payment_date'},
   payouts:{table:'payout_batches',columns:"r.*,(SELECT COALESCE(sum(s.amount_minor),0)::text FROM payout_settlements s WHERE s.tenant_id=r.tenant_id AND s.payout_id=r.id AND s.status='confirmed') AS settled_amount_minor",search:"r.id||' '||COALESCE((SELECT sp.name FROM salespeople sp WHERE sp.tenant_id=r.tenant_id AND sp.id=r.salesperson_id),'')",scope:'r.salesperson_id',date:'r.created_at'},

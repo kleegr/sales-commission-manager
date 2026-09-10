@@ -37,6 +37,7 @@ export async function campaignActivity(db:SQL,u:SessionUser,f:any={}){
  // Click timestamps differ from order timestamps. Reuse the same scope and date boundaries.
  const clickValues=values.slice(0,-2);
  const clicks=Number((await db.query(`SELECT count(*)::int AS n FROM referral_clicks k WHERE ${common}${dateFilter('k.created_at')}`,clickValues)).rows[0].n);
- const salesmen=f.includeSalesmen==='1'?(await db.query(`${base} SELECT salesperson_id,mode,currency,count(*) FILTER(WHERE status IN('test_calculated','auto_posted'))::int AS completed,count(*) FILTER(WHERE status NOT IN('test_calculated','auto_posted'))::int AS pending,sum(revenue_minor)::text AS revenue_minor,sum(salesperson_commission_minor)::text AS commission_minor FROM orders GROUP BY salesperson_id,mode,currency`,values.slice(0,-1))).rows:undefined;
- return {rows,total,page,limit,clicks,summary,salesmen,timezone:w.timezone};
+ const salesmen=f.includeSalesmen==='1'?(await db.query(`${base} SELECT salesperson_id,max(salesperson_name) AS salesperson_name,mode,currency,count(*) FILTER(WHERE status IN('test_calculated','auto_posted'))::int AS completed,count(*) FILTER(WHERE status NOT IN('test_calculated','auto_posted'))::int AS pending,sum(revenue_minor)::text AS revenue_minor,sum(salesperson_commission_minor)::text AS commission_minor FROM orders GROUP BY salesperson_id,mode,currency`,values.slice(0,-1))).rows:undefined;
+ const trend=f.includeAnalytics==='1'?(await db.query(`${base} SELECT mode,currency,to_char(created_at AT TIME ZONE $3,'YYYY-MM-DD') AS day,count(*)::int AS orders,sum(revenue_minor)::text AS revenue_minor FROM orders WHERE status IN('test_calculated','auto_posted') GROUP BY mode,currency,day ORDER BY day`,values.slice(0,-1))).rows:undefined;
+ return {rows,total,page,limit,clicks,summary,salesmen,trend,timezone:w.timezone};
 }

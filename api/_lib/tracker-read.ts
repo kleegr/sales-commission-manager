@@ -56,6 +56,7 @@ export async function filteredQuery(db:SQL,u:SessionUser,resource:string,f:any={
   if(f.status&&resource==='directory')where.push(`r.active=${add(f.status==='active')}`);
   if(f.payoutTab&&resource==='payouts'){const groups:Record<string,string[]>={pending:['draft','submitted'],approved:['approved','processing','failed','unknown'],paid:['paid','partially_paid'],denied:['rejected','cancelled']};if(groups[f.payoutTab])where.push(`r.status=ANY(${add(groups[f.payoutTab])}::text[])`);}
   if(f.status&&['people','leads','opportunities','campaigns','payouts','ledger','reviews','imports','goals','sync'].includes(resource))where.push(`r.${resource==='leads'?'attribution_status':'status'}=${add(String(f.status))}`);
+  if(f.eligible==='1'&&resource==='ledger')where.push("r.status='pending' AND r.is_projection=false AND r.amount_minor IS NOT NULL AND r.due_date<=CURRENT_DATE::text AND NOT EXISTS(SELECT 1 FROM payout_reservations pr WHERE pr.tenant_id=r.tenant_id AND pr.entry_id=r.id)");
   if(f.currency&&['payments','ledger','payouts','opportunities','goals'].includes(resource))where.push(`r.currency=${add(String(f.currency))}`);
   if(f.salespersonId&&resource==='people')where.push(`r.id=${add(String(f.salespersonId))}`);
   if(f.teamId&&resource==='people')where.push(`r.team_id=${add(String(f.teamId))}`);
@@ -112,7 +113,7 @@ export async function report(db:SQL,u:SessionUser,f:any={}){
   const earnings=(await db.query(`SELECT r.currency,COALESCE(sum(r.amount_minor),0)::text AS earned_minor,
     COALESCE(sum(r.amount_minor) FILTER(WHERE r.status='pending' AND r.due_date<=CURRENT_DATE::text AND NOT EXISTS(SELECT 1 FROM payout_reservations pr WHERE pr.tenant_id=r.tenant_id AND pr.entry_id=r.id)),0)::text AS payable_minor,
     COALESCE(sum(r.amount_minor) FILTER(WHERE r.amount_minor<0 AND r.payment_type='refund'),0)::text AS reversed_minor,
-    COALESCE(sum(r.amount_minor) FILTER(WHERE r.status IN ('submitted','approved')),0)::text AS reserved_minor,
+    COALESCE(sum(r.amount_minor) FILTER(WHERE r.status<>'paid' AND EXISTS(SELECT 1 FROM payout_reservations pr WHERE pr.tenant_id=r.tenant_id AND pr.entry_id=r.id)),0)::text AS reserved_minor,
     COALESCE(sum(r.amount_minor) FILTER(WHERE r.status='paid'),0)::text AS paid_minor,
     COALESCE(sum(r.amount_minor) FILTER(WHERE r.status='pending' AND r.due_date>CURRENT_DATE::text),0)::text AS held_minor,
     COALESCE(sum(r.amount_minor) FILTER(WHERE r.recovery_status='outstanding_offset'),0)::text AS outstanding_offset_minor

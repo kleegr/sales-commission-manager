@@ -31,6 +31,16 @@ try{
   const users=[{id:'alice',name:'Alice',email:'alice@example.test',phone:'',role:'admin'},{id:'bob',name:'Bob',email:'bob@example.test',phone:'',role:'user'}];
   await persistTeam('a',users,tx);await persistTeam('b',users,tx);
   await check('A: import creates no enrollments or app logins',async()=>{assert.equal((await db.query('SELECT count(*)::int AS n FROM salespeople')).rows[0].n,1);assert.equal((await db.query('SELECT count(*)::int AS n FROM users')).rows[0].n,2);});
+  await check('directory-only legacy users require explicit import and retain their identity',async()=>{
+    await db.query("INSERT INTO external_users(tenant_id,external_id,name,email,active) VALUES('a','legacy-user','Legacy User','legacy@example.test',true)");
+    await db.query("INSERT INTO salespeople(id,tenant_id,name,email,ghl_user_id,enrolled_at) VALUES('legacy-sp','a','Legacy User','legacy@example.test','legacy-user',now())");
+    assert.equal((await listResource(db,u,'people',{id:'legacy-sp'})).total,0);
+    assert.equal((await listResource(db,u,'directory',{id:'legacy-user'})).rows[0].participant_id,null);
+    assert.deepEqual((await tx(c=>enroll(c,u,{externalIds:['legacy-user'],role:'salesperson'}))).ids,['legacy-sp']);
+    assert.equal((await listResource(db,u,'people',{id:'legacy-sp'})).total,1);
+    assert.equal((await listResource(db,u,'directory',{id:'legacy-user'})).rows[0].participant_id,'legacy-sp');
+    await assert.rejects(tx(c=>enroll(c,{...u,tenantId:'b'},{externalIds:['legacy-user'],role:'salesperson'})),{code:'not_available'});
+  });
   const alice=(await tx(c=>enroll(c,u,{externalIds:['alice'],role:'salesperson'}))).ids[0],bob=(await tx(c=>enroll(c,u,{externalIds:['bob'],role:'salesperson'}))).ids[0];
   await check('A: stable identity enrollment is idempotent and tenant scoped',async()=>{assert.deepEqual((await tx(c=>enroll(c,u,{externalIds:['alice'],role:'affiliate'}))).ids,[alice]);const other=(await tx(c=>enroll(c,{...u,tenantId:'b'},{externalIds:['alice'],role:'affiliate'}))).ids[0];assert.notEqual(other,alice);assert.equal((await db.query('SELECT role FROM salespeople WHERE id=$1',[alice])).rows[0].role,'salesperson');});
   const lead=(await tx(c=>createLead(c,u,{name:'Customer',email:'client@example.test',source:'campaign referral',date:'2026-01-01',ownerId:bob}))).id;
@@ -176,5 +186,6 @@ try{
     }finally{globalThis.fetch=oldFetch;if(oldKey===undefined)delete process.env.KLEEGR_TOKEN_SERVICE_KEY;else process.env.KLEEGR_TOKEN_SERVICE_KEY=oldKey;if(oldFlag===undefined)delete process.env.KLEEGR_READ_GATEWAY_ENABLED;else process.env.KLEEGR_READ_GATEWAY_ENABLED=oldFlag;}
   });
 
+  await check('new customization defaults validate and persist',async()=>{await tx(c=>preferences(c,u,{commissionRate:'12.50',holdDays:'0',dashboardMode:'test'}));const p=await experienceRead(db,u,'preferences',{});assert.equal(p.preferences.commissionRate,'12.50');assert.equal(p.preferences.holdDays,'0');assert.equal(p.preferences.dashboardMode,'test');await assert.rejects(tx(c=>preferences(c,u,{commissionRate:'101'})));await assert.rejects(tx(c=>preferences(c,u,{holdDays:'-1'})));await assert.rejects(tx(c=>preferences(c,u,{dashboardMode:'fake'})));});
   console.log(`${checks} isolated Sales Tracker integration scenarios passed.`);
 }finally{await pg.close();}

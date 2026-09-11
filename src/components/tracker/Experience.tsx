@@ -1,7 +1,7 @@
 import {createContext,useContext,useEffect,useState,useRef,type ReactNode} from 'react';
 import {Search,ChevronDown,Inbox,Download,Plus} from 'lucide-react';
 import {trackerGet} from '../../lib/tracker-client';
-export const defaults={title:'Sales Tracker',salesmanLabel:'Salesman',structureLabel:'Sales Commission Structure',payoutLabel:'Payout',mediaLabel:'Media',windowDays:'30',touch:'first',payoutTerms:'',portalMessage:''};
+export const defaults={title:'Sales Tracker',salesmanLabel:'Salesman',structureLabel:'Sales Commission Structure',payoutLabel:'Payout',mediaLabel:'Media',commissionRate:'10',holdDays:'30',dashboardMode:'auto',windowDays:'30',touch:'first',payoutTerms:'',portalMessage:''};
 export function useRemote(resource:string,params:Record<string,string>={},revision=0){
  const key=JSON.stringify(params),lastKey=useRef(''),[state,setState]=useState<{data:any;loading:boolean;error:string}>({data:null,loading:true,error:''});
  useEffect(()=>{const c=new AbortController(),identity=resource+key,changed=lastKey.current!==identity;lastKey.current=identity;setState(s=>({...s,loading:changed||!s.data,error:''}));const timer=setTimeout(()=>trackerGet(resource,JSON.parse(key),c.signal).then(data=>{if(!c.signal.aborted)setState({data,loading:false,error:''});}).catch(e=>{if(!c.signal.aborted)setState({data:null,loading:false,error:e.message});}),JSON.parse(key).q?150:0);return()=>{c.abort();clearTimeout(timer);};},[resource,key,revision]);return state;

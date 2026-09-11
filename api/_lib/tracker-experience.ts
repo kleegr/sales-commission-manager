@@ -68,8 +68,11 @@ export async function createStructure(db:SQL,u:SessionUser,b:any){
 }
 export async function preferences(db:SQL,u:SessionUser,b:any){
  admin(u);await ready(db);await lock(db,u.tenantId);
- const allowed=['title','salesmanLabel','structureLabel','payoutLabel','mediaLabel','portalMessage','windowDays','touch','payoutTerms'];const data:Record<string,any>={};
+ const allowed=['commissionRate','holdDays','dashboardMode','title','salesmanLabel','structureLabel','payoutLabel','mediaLabel','portalMessage','windowDays','touch','payoutTerms'];const data:Record<string,any>={};
  for(const k of allowed)if(b[k]!==undefined)data[k]=String(b[k]).trim().slice(0,k==='portalMessage'?1000:200);
+ if(data.commissionRate!==undefined&&(!/^\d{1,3}(\.\d{1,2})?$/.test(data.commissionRate)||Number(data.commissionRate)>100))throw new TrackerError('invalid_rate','Commission rate must be between 0 and 100, with up to two decimal places.');
+ if(data.holdDays!==undefined&&(!/^\d+$/.test(data.holdDays)||Number(data.holdDays)>3650))throw new TrackerError('invalid_hold','Hold period must be 0–3650 whole days.');
+ if(data.dashboardMode!==undefined&&!['auto','live','test'].includes(data.dashboardMode))throw new TrackerError('invalid_mode','Choose automatic, live or test dashboard mode.');
  if(data.windowDays!==undefined&&(!/^\d+$/.test(data.windowDays)||+data.windowDays<1||+data.windowDays>365))throw new TrackerError('invalid_window','Cookie life must be 1–365 days.');
  if(data.touch&&!['first','last'].includes(data.touch))throw new TrackerError('invalid_touch','Choose first or last touch.');
  for(const k of ['title','salesmanLabel','structureLabel','payoutLabel','mediaLabel'])if(data[k]!==undefined&&!data[k])throw new TrackerError('invalid_label','Navigation names cannot be empty.');

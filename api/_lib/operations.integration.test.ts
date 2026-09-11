@@ -139,5 +139,25 @@ try{
  });
 
  }
+ for(const kind of ['website','store','form','survey','calendar'])await check(`${kind}: signed referral, payment, duplicate and refund preserve salesman attribution`,async()=>{
+  const cId=(await tx((c:any)=>saveCampaign(c,u,{name:`Isolated ${kind}`,status:'active',conversionMode:'external',destinationUrl:`https://example.com/${kind}`,windowDays:30,participantIds:[sp]}))).id;
+  const s=await tx((c:any)=>createSource(c,u,{campaignId:cId,name:kind,kind,url:`https://example.com/${kind}`}));
+  const code=(await db.query('SELECT link_id FROM campaign_participants WHERE campaign_id=$1',[cId])).rows[0].link_id;
+  const visit=await tx((c:any)=>referralClick(c,code));
+  const client=(await tx((c:any)=>createLead(c,u,{name:`Test ${kind}`,email:`${kind}@example.test`,source:kind,date:'2026-09-11'}))).id;
+  const evidence={eventId:`${kind}-lead`,kind:'lead',name:`Test ${kind}`,email:`${kind}@example.test`,consent:true,clickId:visit.clickId};
+  const leadEvent=await tx((c:any)=>captureSource(c,s.id,s.secret,evidence));
+  await tx((c:any)=>reviewEvent(c,u,{id:leadEvent.id,clientId:client,reason:'Isolated authenticated source test'}));
+  assert.equal((await db.query('SELECT referrer_id FROM clients WHERE id=$1',[client])).rows[0].referrer_id,sp);
+  const receipt={...evidence,eventId:`${kind}-payment`,kind:'payment',amountMinor:'10000',currency:'USD',date:'2026-09-11',paymentReference:`charge-${kind}`,providerAccount:'isolated',provider:'test-provider',productId:'product'};
+  const event=await tx((c:any)=>captureSource(c,s.id,s.secret,receipt));
+  await tx((c:any)=>reviewEvent(c,u,{id:event.id,clientId:client,reason:'Isolated amount and product verification',confirmMapping:true}));
+  assert.equal((await tx((c:any)=>captureSource(c,s.id,s.secret,receipt))).duplicate,true);
+  const payment=(await db.query('SELECT id FROM payments WHERE tenant_id=$1 AND client_id=$2',['a',client])).rows[0];
+  assert.equal((await db.query('SELECT amount_minor FROM commission_ledger WHERE payment_id=$1',[payment.id])).rows[0].amount_minor,'1000');
+  const refund=await tx((c:any)=>captureSource(c,s.id,s.secret,{...receipt,eventId:`${kind}-refund`,kind:'refund',refundReference:`refund-${kind}`,amountMinor:'2000'}));
+  await tx((c:any)=>reviewEvent(c,u,{id:refund.id,clientId:client,reason:'Isolated refund verification'}));
+  assert.equal((await db.query('SELECT sum(amount_minor)::text AS n FROM commission_ledger WHERE client_id=$1',[client])).rows[0].n,'800');
+ });
  console.log(`${count} connected operations scenarios passed.`);
 }finally{await pg.close();}

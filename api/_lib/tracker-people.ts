@@ -11,7 +11,7 @@ export async function enroll(db:SQL,u:SessionUser,b:any){
     const e=(await db.query("SELECT * FROM external_users WHERE tenant_id=$1 AND provider='ghl' AND external_id=$2 AND active=true",[u.tenantId,externalId])).rows[0];
     if(!e)throw new TrackerError('not_available','A selected user is not active in this workspace.',409);
     const existing=(await db.query('SELECT id FROM salespeople WHERE tenant_id=$1 AND (ghl_user_id=$2 OR kleegr_user_id=$2)',[u.tenantId,externalId])).rows[0];
-    if(existing){result.push(existing.id);continue;}
+    if(existing){await db.query('UPDATE salespeople SET enrolled_by=COALESCE(enrolled_by,$3),enrolled_at=COALESCE(enrolled_at,now()) WHERE tenant_id=$1 AND id=$2',[u.tenantId,existing.id,u.id]);await audit(db,u,'salesperson',existing.id,'enrollment_confirmed',{externalId});result.push(existing.id);continue;}
     const sp=id('sp');await db.query(`INSERT INTO salespeople(id,tenant_id,name,email,phone,role,ghl_user_id,ghl_role,ghl_active,ghl_synced_at,enrolled_at,enrolled_by,referral_code,created_at,updated_at)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,true,now(),now(),$9,$10,now(),now())`,[sp,u.tenantId,e.name,e.email,e.phone,b.role,externalId,e.provider_role,u.id,id('ref')]);
     // Only stable provider identity may link an existing login. Import/enrollment never creates one.

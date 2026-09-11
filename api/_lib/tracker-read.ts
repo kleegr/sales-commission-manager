@@ -2,6 +2,8 @@ import type {SessionUser} from './auth.js';
 import {admin,isAdmin,visibleIds,TrackerError,type SQL} from './tracker-common.js';
 
 export interface ResourceSpec {table:string;columns:string;search:string;scope?:string;admin?:boolean;date?:string}
+// Keep existing business history visible; a directory-only legacy import is not an enrollment.
+function enrolled(a:string){return `(${a}.ghl_user_id IS NULL OR ${a}.enrolled_by IS NOT NULL OR EXISTS(SELECT 1 FROM campaign_participants cp WHERE cp.tenant_id=${a}.tenant_id AND cp.salesperson_id=${a}.id) OR EXISTS(SELECT 1 FROM plan_assignments pa WHERE pa.tenant_id=${a}.tenant_id AND pa.salesperson_id=${a}.id) OR EXISTS(SELECT 1 FROM commission_ledger cl WHERE cl.tenant_id=${a}.tenant_id AND cl.salesperson_id=${a}.id))`;}
 const resources:Record<string,ResourceSpec>={
   directory:{table:'external_users',columns:'r.*,s.id AS participant_id',search:"r.name||' '||r.email||' '||r.external_id",admin:true},
   people:{table:'salespeople',columns:'r.id,r.name,r.email,r.role,r.status,r.ghl_user_id,r.ghl_role,r.ghl_active,r.ghl_synced_at,r.team_id,r.manager_user_id,r.parent_salesperson_id,r.enrolled_at,r.referral_code',search:"r.name||' '||r.email",scope:'r.id',date:'r.created_at'},
@@ -31,7 +33,9 @@ export async function filteredQuery(db:SQL,u:SessionUser,resource:string,f:any={
   const s=resources[resource];if(!s)throw new TrackerError('unknown_resource','This resource is not available.',404);if(s.admin)admin(u);
   const values:any[]=[u.tenantId],where=['r.tenant_id=$1'];let join='';
   const add=(value:any)=>{values.push(value);return`$${values.length}`;};
-  if(resource==='directory')join=" LEFT JOIN salespeople s ON s.tenant_id=r.tenant_id AND s.ghl_user_id=r.external_id AND r.provider='ghl'";
+  if(resource==='directory')join=` LEFT JOIN salespeople s ON s.tenant_id=r.tenant_id AND (s.ghl_user_id=r.external_id OR s.kleegr_user_id=r.external_id) AND r.provider='ghl' AND ${enrolled('s')}`;
+  if(resource==='people')where.push(enrolled('r'));
+  if(resource==='logins'&&f.role)where.push(`r.role=${add(String(f.role))} AND r.status='active'`);
   if(resource==='plans')join=' JOIN commission_plans p ON p.tenant_id=r.tenant_id AND p.id=r.plan_id';
   const ids=await visibleIds(db,u);
   if(ids){const q=add(ids),leadScope=`(c.salesperson_id=ANY(${q}::text[]) OR c.referrer_id=ANY(${q}::text[]) OR c.closer_id=ANY(${q}::text[]))`;
@@ -93,7 +97,10 @@ export async function listResource(db:SQL,u:SessionUser,resource:string,f:any={}
   return{rows,total,page,limit};
 }
 async function hydrateNames(db:SQL,u:SessionUser,rows:any[]){
-  const mappings=[{table:'salespeople',name:'name',fields:['salesperson_id','referrer_id','closer_id','owner_id']},{table:'clients',name:'contact_name',fields:['client_id']},{table:'teams',name:'name',fields:['team_id']}];
+  const versions=[...new Set(rows.map(r=>r.plan_version_id).filter(Boolean))];
+  if(versions.length){const names=(await db.query('SELECT v.id,p.name,v.version FROM plan_versions v JOIN commission_plans p ON p.tenant_id=v.tenant_id AND p.id=v.plan_id WHERE v.tenant_id=$1 AND v.id=ANY($2::text[])',[u.tenantId,versions])).rows;for(const row of rows){const plan=names.find(p=>p.id===row.plan_version_id);if(plan)row.plan_version_name=`${plan.name} · v${plan.version}`;}}
+
+  const mappings=[{table:'salespeople',name:'name',fields:['salesperson_id','referrer_id','closer_id','owner_id']},{table:'clients',name:'contact_name',fields:['client_id']},{table:'teams',name:'name',fields:['team_id']},{table:'campaigns',name:'name',fields:['campaign_id']},{table:'users',name:'name',fields:['manager_user_id']}];
   for(const mapping of mappings){const ids=[...new Set(rows.flatMap(r=>mapping.fields.map(f=>r[f]).filter(Boolean)))];if(!ids.length)continue;const names=(await db.query(`SELECT id,${mapping.name} AS name FROM ${mapping.table} WHERE tenant_id=$1 AND id=ANY($2::text[])`,[u.tenantId,ids])).rows;const byId=new Map(names.map(n=>[n.id,n.name]));for(const row of rows)for(const field of mapping.fields)if(row[field])row[field.replace('_id','_name')]=byId.get(row[field])||row[field];}
 }
 async function goalProgress(db:SQL,u:SessionUser,goal:any){

@@ -43,6 +43,12 @@ export async function loadCampaignPage(db:SQL,u:SessionUser,b:any){
  const location=(await db.query('SELECT ghl_location_id FROM tenants WHERE id=$1',[u.tenantId])).rows[0]?.ghl_location_id;
  const details=(await gatewayPage(location,'pageDetails',0,fetch,{pageId})).payload;
  if(details.funnelId!==selected.id||details.stepId!==page.id)throw new TrackerError('source_mismatch','Published page does not match this selected funnel step.');
- const selection={...selected,pages:selected.pages.map((p:any)=>p.id===page.id?{...p,path:details.url||p.path}:p),checkout:{pageId,url:details.url,products:details.products}};
- return {source:{selection,proof:signature(u.tenantId,selection),pageId:page.id},destinationUrl:details.url,products:details.products};
+ const products=selected.kind==='store'?normalizeStoreProducts((await gatewayPage(location,'storeProducts',0,fetch,{assetId:selected.id})).payload,location):details.products;
+ const selection={...selected,pages:selected.pages.map((p:any)=>p.id===page.id?{...p,path:details.url||p.path}:p),checkout:{pageId,url:details.url,products}};
+ return {source:{selection,proof:signature(u.tenantId,selection),pageId:page.id},destinationUrl:details.url,products};
+}
+
+export function normalizeStoreProducts(payload:any,location:string){
+ if(!Array.isArray(payload.products)||payload.products.length>=100)throw new TrackerError('store_product_review','Store product pagination needs review before enabling automatic commissions.');
+ return payload.products.filter((p:any)=>p.locationId===location&&p._id&&!p.deleted).map((p:any)=>({id:String(p._id),productId:String(p._id),name:String(p.name||'Store product'),type:'store',currency:'',amount:null}));
 }

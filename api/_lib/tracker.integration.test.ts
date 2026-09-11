@@ -187,5 +187,12 @@ try{
   });
 
   await check('new customization defaults validate and persist',async()=>{await tx(c=>preferences(c,u,{commissionRate:'12.50',holdDays:'0',dashboardMode:'test'}));const p=await experienceRead(db,u,'preferences',{});assert.equal(p.preferences.commissionRate,'12.50');assert.equal(p.preferences.holdDays,'0');assert.equal(p.preferences.dashboardMode,'test');await assert.rejects(tx(c=>preferences(c,u,{commissionRate:'101'})));await assert.rejects(tx(c=>preferences(c,u,{holdDays:'-1'})));await assert.rejects(tx(c=>preferences(c,u,{dashboardMode:'fake'})));});
+  await check('store products retain eligible identities without inventing checkout prices',async()=>{
+    const {normalizeStoreProducts}=await import('./campaign-sources.js');
+    const products=normalizeStoreProducts({products:[{_id:'product',locationId:'a',name:'Test product'},{_id:'foreign',locationId:'b'},{_id:'deleted',locationId:'a',deleted:true}]},'a');
+    assert.deepEqual(products,[{id:'product',productId:'product',name:'Test product',type:'store',currency:'',amount:null}]);
+    assert.throws(()=>normalizeStoreProducts({products:Array(100).fill({_id:'product',locationId:'a'})},'a'),/pagination/);
+    assert.throws(()=>normalizeStoreProducts({},'a'),/pagination/);
+  });
   console.log(`${checks} isolated Sales Tracker integration scenarios passed.`);
 }finally{await pg.close();}

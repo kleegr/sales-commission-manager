@@ -170,6 +170,7 @@ try{
     const payload={funnels:[{_id:'f1',name:'Real-shaped funnel',type:'funnel',locationId:'location-a',url:'/offer',steps:[{id:'p1',name:'Checkout',url:'/checkout'}]},{_id:'w1',name:'Website',type:'website',steps:[]},{_id:'foreign',type:'funnel',locationId:'location-b',steps:[]}]};
     globalThis.fetch=async()=>Response.json({locationId:'location-a',resource:'funnels',payload});
     try{
+      for(const kind of ['form','survey','calendar']){const normalized=normalizeAssets({[kind+'s']:[{id:'asset-a',name:'Test',locationId:'location-a'}]},kind,'location-a');assert.equal(normalized.rows[0].url,`https://api.leadconnectorhq.com/widget/${kind==='calendar'?'booking':kind}/asset-a`);}
       assert.equal(normalizeAssets(payload,'funnel','location-a').rows.length,1);assert.equal(normalizeAssets(payload,'website','location-a').rows.length,1);
       const asset=(await campaignCatalog(db,u,'funnel',1)).rows[0];const source={selection:asset.selection,proof:asset.proof,pageId:'p1'};
       const body={name:'Connected source test',status:'active',conversionMode:'external',source,windowDays:30,participantIds:[alice,bob],destinationUrl:'https://example.com/checkout?offer=1#buy'};

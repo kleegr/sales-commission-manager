@@ -24,6 +24,12 @@ let count=0;const check=async(name:string,f:()=>any)=>{await f();count++;console
 try{
  await pg.exec(SCHEMA_SQL);await pg.exec(MIGRATIONS_SQL);await pg.exec(TRACKER_SCHEMA_SQL);await pg.exec(EXPERIENCE_SCHEMA_SQL);await pg.exec(OPERATIONS_SCHEMA_SQL);await pg.exec(OPERATIONS_SCHEMA_SQL);
  await pg.exec("INSERT INTO tenants(id,name,slug) VALUES('a','Test A','a'),('b','Test B','b'); INSERT INTO users(id,tenant_id,name,email,role) VALUES('admin','a','Admin','admin@example.test','admin'),('other','a','Other','other@example.test','admin');INSERT INTO tracker_workspaces(tenant_id,currency,payout_terms) VALUES('a','USD','{\"minorDigits\":2}');");
+ await check('gateway distinguishes rejected identities from missing permissions',async()=>{
+  const saved=process.env.KLEEGR_TOKEN_SERVICE_KEY;process.env.KLEEGR_TOKEN_SERVICE_KEY='test-service-key';
+  try{for(const [error,code] of [['appointment_scope_mismatch','gateway_scope_mismatch'],['contact_scope_mismatch','gateway_scope_mismatch'],['scope_required','scope_required'],['reconnect_required','reconnect_required']]){
+   await assert.rejects(()=>gatewayPage('location1','appointment',0,(async()=>Response.json({error},{status:403})) as typeof fetch),{code});
+  }}finally{if(saved===undefined)delete process.env.KLEEGR_TOKEN_SERVICE_KEY;else process.env.KLEEGR_TOKEN_SERVICE_KEY=saved;}
+ });
  const sp=(await tx((c:any)=>saveParticipant(c,u,{name:'Sales Test',email:'sales@example.test',role:'salesperson',status:'active'}))).id;
  const plan:ExactPlan={currency:'USD',minorDigits:2,rules:[{id:'r',name:'Ten percent',event:'payment',kind:'percent',value:'1000',beneficiary:'referrer',base:'gross',chargeFrom:1,holdDays:0,group:'base',stacking:'exclusive',priority:1}]};
  const version=(await tx((c:any)=>publishPlan(c,u,{name:'Test plan',effectiveFrom:'2026-01-01',config:plan}))).id;
@@ -81,7 +87,7 @@ try{
  await check('accountant session is read-only across authenticated mutations',async()=>{assert.equal((await getSessionUser(accountantReq))?.role,'accountant');assert.equal(await getSessionUser({...accountantReq,method:'POST'}),null);});
  await check('accountant can download the scoped monthly package through the API',async()=>{let bytes:any,status=200;const res:any={setHeader(){},status(n:number){status=n;return this;},json(b:any){bytes=b;return this;},send(b:any){bytes=b;return this;}};await operationsHandler(accountantReq,res);assert.equal(status,200);assert.ok(Buffer.isBuffer(bytes));assert.ok(bytes.includes(Buffer.from('summary-2026-01.pdf')));});
  process.env.KLEEGR_READ_GATEWAY_ENABLED='1';process.env.KLEEGR_TOKEN_SERVICE_KEY='isolated-key';process.env.KLEEGR_API_BASE_URL='https://gateway.example.test';
- await check('gateway mode resolves no raw OAuth tokens and never falls back',async()=>{let calls=0;const fail:any=async()=>{calls++;return new Response('{}',{status:503});};await resolveDirectoryTokens('location1',fail);assert.equal(calls,0);await assert.rejects(()=>gatewayPage('location1','users',0,fail),/No direct-GHL fallback/);assert.equal(calls,1);await assert.rejects(()=>gatewayPage('location1','users',0,(async()=>new Response(JSON.stringify({locationId:'other',resource:'users',payload:{users:[]}}))) as any),/different resource or location/);});
+ await check('gateway mode resolves no raw OAuth tokens and never falls back',async()=>{let calls=0;const fail:any=async()=>{calls++;return new Response('{}',{status:503});};await resolveDirectoryTokens('location1',fail);assert.equal(calls,0);await assert.rejects(()=>gatewayPage('location1','users',0,fail),{code:'gateway_error'});assert.equal(calls,1);await assert.rejects(()=>gatewayPage('location1','users',0,(async()=>new Response(JSON.stringify({locationId:'other',resource:'users',payload:{users:[]}}))) as any),/different resource or location/);});
  delete process.env.KLEEGR_READ_GATEWAY_ENABLED;delete process.env.KLEEGR_TOKEN_SERVICE_KEY;
 
  {

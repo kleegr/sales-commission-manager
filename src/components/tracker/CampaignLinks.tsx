@@ -1,4 +1,5 @@
 import {affiliateURL} from '../../lib/affiliate-link';
+import SubmissionCampaign from './SubmissionCampaign';
 import {displayMinor} from '../../lib/exact-commission';
 import {useTracker} from '../TrackerGate';
 import {useEffect,useState} from 'react';
@@ -17,6 +18,7 @@ export default function CampaignLinks({campaignId,status,destination}:{campaignI
  const mode=chosenMode||(automation==='test'||(activity?.summary.some((s:any)=>s.mode==='test'&&s.completed)&&!activity?.summary.some((s:any)=>s.mode==='live'&&s.completed))?'test':'live');
  const money=(n:string,currency=workspace?.currency||'USD')=>displayMinor(n||'0',currency,digits);
  const connected=['script_seen','verified_test','verified_sale'].includes(current?.verification_status);
+ if(current&&['form','survey'].includes(current.tracking_policy?.source?.selection?.kind))return <><Message error={result.error||campaign.error}/>{result.loading?<p role="status">Loading salesman links…</p>:<SubmissionCampaign campaign={current} links={result.data?.rows||[]}/>}<Pager page={page} limit={25} total={result.data?.total||0} onPage={setPage}/></>;
  return <section aria-label="Campaign salesmen">
   <div className="st-panel-heading" style={{padding:'0 0 16px'}}><div><h3>Salesman performance</h3><p className="st-help">See who brought each order. Share their personal link.</p></div><Action onClick={()=>setRefresh(n=>n+1)}>Refresh</Action></div>
   {status!=='active'&&<p className="st-help">This campaign is not active. Activate it before sharing links.</p>}

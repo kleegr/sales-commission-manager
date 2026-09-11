@@ -1,0 +1,16 @@
+import {useEffect,useState} from 'react';
+import {useAuth} from '../../store/AuthContext';
+import {affiliateURL} from '../../lib/affiliate-link';
+import {Action,Message} from './Experience';
+
+export default function SubmissionCampaign({campaign,links}:{campaign:any;links:any[]}){
+ const {user}=useAuth(),admin=['admin','owner'].includes(user?.role||'');
+ const [rows,setRows]=useState<any[]>([]),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[page,setPage]=useState(1),[revision,setRevision]=useState(0);
+ useEffect(()=>{if(!admin)return;const c=new AbortController();fetch(`/api/operations?resource=submissionTests&campaignId=${encodeURIComponent(campaign.id)}`,{signal:c.signal}).then(async r=>{const b=await r.json();if(!r.ok)throw Error(b.message||'Test results could not be loaded.');return b;}).then(b=>{if(!c.signal.aborted)setRows(b.rows);}).catch(e=>{if(!c.signal.aborted)setError(e.message);});return()=>c.abort();},[campaign.id,admin,revision]);
+ return <section aria-label="Submission tracking"><h3>Salesman referral links</h3><p className="st-help">Share a personal link to this {campaign.tracking_policy.source.selection.kind}. A submission is a lead, not a paid order.</p>
+ {links.map(r=><div className="st-disclosure" key={r.link_id}><strong>{r.salesperson_name}</strong><label className="st-field"><span>Personal affiliate link</span><input readOnly value={affiliateURL(r.link_id,campaign.destination_url,'off')} onFocus={e=>e.target.select()}/></label><Action disabled={!r.active} onClick={async()=>{try{await navigator.clipboard.writeText(affiliateURL(r.link_id,campaign.destination_url,'off'));setNotice(`Link copied for ${r.salesperson_name}.`);}catch{setError('Select the link above and copy it.');}}}>Copy link</Action></div>)}
+ <Message error={error} notice={notice}/>
+ {admin&&<div className="st-disclosure"><h3>Test submission tracking</h3><p>Open a salesman’s link, submit the form or survey using test details, then check here. The check reads GHL’s submission record and verifies its campaign and referral ID.</p><p className="st-help">Test results stay separate from clients, paid orders and payouts. Live lead capture is not enabled by this test.</p><Action primary disabled={busy} onClick={async()=>{setBusy(true);setError('');try{const r=await fetch('/api/operations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'checkSubmissions',data:{campaignId:campaign.id,page,capture:true}})});const b=await r.json();if(!r.ok)throw Error(b.message||'Submissions could not be checked.');setNotice(`${b.matched} matching submissions found. ${b.message}${b.unmatched?' Submissions without this campaign’s referral evidence were skipped.':''}`);setPage(b.nextPage||1);setRevision(n=>n+1);}catch(e){setError((e as Error).message);}finally{setBusy(false);}}}>{busy?'Checking GHL…':page>1?'Check next page of submissions':'Check test submissions'}</Action>
+ {rows.length>0&&<table className="st-table"><thead><tr><th>Salesman</th><th>Test customer</th><th>Submitted</th><th>Result</th></tr></thead><tbody>{rows.map(r=><tr key={r.id}><td>{r.salesman}</td><td>{r.customer}</td><td>{new Date(r.submitted_at).toLocaleString()}</td><td>Referral verified · Test</td></tr>)}</tbody></table>}</div>}
+ </section>;
+}

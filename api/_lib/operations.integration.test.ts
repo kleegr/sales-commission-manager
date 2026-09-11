@@ -159,5 +159,22 @@ try{
   await tx((c:any)=>reviewEvent(c,u,{id:refund.id,clientId:client,reason:'Isolated refund verification'}));
   assert.equal((await db.query('SELECT sum(amount_minor)::text AS n FROM commission_ledger WHERE client_id=$1',[client])).rows[0].n,'800');
  });
+ for(const kind of ['form','survey'])await check(`${kind}: provider submissions require scoped referral evidence and never post test money`,async()=>{
+  const {checkSubmissions,submissionTests}=await import('./source-submissions.js');
+  const cId=(await tx((c:any)=>saveCampaign(c,u,{name:`Submission ${kind}`,status:'active',conversionMode:'external',destinationUrl:`https://example.com/widget/${kind}/asset-test`,windowDays:30,participantIds:[sp]}))).id;
+  await db.query("UPDATE campaigns SET tracking_policy=tracking_policy||$2::jsonb WHERE id=$1",[cId,JSON.stringify({source:{selection:{kind,id:'asset-test'}}})]);
+  await db.query("UPDATE tenants SET ghl_location_id='location-a' WHERE id='a'");
+  const code=(await db.query('SELECT link_id FROM campaign_participants WHERE campaign_id=$1',[cId])).rows[0].link_id;
+  const visit=await tx((c:any)=>referralClick(c,code));
+  const submission={id:'provider-submission',contactId:'contact-test',name:'Test Visitor',createdAt:new Date().toISOString(),[`${kind}Id`]:'asset-test',others:{eventData:{page:{url:`https://example.com/widget/${kind}/asset-test?referralClick=${visit.clickId}`}}}};
+  let calls=0;const reader:any=async(location:string,resource:string,offset:number,_fetch:any,params:any)=>{calls++;assert.equal(location,'location-a');assert.equal(resource,`${kind}Submissions`);assert.equal(offset,100);assert.equal(params.assetId,'asset-test');return {payload:{submissions:[submission,{...submission,id:'wrong-source',[`${kind}Id`]:'other'},{...submission,id:'wrong-url',others:{eventData:{page:{url:'https://other.example/?referralClick='+visit.clickId}}}},{...submission,id:'expired',createdAt:'2020-01-01'},{...submission,id:'missing-contact',contactId:''}],meta:{nextPage:3}}};};
+  const before={clients:await number('clients'),payments:await number('payments'),ledger:await number('commission_ledger'),inbox:await number('tracker_inbox')};
+  const preview=await checkSubmissions(db,u,{campaignId:cId,page:2},reader);assert.equal(preview.matched,1);assert.equal(preview.unmatched,4);assert.equal(preview.nextPage,3);assert.equal(await number('tracker_inbox'),before.inbox);
+  await checkSubmissions(db,u,{campaignId:cId,page:2,capture:true},reader);await checkSubmissions(db,u,{campaignId:cId,page:2,capture:true},reader);
+  assert.equal(await number('tracker_inbox'),before.inbox+1);assert.equal((await submissionTests(db,u,cId)).rows.length,1);assert.equal((await submissionTests(db,{...u,tenantId:'b'},cId)).rows.length,0);
+  assert.equal(await number('clients'),before.clients);assert.equal(await number('payments'),before.payments);assert.equal(await number('commission_ledger'),before.ledger);
+  await assert.rejects(()=>checkSubmissions(db,{...u,tenantId:'b'},{campaignId:cId},reader),/Choose a campaign/);
+  await assert.rejects(()=>checkSubmissions(db,{...u,role:'sales_manager'},{campaignId:cId},reader),/administrator/);assert.equal(calls,3);
+ });
  console.log(`${count} connected operations scenarios passed.`);
 }finally{await pg.close();}

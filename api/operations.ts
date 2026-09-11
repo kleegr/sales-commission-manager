@@ -1,4 +1,5 @@
 import {campaignActivity} from './_lib/campaign-activity.js';
+import {checkSubmissions,submissionTests} from './_lib/source-submissions.js';
 import {retryCheckout} from './_lib/automatic-checkout.js';
 import {campaignCatalog,loadCampaignPage} from './_lib/campaign-sources.js';
 import {DirectoryError} from './_lib/ghl-directory.js';
@@ -24,6 +25,7 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
   if(resource==='tax'){if(accountant||u.role==='sales_manager')throw new TrackerError('forbidden','Tax records require administrator or participant access.',403);return res.json({rows:(await database.query('SELECT id,salesperson_id,kind,filename,status,review_note,created_at FROM tracker_tax_documents WHERE tenant_id=$1 AND ($2::boolean OR salesperson_id=$3) ORDER BY created_at DESC LIMIT 100',[u.tenantId,manager,u.salespersonId])).rows});}
   if(resource==='campaignActivity')return res.json(await campaignActivity(database,u,req.query));
   admin(u);
+  if(resource==='submissionTests')return res.json(await submissionTests(database,u,String(req.query.campaignId||'')));
   if(resource==='transfers')return res.json({rows:(await database.query('SELECT * FROM tracker_transfer_attempts WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 100',[u.tenantId])).rows});
   if(resource==='campaignCatalog')return res.json(await campaignCatalog(database,u,String(req.query.kind||'funnel'),Math.max(1,Math.min(100,Math.floor(Number(req.query.page)||1)))));
   if(resource==='catalog'){
@@ -46,6 +48,7 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
  }
  if(!csrfOk(req))throw new TrackerError('csrf_check_failed','Reload and retry.',403);const body=typeof req.body==='string'?JSON.parse(req.body):req.body||{};if(JSON.stringify(body).length>(body.action==='submitTax'?2800000:20000))throw new TrackerError('too_large','Request exceeds the size limit.',413);const b=body.data||{};
  if(body.action==='loadCampaignPage'){admin(u);return res.json(await loadCampaignPage(database,u,b));}
+ if(body.action==='checkSubmissions')return res.json(await checkSubmissions(database,u,b));
  if(body.action==='retryCheckout')return res.json(await retryCheckout(database,u,b));
  if(body.action==='sendEmail')return res.json(await sendQueuedEmail(database,u,b));
  if(body.action==='initiateTransfer')return res.json(await initiateTransfer(database,u,b));

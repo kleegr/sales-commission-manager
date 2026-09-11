@@ -11,7 +11,7 @@ export default function CampaignLinks({campaignId,status,destination}:{campaignI
  const [events,setEvents]=useState<any[]>([]),[refresh,setRefresh]=useState(0),[advanced,setAdvanced]=useState(false),[selected,setSelected]=useState<string|null>(null);
  const [activity,setActivity]=useState<any>(null),[activityError,setActivityError]=useState(''),[chosenMode,setChosenMode]=useState<string|null>(null);
  const campaign=useRemote('campaigns',{id:campaignId,limit:'1'},refresh),current=campaign.data?.rows?.[0],automation=current?.tracking_policy?.automation;
- const submissionSource=['form','survey'].includes(current?.tracking_policy?.source?.selection?.kind);
+ const submissionSource=['form','survey','calendar'].includes(current?.tracking_policy?.source?.selection?.kind);
  const [page,setPage]=useState(1),[notice,setNotice]=useState(''),[error,setError]=useState('');
  const result=useRemote('links',{campaignId,page:String(page),limit:'25'});
  useEffect(()=>{if(!current||submissionSource)return;const c=new AbortController();let busy=false;const load=async()=>{if(busy||c.signal.aborted)return;busy=true;try{const r=await fetch(`/api/operations?resource=campaignActivity&includeSalesmen=1&campaignId=${encodeURIComponent(campaignId)}`,{signal:c.signal});const b=await r.json();if(!r.ok)throw Error(b.message||'Salesman results could not be loaded.');if(!c.signal.aborted){setActivity(b);setActivityError('');}}catch(e){if(!c.signal.aborted)setActivityError((e as Error).message);}finally{busy=false;}};void load();const timer=setInterval(()=>{if(document.visibilityState==='visible')void load();},15000);return()=>{c.abort();clearInterval(timer);};},[campaignId,refresh,!!current,submissionSource]);

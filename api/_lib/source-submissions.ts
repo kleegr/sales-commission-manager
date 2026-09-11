@@ -7,16 +7,29 @@ export async function checkSubmissions(db:Database,u:SessionUser,b:any,reader=ga
  admin(u);
  const campaign=(await db.query('SELECT c.*,t.ghl_location_id FROM campaigns c JOIN tenants t ON t.id=c.tenant_id WHERE c.tenant_id=$1 AND c.id=$2',[u.tenantId,String(b.campaignId||'')])).rows[0];
  const source=campaign?.tracking_policy?.source?.selection;
- if(!campaign||!['form','survey'].includes(source?.kind))throw new TrackerError('submission_source_required','Choose a campaign connected to a GHL form or survey.');
+ if(!campaign||!['form','survey','calendar'].includes(source?.kind))throw new TrackerError('submission_source_required','Choose a campaign connected to a GHL form, survey or calendar.');
  const page=Math.max(1,Math.min(1000,Math.floor(Number(b.page)||1)));
  const earliest=(await db.query('SELECT min(created_at) AS earliest FROM referral_clicks WHERE tenant_id=$1 AND campaign_id=$2',[u.tenantId,campaign.id])).rows[0].earliest;
  if(!earliest)return {checked:0,matched:0,unmatched:0,page,nextPage:null,rows:[],message:'Open a salesman’s affiliate link before checking submissions.'};
- const response=await reader(campaign.ghl_location_id,source.kind==='form'?'formSubmissions':'surveySubmissions',(page-1)*100,fetch,{assetId:source.id,startAt:new Date(earliest).toISOString().slice(0,10),endAt:new Date(Date.now()+86400000).toISOString().slice(0,10)});
- const submissions=response.payload?.submissions;
+ let response:any,submissions:any[];
+ if(source.kind==='calendar'){
+  const eventId=String(b.appointmentId||'').trim();if(!/^[a-zA-Z0-9_-]{5,100}$/.test(eventId))throw new TrackerError('appointment_required','Paste the booking ID from the confirmed GHL appointment.');
+  const event=(await reader(campaign.ghl_location_id,'appointment',0,fetch,{eventId,assetId:source.id})).payload?.event;
+  if(!event||event.id!==eventId||event.calendarId!==source.id||!event.contactId||(event.locationId&&event.locationId!==campaign.ghl_location_id))throw new TrackerError('appointment_scope','The appointment does not match this calendar.');
+  const contact=(await reader(campaign.ghl_location_id,'contact',0,fetch,{contactId:event.contactId})).payload?.contact;
+  if(!contact||contact.id!==event.contactId||contact.locationId!==campaign.ghl_location_id)throw new TrackerError('contact_scope','The booking contact does not match this workspace.');
+  const attribution=event.attributionSource||contact.lastAttributionSource||contact.attributionSource;
+  const createdAt=event.dateAdded||event.createdAt;
+  if(!createdAt||!attribution?.url)throw new TrackerError('booking_evidence_required','GHL did not provide a booking creation time and referral page URL. This booking cannot be credited automatically.');
+  submissions=[{id:event.id,calendarId:event.calendarId,contactId:event.contactId,name:contact.name,createdAt,others:{eventData:{page:{url:attribution.url}}}}];response={payload:{meta:{nextPage:null}}};
+ }else{
+  response=await reader(campaign.ghl_location_id,source.kind==='form'?'formSubmissions':'surveySubmissions',(page-1)*100,fetch,{assetId:source.id,startAt:new Date(earliest).toISOString().slice(0,10),endAt:new Date(Date.now()+86400000).toISOString().slice(0,10)});
+  submissions=response.payload?.submissions;
+ }
  if(!Array.isArray(submissions)||submissions.length>100)throw new TrackerError('submission_mapping_required','GHL returned an unsupported submission format.');
  const rows:any[]=[];let unmatched=0;
  for(const s of submissions){
-  if(String(s[source.kind==='form'?'formId':'surveyId']||'')!==source.id){unmatched++;continue;}
+  if(String(s[source.kind==='calendar'?'calendarId':source.kind==='form'?'formId':'surveyId']||'')!==source.id){unmatched++;continue;}
   let url:URL;try{url=new URL(s.others?.eventData?.page?.url);}catch{unmatched++;continue;}
   const destination=new URL(campaign.destination_url);
   const clickId=url.searchParams.get('referralClick');

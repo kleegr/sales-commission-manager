@@ -176,5 +176,24 @@ try{
   await assert.rejects(()=>checkSubmissions(db,{...u,tenantId:'b'},{campaignId:cId},reader),/Choose a campaign/);
   await assert.rejects(()=>checkSubmissions(db,{...u,role:'sales_manager'},{campaignId:cId},reader),/administrator/);assert.equal(calls,3);
  });
+
+ await check('calendar: confirmed provider booking verifies referral without financial writes',async()=>{
+  const {checkSubmissions}=await import('./source-submissions.js');
+  const cId=(await tx((c:any)=>saveCampaign(c,u,{name:'Calendar test',status:'active',conversionMode:'external',destinationUrl:'https://example.com/widget/booking/calendar-a',windowDays:30,participantIds:[sp]}))).id;
+  await db.query('UPDATE campaigns SET tracking_policy=tracking_policy||$2::jsonb WHERE id=$1',[cId,JSON.stringify({source:{selection:{kind:'calendar',id:'calendar-a'}}})]);
+  const code=(await db.query('SELECT link_id FROM campaign_participants WHERE campaign_id=$1',[cId])).rows[0].link_id;
+  const visit=await tx((c:any)=>referralClick(c,code));
+  let event:any={id:'event-a',calendarId:'calendar-a',locationId:'location-a',contactId:'contact-a',dateAdded:new Date().toISOString()};
+  let contact:any={id:'contact-a',locationId:'location-a',name:'Test Calendar Visitor',lastAttributionSource:{url:'https://example.com/widget/booking/calendar-a?referralClick='+visit.clickId}};
+  const reader:any=async(location:string,resource:string,_offset:number,_fetch:any,params:any)=>{assert.equal(location,'location-a');if(resource==='appointment'){assert.equal(params.assetId,'calendar-a');assert.equal(params.eventId,'event-a');return {payload:{event}};}assert.equal(resource,'contact');assert.equal(params.contactId,'contact-a');return {payload:{contact}};};
+  const before=[await number('clients'),await number('payments'),await number('commission_ledger'),await number('tracker_inbox')];
+  assert.equal((await checkSubmissions(db,u,{campaignId:cId,appointmentId:'event-a',capture:true},reader)).matched,1);
+  await checkSubmissions(db,u,{campaignId:cId,appointmentId:'event-a',capture:true},reader);
+  assert.deepEqual([await number('clients'),await number('payments'),await number('commission_ledger'),await number('tracker_inbox')],[...before.slice(0,3),before[3]+1]);
+  event={...event,calendarId:'foreign'};await assert.rejects(()=>checkSubmissions(db,u,{campaignId:cId,appointmentId:'event-a'},reader),/does not match/);event={...event,calendarId:'calendar-a'};
+  contact={...contact,locationId:'foreign'};await assert.rejects(()=>checkSubmissions(db,u,{campaignId:cId,appointmentId:'event-a'},reader),/does not match/);contact={...contact,locationId:'location-a',lastAttributionSource:{url:'https://example.com/unrelated'}};
+  assert.equal((await checkSubmissions(db,u,{campaignId:cId,appointmentId:'event-a'},reader)).matched,0);
+  await assert.rejects(()=>checkSubmissions(db,u,{campaignId:cId,appointmentId:'../bad'},reader),/booking ID/);
+ });
  console.log(`${count} connected operations scenarios passed.`);
 }finally{await pg.close();}

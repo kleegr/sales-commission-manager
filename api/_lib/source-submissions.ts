@@ -11,7 +11,7 @@ export async function checkSubmissions(db:Database,u:SessionUser,b:any,reader=ga
  const page=Math.max(1,Math.min(1000,Math.floor(Number(b.page)||1)));
  const earliest=(await db.query('SELECT min(created_at) AS earliest FROM referral_clicks WHERE tenant_id=$1 AND campaign_id=$2',[u.tenantId,campaign.id])).rows[0].earliest;
  if(!earliest)return {checked:0,matched:0,unmatched:0,page,nextPage:null,rows:[],message:'Open a salesman’s affiliate link before checking submissions.'};
- const response=await reader(campaign.ghl_location_id,source.kind==='form'?'formSubmissions':'surveySubmissions',(page-1)*100,fetch,{assetId:source.id,startAt:new Date(earliest).toISOString().slice(0,10),endAt:new Date().toISOString().slice(0,10)});
+ const response=await reader(campaign.ghl_location_id,source.kind==='form'?'formSubmissions':'surveySubmissions',(page-1)*100,fetch,{assetId:source.id,startAt:new Date(earliest).toISOString().slice(0,10),endAt:new Date(Date.now()+86400000).toISOString().slice(0,10)});
  const submissions=response.payload?.submissions;
  if(!Array.isArray(submissions)||submissions.length>100)throw new TrackerError('submission_mapping_required','GHL returned an unsupported submission format.');
  const rows:any[]=[];let unmatched=0;
@@ -35,7 +35,7 @@ export async function checkSubmissions(db:Database,u:SessionUser,b:any,reader=ga
   });
   rows.push(result);
  }
- return {checked:submissions.length,matched:rows.length,unmatched,page,nextPage:response.payload.meta?.nextPage? page+1:null,rows,message:b.capture?'Matched test submissions recorded. No money or clients were created.':'Read-only check. No records were changed.'};
+ return {checked:submissions.length,matched:rows.length,unmatched,page,nextPage:response.payload.meta?.nextPage? page+1:null,rows,message:b.capture?(rows.length?'Matched test submissions recorded. No money or clients were created.':'No matching test submissions were recorded. GHL may need a moment to publish a new submission.'):'Read-only check. No records were changed.'};
 }
 export async function submissionTests(db:SQL,u:SessionUser,campaignId:string){
  admin(u);return {rows:(await db.query("SELECT e.id,e.status,e.created_at,e.payload->>'customer' AS customer,e.payload->>'salesman' AS salesman,e.payload->>'kind' AS kind,e.payload->>'submittedAt' AS submitted_at FROM tracker_inbox e JOIN referral_clicks k ON k.tenant_id=e.tenant_id AND k.id=e.payload->>'clickId' WHERE e.tenant_id=$1 AND k.campaign_id=$2 AND e.provider='ghl-submission' ORDER BY e.created_at DESC LIMIT 50",[u.tenantId,campaignId])).rows};

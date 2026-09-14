@@ -24,10 +24,10 @@ let failed = 0;
 function ok(name: string, cond: boolean) {
   if (cond) {
     passed++;
-    console.log(`  ✓ ${name}`);
+    console.log(`  \u2713 ${name}`);
   } else {
     failed++;
-    console.log(`  ✗ ${name}`);
+    console.log(`  \u2717 ${name}`);
   }
 }
 
@@ -73,7 +73,7 @@ const findByRule = (rows: CommissionEntry[], ruleId: string) => rows.filter((r) 
 
 // ---- status classification -------------------------------------------------
 
-console.log("\n[Recompute · status classification]");
+console.log("\n[Recompute \u00b7 status classification]");
 ok("paid is locked", isLocked("paid"));
 ok("submitted is locked", isLocked("submitted"));
 ok("approved is locked", isLocked("approved"));
@@ -85,7 +85,7 @@ ok("pending NOT manual", !isManual("pending"));
 
 // ---- fresh recompute (immediate timing) ------------------------------------
 
-console.log("\n[Recompute · fresh, pay-immediately]");
+console.log("\n[Recompute \u00b7 fresh, pay-immediately]");
 {
   const r = recomputeClientLedger({ client: client(), salesperson: sp, plan: plan(), payments: [setupPay, monthlyPay], priorRows: [], today: TODAY });
   ok("no prior rows -> nothing deleted/preserved", r.deleteIds.length === 0 && r.preservedIds.length === 0);
@@ -102,7 +102,7 @@ console.log("\n[Recompute · fresh, pay-immediately]");
 
 // ---- locked row is preserved, never regenerated ----------------------------
 
-console.log("\n[Recompute · locked payout protection]");
+console.log("\n[Recompute \u00b7 locked payout protection]");
 {
   const prior: PriorLedgerRow[] = [
     { id: "led_paid", paymentId: "p_setup", ruleId: "r_setup", status: "paid", paidDate: "2025-02-01", releasedOverride: false },
@@ -127,7 +127,7 @@ console.log("\n[Recompute · locked payout protection]");
 
 // ---- non-locked rows are regenerated; released_override is sticky ----------
 
-console.log("\n[Recompute · regenerate + sticky release]");
+console.log("\n[Recompute \u00b7 regenerate + sticky release]");
 {
   const onApproval: CommissionTiming = { trigger: "on_approval", days: 0, months: 0, payments: 0, requireActiveClient: false, clawbackBeforeMonths: 0 };
   // held residual with a prior admin release flag
@@ -149,7 +149,7 @@ console.log("\n[Recompute · regenerate + sticky release]");
 
 // ---- clawback wins ---------------------------------------------------------
 
-console.log("\n[Recompute · clawback]");
+console.log("\n[Recompute \u00b7 clawback]");
 {
   const t: CommissionTiming = { trigger: "immediate", days: 0, months: 0, payments: 0, requireActiveClient: false, clawbackBeforeMonths: 6 };
   const canceled = client({ status: "canceled", canceledDate: "2025-03-01" }); // ~2 months after signup
@@ -161,7 +161,7 @@ console.log("\n[Recompute · clawback]");
 
 // ---- require-active-client hold --------------------------------------------
 
-console.log("\n[Recompute · active-client + after_payments holds]");
+console.log("\n[Recompute \u00b7 active-client + after_payments holds]");
 {
   const t: CommissionTiming = { trigger: "immediate", days: 0, months: 0, payments: 0, requireActiveClient: true, clawbackBeforeMonths: 0 };
   const paused = client({ status: "paused" });
@@ -231,7 +231,7 @@ console.log("\n[Recompute · locked-row clawback offset]");
 
 // ---- no plan / unassigned: drop non-locked, keep locked, insert nothing ----
 
-console.log("\n[Recompute · unassigned client]");
+console.log("\n[Recompute \u00b7 unassigned client]");
 {
   const prior: PriorLedgerRow[] = [
     { id: "led_pending", paymentId: "p_m1", ruleId: "r_res", status: "pending", paidDate: null, releasedOverride: false },

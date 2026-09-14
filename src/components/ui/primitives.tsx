@@ -37,7 +37,7 @@ type Size = "sm" | "md";
 
 const variants: Record<Variant, string> = {
   primary:
-    "bg-brand-600 text-white hover:bg-brand-700 focus-visible:ring-brand-500 shadow-xs",
+    "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-xs transition hover:-translate-y-px hover:shadow-md hover:brightness-105 active:translate-y-0 active:scale-[.98] focus-visible:ring-brand-500",
   secondary:
     "border border-slate-300 bg-white text-slate-700 shadow-xs hover:bg-slate-50 hover:text-slate-900 focus-visible:ring-brand-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800",
   ghost:

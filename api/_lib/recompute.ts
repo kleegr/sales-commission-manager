@@ -36,7 +36,7 @@ import {
   normalizeTiming,
   resolveCommissionTiming,
 } from "../../src/lib/commission-timing.js";
-import { isoToDate, todayISO } from "../../src/lib/format.js";
+import { isoToDate, round2, todayISO } from "../../src/lib/format.js";
 import type {
   Client,
   CommissionEntry,
@@ -93,6 +93,10 @@ export interface PriorLedgerRow {
   status: CommissionStatus;
   paidDate: string | null;
   releasedOverride: boolean;
+  /** Dollars on the row — needed to offset a locked row on clawback. */
+  commissionAmount?: number;
+  /** Rule type of the row (for the offsetting clawback entry). */
+  ruleType?: string;
 }
 
 export interface RecomputeClientInput {
@@ -168,13 +172,16 @@ export function recomputeClientLedger(
 
   for (const pay of payments) {
     if (pay.clientId !== client.id) continue;
-    const fresh = calculateCommissionForPayment(pay, client, salesperson, plan);
+    const fresh = calculateCommissionForPayment(pay, client, salesperson, plan, payments);
     for (const entry of fresh) {
       const k = key(entry.paymentId, entry.ruleId);
       if (lockedKeys.has(k)) continue; // locked row already preserves this line
 
       const prior = priorByKey.get(k);
       const releasedOverride = prior?.releasedOverride ?? false;
+      // Keep the EXISTING row id for the same payment+rule line (stable key),
+      // so external references (e.g. payout batch entries) survive a regenerate.
+      if (prior) entry.id = prior.id;
 
       const t = resolveCommissionTiming({
         timing,
@@ -202,6 +209,67 @@ export function recomputeClientLedger(
         releaseDate: t.releaseDate,
         holdDays: t.holdDays,
         holdReason: t.reason,
+        clawbackReason: t.clawbackReason,
+        timingTrigger: t.trigger,
+      });
+    }
+  }
+
+  // Locked rows never mutate — but a clawback must still recover the money.
+  // When the client canceled/refunded inside the clawback window, each locked
+  // row gets an offsetting NEGATIVE ledger entry (deterministic id cb_<rowId>)
+  // instead of touching the locked row itself. The offset is a regular
+  // non-locked row: it regenerates on every recompute while the clawback
+  // applies, and disappears if the clawback no longer applies.
+  if (
+    timing.clawbackBeforeMonths > 0 &&
+    (client.status === "canceled" || client.status === "refunded")
+  ) {
+    for (const lr of lockedRows) {
+      const amount = lr.commissionAmount ?? 0;
+      if (amount <= 0) continue;
+      const pay = payments.find((p) => p.id === lr.paymentId);
+      if (!pay) continue;
+      const t = resolveCommissionTiming({
+        timing,
+        earnedDate: pay.date,
+        asOf: today,
+        clientStatus: client.status,
+        clientSignupDate: client.signupDate,
+        clientCanceledDate: client.canceledDate,
+        clientPaymentCount,
+      });
+      if (t.status !== "clawed_back") continue;
+      const cbId = `cb_${lr.id}`;
+      // If the offset itself has been submitted/approved/paid it is locked
+      // (preserved above) — never generate a second one.
+      if (lockedRows.some((x) => x.id === cbId)) continue;
+      const priorCb = nonLockedRows.find((x) => x.id === cbId);
+      insertRows.push({
+        id: cbId,
+        salespersonId: salesperson.id,
+        clientId: client.id,
+        paymentId: lr.paymentId,
+        paymentDate: pay.date,
+        paymentType: pay.type,
+        paymentAmount: pay.amount,
+        ruleId: lr.ruleId,
+        ruleType: (lr.ruleType ?? "setup_fee") as CommissionEntry["ruleType"],
+        ruleLabel: "Clawback reversal",
+        commissionValueType: "fixed",
+        commissionValue: -round2(amount),
+        commissionAmount: -round2(amount),
+        status: priorCb && isManual(priorCb.status) ? priorCb.status : "pending",
+        dueDate: today,
+        paidDate: priorCb?.paidDate ?? null,
+        releasedOverride: false,
+        notes: t.clawbackReason ?? "Clawback of a locked payout row",
+        isProjection: false,
+        createdAt: today,
+        earnedDate: pay.date,
+        releaseDate: today,
+        holdDays: 0,
+        holdReason: "",
         clawbackReason: t.clawbackReason,
         timingTrigger: t.trigger,
       });
@@ -371,7 +439,7 @@ export async function recomputeClientInTx(
   const payments = payRows.map(mapPaymentRow);
 
   const { rows: ledgerRows } = await c.query<any>(
-    `SELECT id, payment_id, commission_rule_id, status, paid_date, released_override
+    `SELECT id, payment_id, commission_rule_id, status, paid_date, released_override, commission_amount, rule_type
        FROM commission_ledger
       WHERE tenant_id = $1 AND client_id = $2 AND payment_id IS NOT NULL`,
     [tenantId, clientId],
@@ -383,6 +451,8 @@ export async function recomputeClientInTx(
     status: r.status,
     paidDate: r.paid_date ?? null,
     releasedOverride: !!r.released_override,
+    commissionAmount: Number(r.commission_amount),
+    ruleType: r.rule_type ?? undefined,
   }));
 
   const result = recomputeClientLedger({ client, salesperson, plan, payments, priorRows, today });

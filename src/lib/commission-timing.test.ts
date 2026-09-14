@@ -28,10 +28,10 @@ let failed = 0;
 function ok(name: string, cond: boolean, extra?: unknown) {
   if (cond) {
     passed++;
-    console.log(`  ✓ ${name}`);
+    console.log(`  \u2713 ${name}`);
   } else {
     failed++;
-    console.error(`  ✗ ${name}`, extra ?? "");
+    console.error(`  \u2717 ${name}`, extra ?? "");
   }
 }
 
@@ -55,7 +55,7 @@ function ctx(over: Partial<TimingContext> & { timing: CommissionTiming }): Timin
 }
 
 // ============================================================================
-console.log("\n[Timing · normalize + headline]");
+console.log("\n[Timing \u00b7 normalize + headline]");
 // ============================================================================
 
 ok("undefined -> default (immediate)", normalizeTiming(undefined).trigger === "immediate");
@@ -93,7 +93,7 @@ ok(
 );
 
 // ============================================================================
-console.log("\n[Timing · the eight behaviours]");
+console.log("\n[Timing \u00b7 the eight behaviours]");
 // ============================================================================
 
 // 1) Pay immediately
@@ -249,7 +249,7 @@ console.log("\n[Timing · the eight behaviours]");
 }
 
 // ============================================================================
-console.log("\n[Timing · priority + edge cases]");
+console.log("\n[Timing \u00b7 priority + edge cases]");
 // ============================================================================
 
 // Clawback wins over an admin force-release.
@@ -292,7 +292,7 @@ ok(
 );
 
 // ============================================================================
-console.log("\n[Timing · ledger integration]");
+console.log("\n[Timing \u00b7 ledger integration]");
 // ============================================================================
 
 function sp(id: string, planId: string): Salesperson {

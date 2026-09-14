@@ -5,7 +5,7 @@ export interface ResourceSpec {table:string;columns:string;search:string;scope?:
 // Keep existing business history visible; a directory-only legacy import is not an enrollment.
 function enrolled(a:string){return `(${a}.ghl_user_id IS NULL OR ${a}.enrolled_by IS NOT NULL OR EXISTS(SELECT 1 FROM campaign_participants cp WHERE cp.tenant_id=${a}.tenant_id AND cp.salesperson_id=${a}.id) OR EXISTS(SELECT 1 FROM plan_assignments pa WHERE pa.tenant_id=${a}.tenant_id AND pa.salesperson_id=${a}.id) OR EXISTS(SELECT 1 FROM commission_ledger cl WHERE cl.tenant_id=${a}.tenant_id AND cl.salesperson_id=${a}.id))`;}
 const resources:Record<string,ResourceSpec>={
-  directory:{table:'external_users',columns:'r.*,s.id AS participant_id',search:"r.name||' '||r.email||' '||r.external_id",admin:true},
+  directory:{table:'external_users',columns:'r.*,s.id AS participant_id,s.matched_by AS participant_match',search:"r.name||' '||r.email||' '||r.external_id",admin:true},
   people:{table:'salespeople',columns:'r.id,r.name,r.email,r.role,r.status,r.ghl_user_id,r.ghl_role,r.ghl_active,r.ghl_synced_at,r.team_id,r.manager_user_id,r.parent_salesperson_id,r.enrolled_at,r.referral_code',search:"r.name||' '||r.email",scope:'r.id',date:'r.created_at'},
   teams:{table:'teams',columns:'r.*',search:'r.name',admin:true},
   logins:{table:'users',columns:'r.id,r.name,r.email,r.role,r.status,r.salesperson_id',search:"r.name||' '||r.email",admin:true},
@@ -33,7 +33,8 @@ export async function filteredQuery(db:SQL,u:SessionUser,resource:string,f:any={
   const s=resources[resource];if(!s)throw new TrackerError('unknown_resource','This resource is not available.',404);if(s.admin)admin(u);
   const values:any[]=[u.tenantId],where=['r.tenant_id=$1'];let join='';
   const add=(value:any)=>{values.push(value);return`$${values.length}`;};
-  if(resource==='directory')join=` LEFT JOIN salespeople s ON s.tenant_id=r.tenant_id AND (s.ghl_user_id=r.external_id OR s.kleegr_user_id=r.external_id) AND r.provider='ghl' AND ${enrolled('s')}`;
+  // A user is "already a salesman" through the stable provider identity, or through an external salesperson sharing the email (one row per user, identity match first).
+  if(resource==='directory')join=` LEFT JOIN LATERAL (SELECT s.id,CASE WHEN s.ghl_user_id=r.external_id OR s.kleegr_user_id=r.external_id THEN 'user' ELSE 'email' END AS matched_by FROM salespeople s WHERE s.tenant_id=r.tenant_id AND r.provider='ghl' AND ((s.ghl_user_id=r.external_id OR s.kleegr_user_id=r.external_id) OR (s.ghl_user_id IS NULL AND r.email<>'' AND lower(trim(s.email))=lower(trim(r.email)))) AND ${enrolled('s')} ORDER BY (s.ghl_user_id=r.external_id OR s.kleegr_user_id=r.external_id) DESC NULLS LAST,s.id LIMIT 1) s ON true`;
   if(resource==='people')where.push(enrolled('r'));
   if(resource==='logins'&&f.role)where.push(`r.role=${add(String(f.role))} AND r.status='active'`);
   if(resource==='plans')join=' JOIN commission_plans p ON p.tenant_id=r.tenant_id AND p.id=r.plan_id';

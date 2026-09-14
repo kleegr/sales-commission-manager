@@ -5,6 +5,8 @@ import {useCallback,useEffect,useMemo,useState} from 'react';
 import {Link} from 'react-router-dom';
 import {AlertTriangle, CheckCircle2, XCircle} from 'lucide-react';
 import {useAuth} from '../store/AuthContext';
+import {useFeatures} from '../store/FeaturesContext';
+import {type FeatureKey} from '../lib/features';
 import {useTracker} from '../components/TrackerGate';
 import {TrackerForm,type FormField,type FormSpec} from '../components/TrackerForm';
 import {Button,Modal} from '../components/ui';
@@ -36,7 +38,11 @@ export default function TrackerPage({resource:initialResource}:{resource:string}
     const task=simple?Promise.resolve(null):trackerGet(isReport?'report':resource,params,c.signal);task.then(b=>{if(c.signal.aborted)return;if(isReport)setReport(b);else{setRows(b?.rows||[]);setTotal(b?.total||0);}setLoading(false);}).catch(e=>{if(!c.signal.aborted){setError(e.message);setLoading(false);}});return()=>c.abort();},[resource,params,revision]);
   const open=(action:string,title:string,fields:FormField[],initial:Record<string,any>={},help?:string)=>{setNotice('');setForm({action,title,fields,initial,help});};
   const action=async(name:string,data:any)=>{try{setError('');await trackerPost(name,data);setNotice('Saved to this workspace.');reload();}catch(e){setError(e instanceof Error?e.message:'The action failed.');}};
-  const group=initialResource==='people'?['people','directory','teams','assignments']:initialResource==='campaigns'?['campaigns','links','media']:initialResource==='leads'?['leads','attribution','reviews']:initialResource==='payouts'?['payouts','settlements']:initialResource==='goals'?['goals','milestones']:initialResource==='integrations'?['integrations','sync','imports','reviews']:initialResource==='portal'?['portal','links','campaigns','plans','assignments','ledger','payouts','goals','media']:initialResource==='plans'?['plans','assignments','legacyPlans']:[initialResource];
+  const {features}=useFeatures();
+  // Same tenant feature flags that gate the routes (features.ts featureAllowsPath):
+  // don't hand out tabs — e.g. ledger/payouts inside /portal — for areas the agency turned off.
+  const tabFeature:Partial<Record<string,FeatureKey>>={ledger:'commissions',payouts:'payouts',settlements:'payouts',reports:'reports'};
+  const group=(initialResource==='people'?['people','directory','teams','assignments']:initialResource==='campaigns'?['campaigns','links','media']:initialResource==='leads'?['leads','attribution','reviews']:initialResource==='payouts'?['payouts','settlements']:initialResource==='goals'?['goals','milestones']:initialResource==='integrations'?['integrations','sync','imports','reviews']:initialResource==='portal'?['portal','links','campaigns','plans','assignments','ledger','payouts','goals','media']:initialResource==='plans'?['plans','assignments','legacyPlans']:[initialResource]).filter(v=>{const k=tabFeature[v];return v===initialResource||!k||features[k]!==false;});
   function create(){
     if(resource==='people')open('participant','Enroll external participant',peopleFields,{role:'affiliate',status:'active'},'This creates a commission participant. It does not create a login, send an invitation, or grant CRM permissions.');
     if(resource==='teams')open('team','Create team',[f('name','Team name'),{...ref('managerId','Existing manager login','logins',true),role:'sales_manager'}]);

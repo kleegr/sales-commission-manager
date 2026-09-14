@@ -77,6 +77,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const { rows } = await query<any>(sql, params);
 
+      // Tracker-era rows store money in amount_minor (commission_amount stays
+      // 0); the legacy read reports them as major units so totals never show $0.
+      let minorDigits = 2;
+      if (rows.some((e) => e.amount_minor != null)) {
+        try {
+          const w = await query<any>(`SELECT payout_terms FROM tracker_workspaces WHERE tenant_id = $1`, [tenantId]);
+          const d = Number(w.rows[0]?.payout_terms?.minorDigits ?? 2);
+          if (Number.isFinite(d) && d >= 0) minorDigits = d;
+        } catch { /* no tracker workspace — default to 2 */ }
+      }
+
       // Maps needed to re-derive timing per row (mirrors client stampTiming).
       const [{ rows: spRows }, { rows: planRows }, { rows: clientRows }, { rows: countRows }] =
         await Promise.all([
@@ -110,7 +121,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           ruleLabel: e.commission_rule_used ?? "",
           commissionValueType: e.commission_type,
           commissionValue: Number(e.commission_value),
-          commissionAmount: Number(e.commission_amount),
+          commissionAmount: e.amount_minor != null ? Number(e.amount_minor) / 10 ** minorDigits : Number(e.commission_amount),
           status: e.status as CommissionStatus,
           dueDate: e.due_date ?? "",
           paidDate: e.paid_date ?? null,

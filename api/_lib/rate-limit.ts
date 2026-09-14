@@ -72,6 +72,11 @@ export async function loginBlocked(ip: string, email: string): Promise<boolean> 
 export async function recordLoginAttempt(ip: string, email: string, ok: boolean): Promise<void> {
   try {
     await ensureTable();
+    // Opportunistic pruning: rows older than the sliding window can never
+    // affect loginBlocked(), so drop them here rather than letting the table
+    // grow forever. Cheap (indexed on created_at via the per-key indexes) and
+    // behaviour-preserving.
+    await query(`DELETE FROM login_attempts WHERE created_at <= now() - make_interval(mins => $1)`, [LOGIN_WINDOW_MIN]);
     await query(`INSERT INTO login_attempts (ip, email, ok) VALUES ($1,$2,$3)`, [ip, email, ok]);
   } catch {
     /* best-effort only */

@@ -5,29 +5,29 @@
 //   • a Smart Productivity `subaccount_admin` must reach the ADMIN workspace,
 //     not the limited Salesperson portal;
 //   • Manager stays distinct;
-//   • User/Viewer equivalence is asserted DELIBERATELY (documented product gap)
-//     so a future read-only role has to update this test on purpose;
+//   • Viewer maps to the READ-ONLY `viewer` role (never salesperson, which can
+//     create clients/payments and submit payouts);
 //   • the GoHighLevel vocabulary handled by mapKleegrRole() is unchanged;
 //   • nothing unknown can ever reach `owner`.
 
-import { mapLaunchTokenRole } from "./kleegr-roles.js";
-import { mapKleegrRole, type AppRole } from "./kleegr.js";
+import { mapLaunchTokenRole, type LaunchRole } from "./kleegr-roles.js";
+import { mapKleegrRole } from "./kleegr.js";
 
 let passed = 0;
 let failed = 0;
 function ok(name: string, cond: boolean) {
   if (cond) {
     passed++;
-    console.log(`  \u2713 ${name}`);
+    console.log(`  ✓ ${name}`);
   } else {
     failed++;
-    console.log(`  \u2717 ${name}`);
+    console.log(`  ✗ ${name}`);
   }
 }
 
 // Mirrors homePathFor() in api/kleegr/launch.ts — kept here so the test asserts
 // the USER-VISIBLE outcome (which workspace they land in), not just the string.
-function homePathFor(role: AppRole): string {
+function homePathFor(role: LaunchRole): string {
   if (role === "owner") return "/agency";
   if (role === "admin" || role === "sales_manager") return "/";
   return "/portal";
@@ -67,16 +67,17 @@ function main() {
   ok("user lands on /portal", homePathFor(mapLaunchTokenRole("user")) === "/portal");
 
   // =========================================================================
-  console.log("\n[launch role · documented User/Viewer equivalence]");
-  // SCM has no read-only role, and Smart Productivity's SCM_ROLE_DEFAULTS give
-  // `user` and `viewer` an identical permission set. This is a KNOWN PRODUCT
-  // GAP, asserted here so introducing a real read-only tier is a deliberate,
-  // test-updating change rather than an accident.
-  ok("viewer → salesperson (explicit, not the default branch)", mapLaunchTokenRole("viewer") === "salesperson");
+  console.log("\n[launch role · viewer is read-only]");
+  // SP's read-only tier must NEVER map to salesperson (which can create
+  // clients/payments and submit payouts): it maps to the read-only `viewer`
+  // role, which no mutation gate whitelists.
+  ok("viewer → viewer (read-only, explicit)", mapLaunchTokenRole("viewer") === "viewer");
+  ok("viewer is NEVER salesperson", mapLaunchTokenRole("viewer") !== ("salesperson" as string));
   ok(
-    "viewer and user are currently equivalent (documented gap)",
-    mapLaunchTokenRole("viewer") === mapLaunchTokenRole("user"),
+    "viewer and user are NOT equivalent",
+    (mapLaunchTokenRole("viewer") as string) !== (mapLaunchTokenRole("user") as string),
   );
+  ok("viewer is never owner/admin", !["owner", "admin"].includes(mapLaunchTokenRole("viewer", "agency")));
 
   // =========================================================================
   console.log("\n[launch role · normalisation]");

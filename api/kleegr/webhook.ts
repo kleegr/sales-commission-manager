@@ -82,7 +82,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const eventTypeRaw = String(payload?.event ?? payload?.type ?? payload?.eventType ?? "").trim();
   // Accept both `location.*` and the legacy `subaccount.*` webhook namings.
   const eventType = normalizeWebhookEvent(eventTypeRaw);
-  const deliveryId =
+  const explicitId =
     typeof payload?.id === "string" ? payload.id :
     typeof payload?.eventId === "string" ? payload.eventId :
     typeof payload?.webhookId === "string" ? payload.webhookId :
@@ -94,6 +94,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const subAccountId = extractSubAccountId(payload);
     const tenant = subAccountId ? await resolveTenantBySubAccount(subAccountId) : null;
 
+    // An event with no explicit id must still dedupe: derive a DETERMINISTIC
+    // fallback id from (tenant, event type, exact signed payload bytes) so a
+    // retried delivery of the same event maps to the same id.
+    const deliveryId = explicitId ??
+      `derived_${createHash("sha256").update(`${tenant?.id ?? subAccountId ?? ""}|${eventType}|`).update(raw).digest("hex")}`;
+
     // Record first (idempotent). A duplicate delivery is acknowledged, not re-applied.
     const recorded = await recordWebhookEvent(tenant?.id ?? null, eventType || "unknown", deliveryId, payload);
     if (tenant && await trackerInstalled() && /^(contact|opportunity)\./.test(eventType)) {
@@ -101,7 +107,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Financial/attribution effects never run implicitly from this receiver.
       const source = payload.data || payload;
       const safe = Object.fromEntries(['id','contactId','name','firstName','lastName','email','phone','status','assignedTo','pipelineId','pipelineStageId','monetaryValue','updatedAt'].filter(k=>source[k]!==undefined).map(k=>[k,source[k]]));
-      await database.query(`INSERT INTO import_reviews(id,tenant_id,resource,external_id,payload,reason) VALUES($1,$2,'webhook',$3,$4::jsonb,'Verified Kleegr event: review mapping before applying. Use directory sync for contact profile updates.') ON CONFLICT(tenant_id,resource,external_id) DO NOTHING`, [id('import'),tenant.id,deliveryId||createHash('sha256').update(raw).digest('hex'),JSON.stringify({eventType,...safe})]);
+      await database.query(`INSERT INTO import_reviews(id,tenant_id,resource,external_id,payload,reason) VALUES($1,$2,'webhook',$3,$4::jsonb,'Verified Kleegr event: review mapping before applying. Use directory sync for contact profile updates.') ON CONFLICT(tenant_id,resource,external_id) DO NOTHING`, [id('import'),tenant.id,deliveryId,JSON.stringify({eventType,...safe})]);
       return res.status(200).json({ok:true,queued:true,duplicate:recorded.duplicate,event:eventType});
     }
     if (recorded.duplicate) {

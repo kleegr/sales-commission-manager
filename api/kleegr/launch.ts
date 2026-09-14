@@ -22,8 +22,9 @@
 // ============================================================================
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { createHash } from "node:crypto";
 import { trackerInstalled, database } from '../_lib/tracker-common.js';
-import { hasDb } from "../_lib/db.js";
+import { hasDb, query } from "../_lib/db.js";
 import { ensureSchema } from "../_lib/repository.js";
 import { createSession, setSessionCookie } from "../_lib/auth.js";
 import { renderLaunchHandoff } from "../_lib/launch-handoff.js";
@@ -32,12 +33,11 @@ import {
   reportIntegrationStatus,
   readKleegrConfig,
   fetchPluginPermissions,
-  type AppRole,
 } from "../_lib/kleegr.js";
 import { directoryConfigured } from '../_lib/ghl-directory.js';
 import { syncDirectory } from '../_lib/directory-sync.js';
 export const config = { maxDuration: 120 };
-import { mapLaunchTokenRole } from "../_lib/kleegr-roles.js";
+import { mapLaunchTokenRole, type LaunchRole } from "../_lib/kleegr-roles.js";
 import {
   upsertTenantForSubAccount,
   upsertUserForClaims,
@@ -65,7 +65,7 @@ function safeJson(s: string): unknown {
   }
 }
 
-function homePathFor(role: AppRole): string {
+function homePathFor(role: LaunchRole): string {
   if (role === "owner") return "/agency";
   if (role === "admin" || role === "sales_manager") return "/";
   return "/portal";
@@ -105,6 +105,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const claims = verified.claims;
 
+    // 3b. STRICT SINGLE-USE: a verified launch token is consumed here, exactly
+    //     once. The hash is recorded under a PRIMARY KEY, so a replayed token
+    //     (e.g. a leaked ?token=… URL re-opened before exp) loses the INSERT
+    //     race and is rejected. Rows past the token's own exp are swept
+    //     opportunistically on each insert to keep the table tiny.
+    const tokenHash = createHash("sha256").update(launchToken).digest("hex");
+    const expSec = claims.exp ?? Math.floor(Date.now() / 1000) + 15 * 60;
+    await query(`DELETE FROM kleegr_launch_tokens WHERE expires_at < now()`);
+    const consumed = await query<{ token_hash: string }>(
+      `INSERT INTO kleegr_launch_tokens (token_hash, expires_at) VALUES ($1, to_timestamp($2))
+        ON CONFLICT (token_hash) DO NOTHING RETURNING token_hash`,
+      [tokenHash, expSec],
+    );
+    if (consumed.rows.length === 0) return sendLaunchError(res, 401, "launch_token_already_used");
+
     // 4. role mapping. The launch token's `role` claim is a Smart Productivity
     //    GLOBAL TIER key (agency_admin | subaccount_admin | manager | user |
     //    viewer), NOT a raw GoHighLevel role string — so it is mapped with
@@ -114,7 +129,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     //    sub-account administrator landed on the limited /portal workspace.
     //    An agency-level placement maps agency_admin → owner; a sub-account
     //    placement maps it → admin. Default: sub-account.
-    const placement = String((req.query as any)?.placement ?? (claims.raw as any)?.placement ?? "").toLowerCase();
+    // SECURITY: placement comes ONLY from the VERIFIED token claims — never
+    // from the query string, which the client controls (?placement=agency
+    // would otherwise escalate a sub-account launch to an agency `owner`
+    // session). See the contract in kleegr-roles.ts.
+    const placement = String((claims.raw as any)?.placement ?? "").toLowerCase();
     const context = placement === "agency" ? "agency" : "sub_account";
     const mappedRole = mapLaunchTokenRole(claims.role, context);
 
@@ -207,7 +226,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Referrer-Policy", "no-referrer");
     return res.send(renderLaunchHandoff(target, sessionToken, spPermissions));
-  } catch (err: any) {
-    return sendLaunchError(res, 500, String(err?.message ?? err).slice(0, 120));
+  } catch (err) {
+    // Log the real error server-side; the public failure page shows only a
+    // generic code (never err.message, which can leak internals into HTML).
+    console.error("[scm:error] kleegr-launch:", err instanceof Error ? (err.stack ?? err.message) : String(err));
+    return sendLaunchError(res, 500, "internal_error");
   }
 }

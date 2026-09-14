@@ -58,7 +58,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const result = await reportIntegrationStatus(status, subAccountId, detail);
     return res.status(200).json({ ok: result.ok, reported: status, subAccountId, kleegrStatus: result.status });
-  } catch (err: any) {
-    return res.status(500).json({ error: String(err?.message ?? err) });
+  } catch (err) {
+    console.error("[scm:error] kleegr-report-status:", err instanceof Error ? (err.stack ?? err.message) : String(err));
+    return res.status(500).json({ error: "internal_error" });
   }
 }

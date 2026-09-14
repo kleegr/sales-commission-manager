@@ -1,0 +1,3 @@
+single=A✓B
+double=A\\u2713B
+triple=A\\✓B

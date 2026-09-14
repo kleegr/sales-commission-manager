@@ -315,6 +315,30 @@ CREATE TABLE IF NOT EXISTS integration_events (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Webhook dedupe must be race-free: a UNIQUE index over (tenant, external id)
+-- lets the receiver INSERT ... ON CONFLICT DO NOTHING instead of the previous
+-- racy SELECT-then-INSERT (and keys the dedupe per tenant, not globally).
+-- Guarded by a DO block so pre-existing duplicate rows are collapsed (keeping
+-- the earliest) before the index is created on an already-populated database.
+DO $dedupe$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'uq_integration_events_tenant_external') THEN
+    DELETE FROM integration_events a USING integration_events b
+      WHERE a.external_id IS NOT NULL AND a.external_id = b.external_id
+        AND COALESCE(a.tenant_id, '') = COALESCE(b.tenant_id, '')
+        AND (a.created_at > b.created_at OR (a.created_at = b.created_at AND a.id > b.id));
+    CREATE UNIQUE INDEX uq_integration_events_tenant_external
+      ON integration_events ((COALESCE(tenant_id, '')), external_id)
+      WHERE external_id IS NOT NULL;
+  END IF;
+END $dedupe$;
+
+-- 14c. consumed Kleegr launch tokens (strict single-use; replay rejected) -----
+CREATE TABLE IF NOT EXISTS kleegr_launch_tokens (
+  token_hash   TEXT PRIMARY KEY,          -- sha256 of the launch token
+  expires_at   TIMESTAMPTZ NOT NULL,      -- the token's own exp (cleanup bound)
+  consumed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- indexes for tenant-scoped lookups -----------------------------------------
 CREATE INDEX IF NOT EXISTS idx_salespeople_tenant       ON salespeople(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_plans_tenant             ON commission_plans(tenant_id);

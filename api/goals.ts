@@ -90,6 +90,24 @@ async function guardScope(user: SessionUser, input: GoalInput): Promise<{ ok: tr
   return { ok: true, value: { ...input, managerUserId: null } };
 }
 
+/**
+ * May this manager act on (edit/delete/attach milestones to) an existing goal?
+ * Same ownership rules as PATCH: their own team's goals, or a rep goal whose
+ * salesperson is actually ON their team. Tenant goals are admin-only.
+ */
+async function managerOwnsGoal(user: SessionUser, g: Goal): Promise<boolean> {
+  if (g.scopeType === "team") return g.managerUserId === user.id;
+  if (g.scopeType === "salesperson") {
+    if (!g.salespersonId) return false;
+    const { rows } = await query<any>(
+      `SELECT manager_user_id FROM salespeople WHERE tenant_id = $1 AND id = $2`,
+      [user.tenantId, g.salespersonId],
+    );
+    return rows[0]?.manager_user_id === user.id;
+  }
+  return false; // tenant scope is admin-only
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!hasDb()) return res.status(503).json({ error: "database_not_configured" });
   try {
@@ -164,10 +182,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const { rows } = await query<any>(`SELECT * FROM goals WHERE tenant_id = $1 AND id = $2`, [tenantId, parsed.value.goalId]);
         if (rows.length === 0) return res.status(400).json({ error: "invalid_goal" });
         const g = rowToGoal(rows[0]);
-        if (isManager && !(g.scopeType === "team" && g.managerUserId === user.id) &&
-            !(g.scopeType === "salesperson")) {
-          // managers may only attach to their team/rep goals (tenant goals are admin's)
-          if (g.scopeType === "tenant") return res.status(403).json({ error: "forbidden" });
+        // Managers may only attach to their OWN team's goals or to a rep goal
+        // whose salesperson is on their team (tenant goals are admin's).
+        if (isManager && !(await managerOwnsGoal(user, g))) {
+          return res.status(403).json({ error: "forbidden" });
         }
         const id = uid("ms");
         await query(
@@ -180,6 +198,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (req.method === "DELETE") {
         const id = String(req.query.id ?? "");
         if (!id) return res.status(400).json({ error: "id_required" });
+        // Same ownership rules as milestone create: a manager may only delete
+        // milestones on goals they could have created.
+        const { rows } = await query<any>(
+          `SELECT g.* FROM milestones m JOIN goals g ON g.tenant_id = m.tenant_id AND g.id = m.goal_id
+            WHERE m.tenant_id = $1 AND m.id = $2`,
+          [tenantId, id],
+        );
+        if (rows.length === 0) return res.status(404).json({ error: "not_found" });
+        if (isManager && !(await managerOwnsGoal(user, rowToGoal(rows[0])))) {
+          return res.status(403).json({ error: "forbidden" });
+        }
         const { rowCount } = await query(`DELETE FROM milestones WHERE tenant_id = $1 AND id = $2`, [tenantId, id]);
         if (rowCount === 0) return res.status(404).json({ error: "not_found" });
         return res.status(200).json({ ok: true, id });
@@ -240,6 +269,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method === "DELETE") {
       const id = String(req.query.id ?? "");
       if (!id) return res.status(400).json({ error: "id_required" });
+      // Same ownership rules as PATCH: a manager may only delete goals they
+      // could have created (their team, or a rep on their team).
+      const { rows } = await query<any>(`SELECT * FROM goals WHERE tenant_id = $1 AND id = $2`, [tenantId, id]);
+      if (rows.length === 0) return res.status(404).json({ error: "not_found" });
+      if (isManager && !(await managerOwnsGoal(user, rowToGoal(rows[0])))) {
+        return res.status(403).json({ error: "forbidden" });
+      }
       // CASCADE on milestones removes the goal's milestones.
       const { rowCount } = await query(`DELETE FROM goals WHERE tenant_id = $1 AND id = $2`, [tenantId, id]);
       if (rowCount === 0) return res.status(404).json({ error: "not_found" });

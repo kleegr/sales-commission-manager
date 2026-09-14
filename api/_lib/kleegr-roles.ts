@@ -46,6 +46,14 @@ import { mapKleegrRole, type AppRole } from "./kleegr.js";
 
 export type { AppRole };
 
+/**
+ * The roles a launch token can map to: every AppRole plus the READ-ONLY
+ * `viewer` tier. `viewer` is deliberately NOT an AppRole — every mutation gate
+ * in the API whitelists explicit roles (ADMIN_ROLES / MANAGER_ROLES /
+ * SELF_ROLES), so a `viewer` session is rejected by all of them.
+ */
+export type LaunchRole = AppRole | "viewer";
+
 /** Normalise 'Sub-Account Admin' / 'sub account admin' / 'SUBACCOUNT_ADMIN'. */
 function normalizeTier(v: string | null | undefined): string {
   return (v ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
@@ -59,23 +67,19 @@ function normalizeTier(v: string | null | undefined): string {
  *   subaccount_admin  → admin           — full sub-account administration
  *   manager           → sales_manager   — team-scoped review/approve
  *   user              → salesperson     — own records only
- *   viewer            → salesperson     — see KNOWN GAP below
+ *   viewer            → viewer          — READ-ONLY (rejected by mutation gates)
  *   <anything else>   → mapKleegrRole() — preserves the GoHighLevel vocabulary
  *                                          and its "never owner" fail-safe
  *
- * KNOWN PRODUCT GAP — `viewer`: Smart Productivity distinguishes User from
- * Viewer, but SCM's role set (owner > admin > sales_manager > salesperson >
- * affiliate > partner) has NO read-only tier, and Smart Productivity's own
- * SCM_ROLE_DEFAULTS give `user` and `viewer` an identical permission set
- * (['view_commissions','view_reports']). So Viewer is mapped to `salesperson`
- * DELIBERATELY and EXPLICITLY here rather than silently via the default branch.
- * Making Viewer genuinely read-only requires a new SCM role and is out of scope
- * for this fix — it is tracked as a follow-up, not implemented here.
+ * SECURITY — `viewer`: Smart Productivity's read-only tier previously mapped to
+ * `salesperson`, which can create clients/payments and submit payouts. It now
+ * maps to the read-only `viewer` role, which no mutation gate whitelists, so
+ * every write endpoint rejects it with 403.
  */
 export function mapLaunchTokenRole(
   kleegrRole: string | null | undefined,
   context: "agency" | "sub_account" = "sub_account",
-): AppRole {
+): LaunchRole {
   switch (normalizeTier(kleegrRole)) {
     // Agency-level tier: owns the agency dashboard in an agency placement,
     // administers the single sub-account when launched inside one.
@@ -98,9 +102,9 @@ export function mapLaunchTokenRole(
     case "user":
       return "salesperson";
 
-    // Explicit, documented equivalence — see KNOWN PRODUCT GAP above.
+    // Read-only. Never a role that any mutation gate accepts.
     case "viewer":
-      return "salesperson";
+      return "viewer";
 
     default:
       // Not a Smart Productivity tier key — fall back to the GoHighLevel

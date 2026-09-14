@@ -302,4 +302,35 @@ UPDATE tenants SET status = 'archived', updated_at = now()
   (id = 'tenant_acme' AND slug = 'acme' AND ghl_location_id = 'ghl_loc_acme_002'));
 INSERT INTO schema_migrations (id) VALUES ('0011_live_directory') ON CONFLICT (id) DO NOTHING;
 
+-- 0010_webhook_dedupe_launch_tokens (mirrored in
+-- migrations/0010_webhook_dedupe_launch_tokens.sql, named for the on-disk
+-- sequence) — security hardening for a LIVE database:
+--   1. Race-free webhook dedupe: a UNIQUE index over (tenant, external id) so
+--      the receiver can INSERT ... ON CONFLICT DO NOTHING instead of the old
+--      racy SELECT-then-INSERT. The DO block is a no-op once the index exists;
+--      on the first run it collapses pre-existing duplicate rows (keeping the
+--      earliest) so the index can be created on an already-populated database.
+--   2. Single-use Kleegr launch tokens: consumed token hashes are recorded and
+--      a replay is rejected; expired rows are swept on insert by launch.ts.
+DO $dedupe$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'uq_integration_events_tenant_external') THEN
+    DELETE FROM integration_events a USING integration_events b
+      WHERE a.external_id IS NOT NULL AND a.external_id = b.external_id
+        AND COALESCE(a.tenant_id, '') = COALESCE(b.tenant_id, '')
+        AND (a.created_at > b.created_at OR (a.created_at = b.created_at AND a.id > b.id));
+    CREATE UNIQUE INDEX uq_integration_events_tenant_external
+      ON integration_events ((COALESCE(tenant_id, '')), external_id)
+      WHERE external_id IS NOT NULL;
+  END IF;
+END $dedupe$;
+
+CREATE TABLE IF NOT EXISTS kleegr_launch_tokens (
+  token_hash   TEXT PRIMARY KEY,          -- sha256 of the launch token
+  expires_at   TIMESTAMPTZ NOT NULL,      -- the token's own exp (cleanup bound)
+  consumed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO schema_migrations (id) VALUES ('0010_webhook_dedupe_launch_tokens')
+ON CONFLICT (id) DO NOTHING;
+
 `;

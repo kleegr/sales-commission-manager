@@ -43,9 +43,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (err instanceof KleegrError) {
         return res.status(200).json({ ok: false, code: err.code, httpStatus: err.status, message: err.message });
       }
-      return res.status(200).json({ ok: false, code: "error", message: String((err as any)?.message ?? err) });
+      console.error("[scm:error] kleegr-test-connection verify:", err instanceof Error ? (err.stack ?? err.message) : String(err));
+      return res.status(200).json({ ok: false, code: "error", message: "Connection test failed." });
     }
-  } catch (err: any) {
-    return res.status(500).json({ error: String(err?.message ?? err) });
+  } catch (err) {
+    console.error("[scm:error] kleegr-test-connection:", err instanceof Error ? (err.stack ?? err.message) : String(err));
+    return res.status(500).json({ error: "internal_error" });
   }
 }

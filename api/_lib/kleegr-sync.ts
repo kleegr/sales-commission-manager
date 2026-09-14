@@ -25,6 +25,7 @@ import {
   type AppRole,
   type IntegrationStatus,
 } from "./kleegr.js";
+import type { LaunchRole } from "./kleegr-roles.js";
 
 const nowISO = () => new Date().toISOString();
 const uid = (p: string) => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -217,7 +218,7 @@ export function legacyKleegrUserId(spUserId: string): string {
 export async function upsertUserForClaims(
   tenantId: string,
   claims: LaunchClaims,
-  mappedRole: AppRole,
+  mappedRole: LaunchRole,
   queryImpl: QueryFn = query,
 ): Promise<AppUserRow> {
   const q = queryImpl;
@@ -377,7 +378,7 @@ export async function ensureSalespersonForUser(
   tenantId: string,
   user: AppUserRow,
   claims: LaunchClaims,
-  mappedRole: AppRole,
+  mappedRole: LaunchRole,
   queryImpl: QueryFn = query,
 ): Promise<SalespersonLink> {
   if (!isSelfScopedRole(mappedRole)) return { salespersonId: null, outcome: "skipped_not_self_scoped" };
@@ -775,26 +776,24 @@ export function extractSubAccountId(payload: any): string | null {
   );
 }
 
-/** Record the event in integration_events (source='kleegr'); dedupe by external id. */
+/** Record the event in integration_events (source='kleegr'); dedupe by (tenant, external id). */
 export async function recordWebhookEvent(
   tenantId: string | null,
   eventType: string,
   externalId: string | null,
   payload: unknown,
 ): Promise<{ duplicate: boolean }> {
-  if (externalId) {
-    const dup = await query<{ id: string }>(
-      `SELECT id FROM integration_events WHERE source = 'kleegr' AND external_id = $1 LIMIT 1`,
-      [externalId],
-    );
-    if (dup.rows[0]) return { duplicate: true };
-  }
-  await query(
+  // Race-free dedupe: the unique index uq_integration_events_tenant_external
+  // (COALESCE(tenant_id,''), external_id) makes concurrent redeliveries
+  // collapse at the database, replacing the old racy SELECT-then-INSERT.
+  const ins = await query<{ id: string }>(
     `INSERT INTO integration_events (id, tenant_id, source, event_type, external_id, payload, status, created_at)
-      VALUES ($1,$2,'kleegr',$3,$4,$5::jsonb,'received', now())`,
+      VALUES ($1,$2,'kleegr',$3,$4,$5::jsonb,'received', now())
+      ON CONFLICT ((COALESCE(tenant_id, '')), external_id) WHERE external_id IS NOT NULL DO NOTHING
+      RETURNING id`,
     [uid("evt"), tenantId, eventType, externalId, JSON.stringify(payload ?? {})],
   );
-  return { duplicate: false };
+  return { duplicate: externalId !== null && ins.rows.length === 0 };
 }
 
 export interface WebhookApplyResult {

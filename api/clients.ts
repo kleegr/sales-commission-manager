@@ -14,6 +14,13 @@ import { csrfOk } from "./_lib/http.js";
 const nowISO = () => new Date().toISOString();
 const uid = (p: string) => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
+// Matches ClientStatus in src/types (ledger/commission code branches on these).
+const CLIENT_STATUSES = ["active", "canceled", "refunded", "paused"] as const;
+const nonNegAmount = (v: unknown): number | null => {
+  const n = Number(v ?? 0);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+};
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!hasDb()) return res.status(503).json({ error: "database_not_configured" });
   try {
@@ -65,6 +72,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
       }
 
+      // Validate money + status: fees must be finite and >= 0, status must be
+      // one of the values the ledger/commission code understands.
+      const setupFee = nonNegAmount(body.setupFee);
+      const monthlySubscription = nonNegAmount(body.monthlySubscription);
+      if (setupFee === null || monthlySubscription === null) {
+        return res.status(400).json({ error: "invalid_amount" });
+      }
+      const status = String(body.status ?? "active");
+      if (!(CLIENT_STATUSES as readonly string[]).includes(status)) {
+        return res.status(400).json({ error: "invalid_status", allowed: CLIENT_STATUSES });
+      }
+
       const id = uid("cl");
       const ts = nowISO();
       await query(
@@ -76,8 +95,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           id, user.tenantId, salespersonId, companyName,
           String(body.contactName ?? ""), String(body.email ?? ""), String(body.phone ?? ""),
           String(body.signupDate ?? ts.slice(0, 10)),
-          Number(body.setupFee ?? 0), Number(body.monthlySubscription ?? 0),
-          String(body.status ?? "active"), String(body.notes ?? ""), ts,
+          setupFee, monthlySubscription,
+          status, String(body.notes ?? ""), ts,
         ],
       );
       return res.status(201).json({ ok: true, id });

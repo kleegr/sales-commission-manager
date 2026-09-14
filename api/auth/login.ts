@@ -22,7 +22,7 @@ import {
   type Role,
 } from "../_lib/auth.js";
 import { DEMO_PASSWORD } from "../_lib/auth-seed.js";
-import { clientIp } from "../_lib/http.js";
+import { clientIp, csrfOk } from "../_lib/http.js";
 import { loginBlocked, recordLoginAttempt, LOGIN_WINDOW_MIN } from "../_lib/rate-limit.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -31,6 +31,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "method_not_allowed" });
   }
+  if (!csrfOk(req)) return res.status(403).json({ error: "csrf_check_failed" });
 
   try {
     await ensureSchema();
@@ -81,10 +82,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     );
 
     if (rows.length > 1 && !tenant) {
-      // same email in multiple tenants — ask which one
+      // Same email in multiple tenants — ask which one, but ONLY after the
+      // password is verified. Revealing the tenant list on the email alone was
+      // an unauthenticated tenant-enumeration probe that also bypassed the
+      // failed-attempt throttle. Only tenants whose credential actually
+      // matches are ever disclosed.
+      const matches = rows.filter((r) => r.status === "active" && verifyPassword(password, r.password_hash));
+      if (matches.length === 0) {
+        await recordLoginAttempt(ip, email, false);
+        return res.status(401).json({ error: "invalid_credentials" });
+      }
       return res.status(409).json({
         error: "tenant_required",
-        tenants: rows.map((r) => ({ slug: r.tenant_slug, name: r.tenant_name })),
+        tenants: matches.map((r) => ({ slug: r.tenant_slug, name: r.tenant_name })),
       });
     }
 

@@ -1,4 +1,4 @@
-import {saveSalesman,importSalesmen,createStructure,preferences,mediaFolder,saveMediaFile,readFile,experienceRead} from './_lib/tracker-experience.js';
+import {saveSalesman,importSalesmen,createStructure,updateStructure,preferences,mediaFolder,saveMediaFile,readFile,experienceRead} from './_lib/tracker-experience.js';
 import type {VercelRequest,VercelResponse} from '@vercel/node';
 import {getSessionUser} from './_lib/auth.js';
 import {csrfOk} from './_lib/http.js';
@@ -15,7 +15,7 @@ import {previewSync,approveImport} from './_lib/tracker-sync.js';
 export const config={maxDuration:60};
 async function workspaceRead<T>(tenantId:string,fn:(db:SQL)=>Promise<T>){return database.transaction(async db=>{await db.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');const w=(await db.query('SELECT timezone FROM tracker_workspaces WHERE tenant_id=$1',[tenantId])).rows[0];if(w)await db.query("SELECT set_config('TimeZone',$1,true)",[w.timezone]);return fn(db);});}
 export const mutations:Record<string,(db:SQL,u:any,b:any)=>Promise<any>>={
-  salesman:saveSalesman,importSalesmen,structure:createStructure,preferences,mediaFolder,mediaFile:saveMediaFile,
+  salesman:saveSalesman,importSalesmen,structure:createStructure,updateStructure,preferences,mediaFolder,mediaFile:saveMediaFile,
   enroll,participant:saveParticipant,team:saveTeam,plan:publishPlan,assignment:assignPlan,
   lead:createLead,editLead,attribution:attributeLead,attributionCandidate,opportunity:saveOpportunity,campaign:saveCampaign,
   payment:recordPayment,refund:recordRefund,award:recordAward,adjustment:recordAdjustment,allocateReceipt,closePartialPayout,payout:createPayout,payoutAction:transitionPayout,settlement:settlePayout,approveImport,

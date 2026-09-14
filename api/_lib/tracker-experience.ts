@@ -1,5 +1,5 @@
 import type {SessionUser} from './auth.js';
-import {admin,audit,id,lock,participant,required,TrackerError,type SQL} from './tracker-common.js';
+import {admin,audit,dateOnly,id,lock,participant,required,TrackerError,type SQL} from './tracker-common.js';
 import {saveParticipant,assignPlan,publishPlan} from './tracker-people.js';
 import {saveCampaign,safeDestination} from './tracker-attribution.js';
 import {filteredQuery,listResource,report} from './tracker-read.js';
@@ -65,6 +65,33 @@ export async function createStructure(db:SQL,u:SessionUser,b:any){
  const created=await saveCampaign(db,u,{...b,startsAt:b.startsAt||b.effectiveFrom,status:b.status||'draft',conversionMode:b.conversionMode||'native',windowDays:b.windowDays||30,versionId:version.id});
  for(const spId of new Set<string>(b.participantIds||[]))await assignPlan(db,u,{salespersonId:spId,versionId:version.id,effectiveFrom:b.effectiveFrom,campaignId:created.id});
  return{id:created.id,versionId:version.id};
+}
+/** Key-order independent config comparison: jsonb round-trips reorder object keys. */
+const canonical=(v:any):string=>Array.isArray(v)?`[${v.map(canonical).join(',')}]`:v&&typeof v==='object'?`{${Object.keys(v).sort().map(k=>`${JSON.stringify(k)}:${canonical(v[k])}`).join(',')}}`:JSON.stringify(v);
+export async function updateStructure(db:SQL,u:SessionUser,b:any){
+ admin(u);await lock(db,u.tenantId);
+ const campaign=(await db.query('SELECT * FROM campaigns WHERE tenant_id=$1 AND id=$2',[u.tenantId,required(b.id,'Campaign',100)])).rows[0];
+ if(!campaign)throw new TrackerError('not_found','Campaign not found.',404);
+ const effective=dateOnly(b.effectiveFrom);
+ const current=campaign.plan_version_id?(await db.query('SELECT * FROM plan_versions WHERE tenant_id=$1 AND id=$2',[u.tenantId,campaign.plan_version_id])).rows[0]:null;
+ // Published plan versions are immutable: changed rules publish a fresh plan (same validation as create); unchanged rules keep the existing version so history and assignments stay put.
+ const changed=!current||canonical(current.config)!==canonical(b.config);
+ const version=changed?await publishPlan(db,u,{name:b.name,description:b.description,effectiveFrom:effective,config:b.config}):{id:current.id};
+ if(!changed)await db.query('UPDATE commission_plans SET name=$3,description=$4,updated_at=now() WHERE tenant_id=$1 AND id=$2',[u.tenantId,current.plan_id,required(b.name,'Campaign name'),String(b.description||'')]);
+ // saveCampaign validates fields exactly like create, keeps existing link_ids (shared affiliate URLs keep working), adds links for new salesmen and deactivates removed ones.
+ await saveCampaign(db,u,{...b,id:campaign.id,startsAt:b.startsAt||effective,status:b.status||campaign.status,conversionMode:b.conversionMode||campaign.conversion_mode,windowDays:b.windowDays||30,versionId:version.id});
+ const wanted=new Set<string>(b.participantIds||[]);
+ const assignFrom=changed?effective:[effective,new Date(current.effective_from).toISOString().slice(0,10)].sort()[1];
+ // Reconcile campaign-scoped plan assignments: end or supersede stale ones, then assign the current version to every selected salesman. Posted earnings stay pinned to their own version and are never rewritten.
+ for(const a of (await db.query('SELECT * FROM plan_assignments WHERE tenant_id=$1 AND campaign_id=$2 AND (effective_to IS NULL OR effective_to>=$3::date)',[u.tenantId,campaign.id,assignFrom])).rows){
+  if(wanted.has(a.salesperson_id)&&a.plan_version_id===version.id)continue;
+  if(new Date(a.effective_from).toISOString().slice(0,10)>=assignFrom)await db.query('DELETE FROM plan_assignments WHERE tenant_id=$1 AND id=$2',[u.tenantId,a.id]);
+  else await db.query('UPDATE plan_assignments SET effective_to=$3::date-1 WHERE tenant_id=$1 AND id=$2',[u.tenantId,a.id,assignFrom]);
+ }
+ for(const spId of wanted)if(!(await db.query('SELECT id FROM plan_assignments WHERE tenant_id=$1 AND campaign_id=$2 AND salesperson_id=$3 AND plan_version_id=$4 AND (effective_to IS NULL OR effective_to>=$5::date)',[u.tenantId,campaign.id,spId,version.id,assignFrom])).rows.length)
+  await assignPlan(db,u,{salespersonId:spId,versionId:version.id,effectiveFrom:assignFrom,campaignId:campaign.id});
+ await audit(db,u,'campaign',campaign.id,'structure_updated',{versionId:version.id,configChanged:changed,participants:[...wanted]});
+ return{id:campaign.id,versionId:version.id};
 }
 export async function preferences(db:SQL,u:SessionUser,b:any){
  admin(u);await ready(db);await lock(db,u.tenantId);

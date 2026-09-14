@@ -184,6 +184,51 @@ console.log("\n[Recompute \u00b7 active-client + after_payments holds]");
   ok("after_payments 2 with 2 paid -> pending", findByRule(r.insertRows, "r_res").every((e) => e.status === "pending"));
 }
 
+// ---- prior row ids preserved by their stable payment+rule key --------------
+
+console.log("\n[Recompute · id preservation]");
+{
+  const prior: PriorLedgerRow[] = [
+    { id: "led_res_keep", paymentId: "p_m1", ruleId: "r_res", status: "pending", paidDate: null, releasedOverride: false },
+  ];
+  const r = recomputeClientLedger({ client: client(), salesperson: sp, plan: plan(), payments: [monthlyPay], priorRows: prior, today: TODAY });
+  ok("prior non-locked row deleted before reinsert", r.deleteIds.includes("led_res_keep"));
+  const res = findByRule(r.insertRows, "r_res")[0];
+  ok("regenerated row keeps the EXISTING id (stable key)", !!res && res.id === "led_res_keep");
+}
+
+// ---- locked rows get an offsetting NEGATIVE entry when clawback applies -----
+
+console.log("\n[Recompute · locked-row clawback offset]");
+{
+  const t: CommissionTiming = { trigger: "immediate", days: 0, months: 0, payments: 0, requireActiveClient: false, clawbackBeforeMonths: 6 };
+  const canceled = client({ status: "canceled", canceledDate: "2025-03-01" }); // ~2 months < 6
+  const prior: PriorLedgerRow[] = [
+    { id: "led_paid", paymentId: "p_setup", ruleId: "r_setup", status: "paid", paidDate: "2025-02-01", releasedOverride: false, commissionAmount: 100, ruleType: "setup_fee" },
+  ];
+  const r = recomputeClientLedger({ client: canceled, salesperson: sp, plan: plan(t), payments: [setupPay], priorRows: prior, today: TODAY });
+  ok("locked row still preserved", r.preservedIds.includes("led_paid") && !r.deleteIds.includes("led_paid"));
+  const offset = r.insertRows.find((e) => e.id === "cb_led_paid");
+  ok("offsetting clawback entry created", !!offset);
+  ok("offset amount is the negative of the locked amount", !!offset && offset.commissionAmount === -100);
+  ok("offset is a payable (pending) recovery line", !!offset && offset.status === "pending");
+  ok("offset carries the clawback reason", !!offset && !!offset.notes);
+
+  // outside the window -> no offset
+  const survived = client({ status: "canceled", canceledDate: "2025-01-01" });
+  const late = { ...survived, canceledDate: "2025-12-01" };
+  const r2 = recomputeClientLedger({ client: late, salesperson: sp, plan: plan(t), payments: [setupPay], priorRows: prior, today: "2026-01-01" });
+  ok("no offset when cancel is outside the window", !r2.insertRows.some((e) => e.id === "cb_led_paid"));
+
+  // once the offset itself is locked (e.g. submitted), it is never duplicated
+  const priorWithLockedOffset: PriorLedgerRow[] = [
+    ...prior,
+    { id: "cb_led_paid", paymentId: "p_setup", ruleId: "r_setup", status: "submitted", paidDate: null, releasedOverride: false, commissionAmount: -100, ruleType: "setup_fee" },
+  ];
+  const r3 = recomputeClientLedger({ client: canceled, salesperson: sp, plan: plan(t), payments: [setupPay], priorRows: priorWithLockedOffset, today: TODAY });
+  ok("locked offset preserved, not regenerated", r3.preservedIds.includes("cb_led_paid") && !r3.insertRows.some((e) => e.id === "cb_led_paid"));
+}
+
 // ---- no plan / unassigned: drop non-locked, keep locked, insert nothing ----
 
 console.log("\n[Recompute \u00b7 unassigned client]");

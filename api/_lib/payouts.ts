@@ -12,9 +12,25 @@
 // ============================================================================
 
 import { query, withTransaction, type PoolClient } from "./db.js";
+import { round2, todayISO } from "../../src/lib/format.js";
 
 const nowISO = () => new Date().toISOString();
 const uid = (p: string) => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+
+/** Dollars for a row that may be tracker-era (amount_minor) or legacy. */
+const moneyOf = (minorVal: unknown, legacyVal: unknown, digits = 2): number =>
+  minorVal == null ? Number(legacyVal) : Number(minorVal) / 10 ** digits;
+
+/** Minor digits of the tenant's tracker workspace currency (2 when unknown). */
+async function tenantMinorDigits(tenantId: string): Promise<number> {
+  try {
+    const { rows } = await query<any>(`SELECT payout_terms FROM tracker_workspaces WHERE tenant_id = $1`, [tenantId]);
+    const d = Number(rows[0]?.payout_terms?.minorDigits ?? 2);
+    return Number.isFinite(d) && d >= 0 ? d : 2;
+  } catch {
+    return 2;
+  }
+}
 
 export type PayoutAction = "submit" | "approve" | "reject" | "mark_paid" | "cancel";
 
@@ -69,6 +85,8 @@ export async function listPayouts(
   );
   const filtered = rows.filter((r) => visible === "all" || visible.has(r.salesperson_id));
   if (filtered.length === 0) return [];
+  // Tracker-era batches store money in amount_minor (total_amount stays 0).
+  const digits = filtered.some((r) => r.amount_minor != null) ? await tenantMinorDigits(tenantId) : 2;
 
   const ids = filtered.map((r) => r.id);
   const { rows: evRows } = await query<any>(
@@ -87,7 +105,7 @@ export async function listPayouts(
     salespersonId: r.salesperson_id,
     salespersonName: r.sp_name ?? "—",
     status: r.status,
-    totalAmount: Number(r.total_amount),
+    totalAmount: moneyOf(r.amount_minor, r.total_amount, digits),
     entryCount: Number(r.entry_count),
     notes: r.notes ?? "",
     createdAt: r.created_at || "",
@@ -144,15 +162,21 @@ export async function submitPayout(
   return withTransaction(async (c) => {
     // validate the entries: same tenant + salesperson, still pending, not already in a batch
     const { rows: entries } = await c.query<any>(
-      `SELECT id, commission_amount, status FROM commission_ledger
+      `SELECT * FROM commission_ledger
         WHERE tenant_id = $1 AND salesperson_id = $2 AND id = ANY($3::text[]) FOR UPDATE`,
       [tenantId, salespersonId, entryIds],
     );
     if (entries.length !== entryIds.length) throw new PayoutError("entry_mismatch");
     const bad = entries.find((e) => e.status !== "pending");
     if (bad) throw new PayoutError("entry_not_pending");
+    // Release-date gate: an entry whose due/release date is still in the future
+    // is not payable yet, whatever its status says.
+    const today = todayISO();
+    if (entries.some((e) => String(e.due_date ?? "") > today)) throw new PayoutError("entry_not_releasable");
 
-    const total = entries.reduce((s, e) => s + Number(e.commission_amount), 0);
+    const digits = entries.some((e) => e.amount_minor != null) ? await tenantMinorDigits(tenantId) : 2;
+    // Money is rounded at the boundary: each entry to cents, then the total.
+    const total = round2(entries.reduce((s, e) => s + round2(moneyOf(e.amount_minor, e.commission_amount, digits)), 0));
     const id = uid("po");
     const ts = nowISO();
 
@@ -271,13 +295,15 @@ export async function transitionPayout(
     // Reconcile the batch total against the sum of its entries before approving
     // or paying, so a stale or edited total can never be approved or paid out.
     if (action === "approve" || action === "mark_paid") {
-      const { rows: sumRows } = await c.query<{ s: string }>(
-        `SELECT COALESCE(SUM(commission_amount),0)::text AS s
-           FROM commission_ledger WHERE tenant_id = $1 AND id = ANY($2::text[])`,
+      const { rows: sumRows } = await c.query<any>(
+        `SELECT * FROM commission_ledger WHERE tenant_id = $1 AND id = ANY($2::text[])`,
         [tenantId, ids],
       );
-      const entriesTotal = Number(sumRows[0]?.s ?? 0);
-      if (Math.abs(entriesTotal - Number(batch.total_amount)) > 0.005) {
+      const digits = sumRows.some((e) => e.amount_minor != null) ? await tenantMinorDigits(tenantId) : 2;
+      // Round each amount and the total to cents so float drift on the DOUBLE
+      // PRECISION column can never trip the reconciliation tolerance.
+      const entriesTotal = round2(sumRows.reduce((s, e) => s + round2(moneyOf(e.amount_minor, e.commission_amount, digits)), 0));
+      if (Math.abs(entriesTotal - round2(Number(batch.total_amount))) > 0.005) {
         throw new PayoutError("batch_total_mismatch", 409);
       }
     }
@@ -307,12 +333,15 @@ export async function transitionPayout(
           `UPDATE payout_batches SET status='rejected', rejected_at=$1, updated_at=$1 WHERE id=$2`,
           [ts, batchId],
         );
-        // entries return to the pending pool and leave the batch
+        // entries return to the pending pool and leave the batch — and the
+        // batch's entry links are removed so this batch can never reset (or be
+        // reconciled against) entries that get resubmitted into a newer batch.
         await c.query(
           `UPDATE commission_ledger SET status='pending', payout_batch_id=NULL, updated_at=$1
-            WHERE tenant_id=$2 AND id = ANY($3::text[])`,
-          [ts, tenantId, ids],
+            WHERE tenant_id=$2 AND id = ANY($3::text[]) AND payout_batch_id = $4`,
+          [ts, tenantId, ids, batchId],
         );
+        await c.query(`DELETE FROM payout_batch_entries WHERE tenant_id=$1 AND payout_batch_id=$2`, [tenantId, batchId]);
         break;
       case "mark_paid":
         if (from !== "approved") throw new PayoutError("bad_state");
@@ -323,18 +352,22 @@ export async function transitionPayout(
         await setEntries("paid", true);
         break;
       case "cancel": {
-        if (from === "canceled") throw new PayoutError("bad_state");
+        // A rejected batch already returned its entries to the pending pool;
+        // canceling it again could reset entries resubmitted into a NEWER
+        // batch (double payout), so cancel is not allowed from rejected.
+        if (from === "canceled" || from === "rejected") throw new PayoutError("bad_state");
         await c.query(
           `UPDATE payout_batches SET status='canceled', canceled_at=$1, updated_at=$1 WHERE id=$2`,
           [ts, batchId],
         );
         // if the money already went out, the entries are clawed back; else they
-        // return to the pending pool.
+        // return to the pending pool. Only entries still pointing at THIS batch
+        // are touched — an entry that moved on to another batch is never reset.
         const entryStatus = from === "paid" ? "clawed_back" : "pending";
         await c.query(
           `UPDATE commission_ledger SET status=$1, payout_batch_id=${entryStatus === "pending" ? "NULL" : "payout_batch_id"}, updated_at=$2
-            WHERE tenant_id=$3 AND id = ANY($4::text[])`,
-          [entryStatus, ts, tenantId, ids],
+            WHERE tenant_id=$3 AND id = ANY($4::text[]) AND payout_batch_id = $5`,
+          [entryStatus, ts, tenantId, ids, batchId],
         );
         break;
       }

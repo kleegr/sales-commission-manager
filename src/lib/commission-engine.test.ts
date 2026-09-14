@@ -168,6 +168,37 @@ console.log("\nCommission engine tests\n========================");
   };
   const subRows = calculateCommissionForPayment(subPay, client, sp, p);
   check("month-5 subscription -> 1 row at 10%", subRows.length === 1 && approx(subRows[0].commissionAmount, 25), subRows);
+
+  // --- signup bonus fires ONCE: only on the client's first setup-fee payment ---
+  const secondSetup: Payment = {
+    id: "pay3", clientId: "c1", date: "2025-03-01", type: "setup_fee",
+    amount: 500, paymentNumber: null, notes: "", createdAt: "2025-03-01",
+  };
+  const history = [setupPay, subPay, secondSetup];
+  const firstRows = calculateCommissionForPayment(setupPay, client, sp, p, history);
+  check("first setup payment still pays the bonus", firstRows.some(r => r.ruleType === "signup_bonus"));
+  const secondRows = calculateCommissionForPayment(secondSetup, client, sp, p, history);
+  console.log("\n[Signup bonus once]");
+  check("second setup payment pays NO bonus", !secondRows.some(r => r.ruleType === "signup_bonus"), secondRows);
+  check("second setup payment still pays setup commission", secondRows.some(r => r.ruleType === "setup_fee"));
+
+  // --- missing paymentNumber derived from prior monthly payment count ---
+  console.log("\n[Derived payment number]");
+  const m1: Payment = { id: "m1", clientId: "c1", date: "2025-02-01", type: "monthly_subscription", amount: 250, paymentNumber: null, notes: "", createdAt: "2025-02-01" };
+  const m2: Payment = { id: "m2", clientId: "c1", date: "2025-03-01", type: "monthly_subscription", amount: 250, paymentNumber: null, notes: "", createdAt: "2025-03-01" };
+  const all = [setupPay, m1, m2];
+  const m1Rows = calculateCommissionForPayment(m1, client, sp, p, all);
+  const m2Rows = calculateCommissionForPayment(m2, client, sp, p, all);
+  check("first monthly (no number) -> month 1 rule (60%)", m1Rows.length === 1 && approx(m1Rows[0].commissionAmount, 150), m1Rows);
+  check("second monthly (no number) -> month 2 rule (10%)", m2Rows.length === 1 && approx(m2Rows[0].commissionAmount, 25), m2Rows);
+
+  // --- refund payments generate negative reversal entries ---
+  console.log("\n[Refund reversal]");
+  const refund: Payment = { id: "rf1", clientId: "c1", date: "2025-03-15", type: "refund", amount: 250, paymentNumber: null, notes: "", createdAt: "2025-03-15" };
+  const rfRows = calculateCommissionForPayment(refund, client, sp, p, [setupPay, m1, m2, refund]);
+  check("refund -> 1 negative residual reversal", rfRows.length === 1, rfRows);
+  check("refund reverses 10% of $250 = -$25 (month 2)", approx(rfRows[0]?.commissionAmount ?? 0, -25), rfRows[0]?.commissionAmount);
+  check("refund reversal labeled", (rfRows[0]?.ruleLabel ?? "").startsWith("Refund reversal"));
 }
 
 // --- Book projection sanity: 5 closings/mo @ $250, no churn ---

@@ -120,7 +120,8 @@ export function normalizeRule(raw: unknown): Result<Rule> {
       const continueForever = boolOf(r.continueForever);
       let endMonth = intOrNull(r.endMonth);
       if (continueForever) endMonth = null;
-      else if (endMonth != null && endMonth < startMonth) endMonth = startMonth;
+      else if (endMonth == null) return { ok: false, error: "residual_end_month_required" };
+      else if (endMonth < startMonth) endMonth = startMonth;
       return {
         ok: true,
         value: {
@@ -158,6 +159,20 @@ export function normalizeRules(raw: unknown): Result<Rule[]> {
     const res = normalizeRule(item);
     if (!res.ok) return res;
     out.push(res.value);
+  }
+  // Residual ranges must not overlap within one plan — overlapping rules would
+  // stack and double-pay the same month.
+  const residuals = out.filter((r): r is Extract<Rule, { type: "monthly_residual" }> => r.type === "monthly_residual");
+  for (let i = 0; i < residuals.length; i++) {
+    const a = residuals[i];
+    const aEnd = a.continueForever || a.endMonth == null ? Infinity : a.endMonth;
+    for (let j = i + 1; j < residuals.length; j++) {
+      const b = residuals[j];
+      const bEnd = b.continueForever || b.endMonth == null ? Infinity : b.endMonth;
+      if (a.startMonth <= bEnd && b.startMonth <= aEnd) {
+        return { ok: false, error: "overlapping_residual_ranges" };
+      }
+    }
   }
   return { ok: true, value: out };
 }
@@ -249,10 +264,13 @@ export function normalizePaymentInput(body: Record<string, unknown>): Result<Pay
   const type = oneOf(body.type, PAYMENT_TYPES, "monthly_subscription") as PaymentType;
   const amount = nonNeg(body.amount, 0);
 
-  // Payment number is meaningful only for monthly subscriptions.
+  // Payment number is meaningful only for monthly subscriptions. When absent
+  // it stays null and the engine derives it from the client's prior monthly
+  // payment count (deterministic), instead of silently defaulting to month 1.
   let paymentNumber: number | null = null;
   if (type === "monthly_subscription") {
-    paymentNumber = Math.max(1, intOrNull(body.paymentNumber) ?? 1);
+    const n = intOrNull(body.paymentNumber);
+    paymentNumber = n == null ? null : Math.max(1, n);
   }
 
   return {

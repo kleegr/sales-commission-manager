@@ -102,6 +102,16 @@ console.log("\n[Timing \u00b7 the eight behaviours]");
   ok("immediate -> pending/released", r.status === "pending" && r.released);
   ok("immediate releaseDate == earnedDate", r.releaseDate === "2025-06-01");
   ok("immediate holdDays 0", r.holdDays === 0);
+  // future-dated earnings are NOT payable before their earned date
+  const future = resolveCommissionTiming(
+    ctx({ timing: timing({ trigger: "immediate" }), earnedDate: "2025-07-01", asOf: "2025-06-15" }),
+  );
+  ok("immediate + future earnedDate -> held", future.status === "held" && !future.released);
+  ok("immediate future release date = earnedDate", future.releaseDate === "2025-07-01");
+  const onDay = resolveCommissionTiming(
+    ctx({ timing: timing({ trigger: "immediate" }), earnedDate: "2025-06-15", asOf: "2025-06-15" }),
+  );
+  ok("immediate on the earned day -> released", onDay.released);
 }
 
 // 2) Pay after X days
@@ -125,6 +135,11 @@ console.log("\n[Timing \u00b7 the eight behaviours]");
   ok("after_months releaseDate", held.releaseDate === "2025-08-01");
   const rel = resolveCommissionTiming(ctx({ timing: t, asOf: "2025-09-01" }));
   ok("after_months after release -> pending", rel.status === "pending");
+  // month-end clamp: Jan 31 + 1 month is Feb 28, never Mar 3
+  const clamp = resolveCommissionTiming(
+    ctx({ timing: timing({ trigger: "after_months", months: 1 }), earnedDate: "2025-01-31", asOf: "2025-02-01" }),
+  );
+  ok("after_months clamps to end of month (Jan 31 -> Feb 28)", clamp.releaseDate === "2025-02-28", clamp.releaseDate);
 }
 
 // 4) Pay after X payments
@@ -209,7 +224,8 @@ console.log("\n[Timing \u00b7 the eight behaviours]");
   );
   ok("clawback also triggers on refunded", refunded.status === "clawed_back");
 
-  // canceledDate unknown -> falls back to asOf for the window measurement
+  // canceledDate unknown -> fail safe: the window is treated as still open,
+  // no matter how far asOf drifts into the future.
   const fallback = resolveCommissionTiming(
     ctx({
       timing: t,
@@ -219,7 +235,17 @@ console.log("\n[Timing \u00b7 the eight behaviours]");
       asOf: "2025-02-01",
     }),
   );
-  ok("clawback uses asOf when canceledDate missing", fallback.status === "clawed_back");
+  ok("clawback fail-safe when canceledDate missing", fallback.status === "clawed_back");
+  const drifted = resolveCommissionTiming(
+    ctx({
+      timing: t,
+      clientStatus: "canceled",
+      clientSignupDate: "2025-01-01",
+      clientCanceledDate: null,
+      asOf: "2030-01-01", // years later — must NOT drift back to payable
+    }),
+  );
+  ok("missing canceledDate never drifts back to payable", drifted.status === "clawed_back");
 }
 
 // ============================================================================
@@ -422,6 +448,20 @@ const TODAY = "2025-06-15";
   );
   ok("integration: paid row keeps its status after rate change", rows.every((r) => r.status === "paid"));
   ok("integration: paid row NOT re-priced after rate change", rows.every((r) => r.commissionAmount === paidAmount));
+}
+
+// a recompute PRESERVES existing row ids (matched by payment+rule key), so ids
+// referenced by payout batch entries survive a snapshot save.
+{
+  const plan = planWith("p_ids", timing({ trigger: "immediate" }));
+  const data = baseData(
+    [plan], [sp("s1", "p_ids")], [client("c1", "s1", "2025-01-01")],
+    [pay("pay_setup", "c1", "2025-01-01", "setup_fee", 2000, null)],
+  );
+  const first = recomputePaymentCommissions(data, TODAY);
+  const again = recomputePaymentCommissions({ ...data, commissions: first }, TODAY);
+  const ids = (rows: typeof first) => rows.map((r) => r.id).sort().join(",");
+  ok("integration: recompute preserves existing row ids", ids(again) === ids(first), { first: ids(first), again: ids(again) });
 }
 
 console.log(`\n========================\n${passed} passed, ${failed} failed\n`);

@@ -52,11 +52,21 @@ export function isoToDate(iso: string): Date {
   return new Date(iso);
 }
 
-/** Add `n` whole months to an ISO date, returning ISO (yyyy-mm-dd). */
+/** Format a Date's local calendar day as ISO (yyyy-mm-dd) — the inverse of isoToDate. */
+export function toISODate(d: Date): string {
+  return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-');
+}
+
+/** Add `n` whole months to an ISO date, returning ISO (yyyy-mm-dd).
+ *  Clamps to the last day of the target month (Jan 31 + 1mo -> Feb 28). */
 export function addMonthsISO(iso: string, n: number): string {
   const d = isoToDate(iso);
+  const day = d.getDate();
+  d.setDate(1);
   d.setMonth(d.getMonth() + n);
-  return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-');
+  const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  d.setDate(Math.min(day, lastDay));
+  return toISODate(d);
 }
 
 /** Whole weeks between two ISO dates (>=0). */
@@ -71,7 +81,7 @@ export function weeksBetween(startISO: string, endISO: string): number {
 export function addDaysISO(iso: string, n: number): string {
   const d = isoToDate(iso);
   d.setDate(d.getDate() + n);
-  return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-');
+  return toISODate(d);
 }
 
 /** Whole days between two ISO dates (can be negative if end precedes start). */
@@ -94,14 +104,10 @@ export function monthsBetween(startISO: string, endISO: string): number {
   return months;
 }
 
-/** Number of whole months a date is in the past/future relative to today. */
+/** Number of whole months a date is in the past/future relative to today.
+ *  Day-of-month aware: Jan 31 -> Feb 1 is 0 full months, not 1. */
 export function monthsSince(iso: string): number {
-  const d = isoToDate(iso);
-  const now = new Date();
-  return (
-    (now.getFullYear() - d.getFullYear()) * 12 +
-    (now.getMonth() - d.getMonth())
-  );
+  return monthsBetween(iso, todayISO());
 }
 
 export function clampNum(n: number, min: number, max: number): number {

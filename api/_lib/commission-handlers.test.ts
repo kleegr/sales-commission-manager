@@ -74,6 +74,17 @@ ok("undefined rules -> empty array", rulesNull.ok && rulesNull.value.length === 
 const rulesOneBad = normalizeRules([{ type: "setup_fee", mode: "none", value: 0 }, { type: "bogus" }]);
 ok("one bad rule fails the whole array", !rulesOneBad.ok);
 
+const rOpenEnd = normalizeRule({ type: "monthly_residual", startMonth: 1, endMonth: null, continueForever: false, valueType: "percentage", value: 10 });
+ok("residual endMonth null without forever is rejected", !rOpenEnd.ok && rOpenEnd.error === "residual_end_month_required");
+const resid = (startMonth: number, endMonth: number | null, continueForever = false) =>
+  ({ type: "monthly_residual", startMonth, endMonth, continueForever, valueType: "percentage", value: 10 });
+const rulesOverlap = normalizeRules([resid(1, 6), resid(4, 12)]);
+ok("overlapping residual ranges rejected", !rulesOverlap.ok && rulesOverlap.error === "overlapping_residual_ranges");
+const rulesOverlapForever = normalizeRules([resid(7, null, true), resid(9, 12)]);
+ok("forever residual overlapping a later range rejected", !rulesOverlapForever.ok);
+const rulesTiered = normalizeRules([resid(1, 6), resid(7, 12), resid(13, null, true)]);
+ok("non-overlapping tiered residuals accepted", rulesTiered.ok && rulesTiered.value.length === 3);
+
 console.log("\n[Commission \u00b7 plan validation]");
 const pEmpty = normalizePlanInput({});
 ok("empty name -> Untitled plan", pEmpty.ok && pEmpty.value.name === "Untitled plan");
@@ -103,7 +114,7 @@ ok("payment needs a client", !payNoClient.ok && payNoClient.error === "client_re
 const paySetup = normalizePaymentInput({ clientId: "cl1", type: "setup_fee", amount: "1000" });
 ok("setup payment: no payment number", paySetup.ok && paySetup.value.paymentNumber === null && paySetup.value.amount === 1000);
 const payMonthly = normalizePaymentInput({ clientId: "cl1", type: "monthly_subscription", amount: 200 });
-ok("monthly payment defaults number to 1", payMonthly.ok && payMonthly.value.paymentNumber === 1);
+ok("monthly payment without number stays null (engine derives it)", payMonthly.ok && payMonthly.value.paymentNumber === null);
 const payMonthlyN = normalizePaymentInput({ clientId: "cl1", type: "monthly_subscription", amount: 200, paymentNumber: 5 });
 ok("monthly payment keeps its number", payMonthlyN.ok && payMonthlyN.value.paymentNumber === 5);
 const payBadType = normalizePaymentInput({ clientId: "cl1", type: "bribe", amount: 1 });

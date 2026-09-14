@@ -38,6 +38,7 @@ import {
   formatCurrency,
   isoToDate,
   round2,
+  toISODate,
   uid,
   weeksBetween,
 } from "./format.js";
@@ -318,17 +319,32 @@ export function projectPlanForClient(
 // REAL LEDGER: deterministic commission from a single Payment
 // ---------------------------------------------------------------------------
 
+/** Deterministic payment ordering: by date, then id (tie-break). */
+const paymentOrder = (a: Payment, b: Payment): number =>
+  a.date < b.date ? -1 : a.date > b.date ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+
 /**
  * The function the spec asks for: accepts a Payment + Client + Salesperson +
  * CommissionPlan and returns the resulting commission rows. Pure + testable.
+ * `allPayments` (every payment of the client, or more) makes the calc
+ * client-history-aware: the signup bonus fires only on the client's FIRST
+ * setup-fee payment, and a missing paymentNumber is derived from the client's
+ * prior monthly payment count (deterministic date-then-id ordering).
  */
 export function calculateCommissionForPayment(
   payment: Payment,
   client: Client,
   salesperson: Salesperson,
   plan: CommissionPlan,
+  allPayments: Payment[] = [payment],
 ): CommissionEntry[] {
   const entries: CommissionEntry[] = [];
+  const clientPayments = allPayments.filter((p) => p.clientId === client.id);
+  const monthNumberOf = (p: Payment): number =>
+    p.paymentNumber ??
+    1 + clientPayments.filter(
+      (q) => q.type === "monthly_subscription" && paymentOrder(q, p) < 0,
+    ).length;
 
   const make = (
     partial: Partial<CommissionEntry> &
@@ -378,11 +394,15 @@ export function calculateCommissionForPayment(
         );
       }
     }
-    // Signup bonus is paid once, triggered by the setup-fee payment.
+    // Signup bonus is paid ONCE per client, triggered only by the client's
+    // FIRST setup-fee payment (by date, then id — deterministic).
+    const firstSetup = clientPayments
+      .filter((p) => p.type === "setup_fee")
+      .sort(paymentOrder)[0];
     const bonusRule = plan.rules.find(
       (r): r is SignupBonusRule => r.type === "signup_bonus" && r.amount > 0,
     );
-    if (bonusRule) {
+    if (bonusRule && (!firstSetup || firstSetup.id === payment.id)) {
       entries.push(
         make({
           ruleId: bonusRule.id,
@@ -395,7 +415,7 @@ export function calculateCommissionForPayment(
       );
     }
   } else if (payment.type === "monthly_subscription") {
-    const monthNum = payment.paymentNumber ?? 1;
+    const monthNum = monthNumberOf(payment);
     const residuals = plan.rules.filter(
       (r): r is MonthlyResidualRule => r.type === "monthly_residual",
     );
@@ -413,8 +433,41 @@ export function calculateCommissionForPayment(
         );
       }
     }
+  } else if (payment.type === "refund") {
+    // A refund reverses the commission computed on the refunded amount under
+    // the same residual rules that governed the client's payments: negative
+    // entries for the month the refund lands in (derived like a monthly
+    // payment — count of monthly payments at/before the refund).
+    const monthNum =
+      payment.paymentNumber ??
+      Math.max(
+        1,
+        clientPayments.filter(
+          (q) => q.type === "monthly_subscription" && paymentOrder(q, payment) < 0,
+        ).length,
+      );
+    const residuals = plan.rules.filter(
+      (r): r is MonthlyResidualRule => r.type === "monthly_residual",
+    );
+    for (const r of residuals) {
+      if (ruleAppliesToMonth(r, monthNum)) {
+        const reversed = round2(-residualAmount(r, payment.amount));
+        if (reversed !== 0) {
+          entries.push(
+            make({
+              ruleId: r.id,
+              ruleType: "monthly_residual",
+              ruleLabel: `Refund reversal · ${residualLabel(r)}`,
+              commissionValueType: r.valueType,
+              commissionValue: -r.value,
+              commissionAmount: reversed,
+            }),
+          );
+        }
+      }
+    }
   }
-  // refund / adjustment payments do not auto-generate commissions here.
+  // adjustment payments do not auto-generate commissions here.
   return entries;
 }
 
@@ -435,7 +488,9 @@ export function generateSalaryEntries(
 
   while (cursor <= to && guard < 520) {
     if (hardEnd && cursor > hardEnd) break;
-    const iso = cursor.toISOString().slice(0, 10);
+    // Format with the same (local) calendar isoToDate parsed with, so the
+    // generated dates/ids are stable regardless of the machine's timezone.
+    const iso = toISODate(cursor);
     out.push({
       id: `sal_${sp.id}_${iso}`,
       salespersonId: sp.id,

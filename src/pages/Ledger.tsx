@@ -49,13 +49,15 @@ const STATUS_OPTIONS: (CommissionStatus | "all" | "real")[] = [
 ];
 
 export default function Ledger() {
-  const { data, dispatch, reload } = useApp();
+  const { data, dispatch, reload, backend } = useApp();
+  const isNeon = backend === "neon";
   const { user } = useAuth();
   const { can } = useSpPermissions();
   const canRelease = !!user && ADMIN_ROLES.includes(user.role);
   // Smart Productivity export gate. Standalone (no SP policy) → true (allowed).
   const canExport = can("canExportReports");
   const [recomputing, setRecomputing] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [spFilter, setSpFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<CommissionStatus | "all" | "real">("all");
   const [range, setRange] = useState<DateRange>({ from: null, to: null });
@@ -88,13 +90,21 @@ export default function Ledger() {
   );
 
   async function releaseOne(id: string) {
+    // Local/demo mode (no DB backend): the local store IS the source of truth.
+    if (!isNeon) {
+      dispatch({ type: "RELEASE_COMMISSION", ids: [id] });
+      return;
+    }
+    setActionError(null);
     try {
       // Real DB API: set the sticky release flag + recompute server-side, then
-      // reload. Falls back to the local store off the API.
+      // reload.
       await releaseCommissions([id]);
       await reload();
     } catch {
-      dispatch({ type: "RELEASE_COMMISSION", ids: [id] });
+      // Connected mode: never fake a release locally — the server still holds
+      // the commission, so say so instead.
+      setActionError("The commission could not be released. Check your connection and try again.");
     }
   }
 
@@ -132,12 +142,12 @@ export default function Ledger() {
       clientName(e.clientId),
       e.paymentDate,
       PAYMENT_TYPE_LABEL[e.paymentType] ?? e.paymentType,
-      e.paymentAmount,
+      e.paymentAmount.toFixed(2),
       e.ruleLabel,
       e.commissionValueType === "percentage"
         ? `${e.commissionValue}%`
         : formatCurrency(e.commissionValue),
-      e.commissionAmount,
+      e.commissionAmount.toFixed(2),
       displayStatus(e),
       e.dueDate,
       e.releaseDate ?? "",
@@ -171,6 +181,12 @@ export default function Ledger() {
           </>
         }
       />
+
+      {actionError && (
+        <p className="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-500/10 dark:text-rose-300">
+          {actionError}
+        </p>
+      )}
 
       <div className="mb-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard label="Earned (real)" value={formatCurrency(totals.earned)} tone="green" />

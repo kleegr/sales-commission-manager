@@ -70,7 +70,8 @@ function clonePlan(p: CommissionPlan): CommissionPlan {
 }
 
 export default function PlanBuilder() {
-  const { data, dispatch, reload } = useApp();
+  const { data, dispatch, reload, backend } = useApp();
+  const isNeon = backend === "neon";
   const navigate = useNavigate();
   const { id } = useParams();
   const isEdit = !!id;
@@ -93,6 +94,7 @@ export default function PlanBuilder() {
     existing ? clonePlan(existing) : freshPlan(),
   );
   const [editing, setEditing] = useState<Rule | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const seededFor = useRef<string | null>(existing ? existing.id : null);
 
@@ -164,18 +166,26 @@ export default function PlanBuilder() {
       timing: plan.timing,
       rules: plan.rules,
     };
+    // Local/demo mode (no DB backend): the local store IS the source of truth.
+    if (!isNeon) {
+      if (isEdit && existing) dispatch({ type: "PLAN_UPDATE", plan });
+      else dispatch({ type: "PLAN_ADD", plan });
+      navigate("/plans");
+      return;
+    }
+    setSaveError(null);
     try {
       // Real DB API: persist the plan + its rules + timing, recompute the ledger
-      // for everyone on the plan, then reload authoritative state. Falls back to
-      // the local store off the API (e.g. vite dev with no functions).
+      // for everyone on the plan, then reload authoritative state.
       if (isEdit && existing) await updatePlan(existing.id, payload);
       else await createPlan(payload);
       await reload();
+      navigate("/plans");
     } catch {
-      if (isEdit && existing) dispatch({ type: "PLAN_UPDATE", plan });
-      else dispatch({ type: "PLAN_ADD", plan });
+      // Connected mode: never fake success with a local write — stay on the
+      // builder so nothing is lost, and say what happened.
+      setSaveError("The plan could not be saved. Check your connection and try again.");
     }
-    navigate("/plans");
   }
 
   return (
@@ -201,6 +211,12 @@ export default function PlanBuilder() {
           </>
         }
       />
+
+      {saveError && (
+        <p className="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-500/10 dark:text-rose-300">
+          {saveError}
+        </p>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* ---- Left: configuration ---- */}

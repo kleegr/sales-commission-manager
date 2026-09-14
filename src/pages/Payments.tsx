@@ -52,8 +52,10 @@ function emptyPayment(): Payment {
 }
 
 export default function Payments() {
-  const { data, dispatch, reload } = useApp();
+  const { data, dispatch, reload, backend } = useApp();
+  const isNeon = backend === "neon";
   const [editing, setEditing] = useState<Payment | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -89,6 +91,7 @@ export default function Payments() {
       p.clientId = first.id;
       p.amount = first.monthlySubscription;
     }
+    setSaveError(null);
     setEditing(p);
   }
 
@@ -112,9 +115,16 @@ export default function Payments() {
   async function save() {
     if (!editing || !editing.clientId) return;
     const payment = editing;
+    // Local/demo mode (no DB backend): the local store IS the source of truth.
+    if (!isNeon) {
+      dispatch({ type: "PAYMENT_ADD", payment });
+      setEditing(null);
+      return;
+    }
+    setSaveError(null);
     try {
       // Real DB API: persist + server-side ledger recompute, then reload
-      // authoritative state. Falls back to the local store off the API.
+      // authoritative state.
       await createPayment({
         clientId: payment.clientId,
         date: payment.date,
@@ -124,33 +134,41 @@ export default function Payments() {
         notes: payment.notes,
       });
       await reload();
+      setEditing(null);
     } catch {
-      dispatch({ type: "PAYMENT_ADD", payment });
+      // Connected mode: never fake success with a local write — keep the modal
+      // open so nothing typed is lost, and say what happened.
+      setSaveError("The payment could not be saved. Check your connection and try again.");
     }
-    setEditing(null);
   }
 
   async function confirmDelete() {
     if (!deleteId) return;
     const id = deleteId;
+    // Local/demo mode (no DB backend): the local store IS the source of truth.
+    if (!isNeon) {
+      dispatch({ type: "PAYMENT_DELETE", id });
+      setDeleteId(null);
+      return;
+    }
     try {
       await deletePayment(id);
       await reload();
       setDeleteId(null);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "";
+      setDeleteId(null);
       if (msg === "has_locked_commissions") {
         // A submitted/approved/paid commission depends on this payment — refuse
         // and tell the user instead of corrupting payout history.
-        setDeleteId(null);
         setDeleteError(
           "This payment can't be deleted: it has commissions that are already submitted, approved, or paid. Cancel or reject the related payout first.",
         );
         return;
       }
-      // Other failure (e.g. local-dev with no API): fall back to the local store.
-      dispatch({ type: "PAYMENT_DELETE", id });
-      setDeleteId(null);
+      // Connected mode: surface the failure — never delete locally while the
+      // server still has the payment.
+      setDeleteError("The payment could not be deleted. Check your connection and try again.");
     }
   }
 
@@ -263,11 +281,20 @@ export default function Payments() {
 
       <Modal
         open={!!editing}
-        onClose={() => setEditing(null)}
+        onClose={() => {
+          setEditing(null);
+          setSaveError(null);
+        }}
         title="Add payment"
         footer={
           <>
-            <Button variant="secondary" onClick={() => setEditing(null)}>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setEditing(null);
+                setSaveError(null);
+              }}
+            >
               Cancel
             </Button>
             <Button onClick={save} disabled={!editing?.clientId}>
@@ -278,6 +305,11 @@ export default function Payments() {
       >
         {editing && (
           <div className="space-y-4">
+            {saveError && (
+              <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-500/10 dark:text-rose-300">
+                {saveError}
+              </p>
+            )}
             <Field label="Client" required>
               <Select
                 value={editing.clientId}

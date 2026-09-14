@@ -16,6 +16,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -41,13 +42,20 @@ const Ctx = createContext<FeaturesCtx | null>(null);
 export function FeaturesProvider({ children }: { children: ReactNode }) {
   const [features, setFeatures] = useState<FeatureFlags>(defaultFeatures());
   const [loading, setLoading] = useState(true);
+  // True once any fetch has succeeded. Before that, a failure fails OPEN
+  // (default all-on, so a dev environment with no API still shows the product);
+  // after it, a failure keeps the LAST KNOWN map instead of silently
+  // re-enabling everything the agency turned off.
+  const hadSuccess = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
       const map = await getFeatures();
+      hadSuccess.current = true;
       setFeatures(coerceFeatures(map));
     } catch {
-      setFeatures(defaultFeatures()); // fail open
+      if (!hadSuccess.current) setFeatures(defaultFeatures()); // fail open only before the first success
+      // otherwise: keep the last known snapshot (fail closed)
     } finally {
       setLoading(false);
     }
@@ -55,6 +63,17 @@ export function FeaturesProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void refresh();
+    // Flags are edited by the agency in another session: re-pull when the tab
+    // regains focus and on a modest interval, so revocations actually land.
+    const onFocus = () => void refresh();
+    window.addEventListener("focus", onFocus);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refresh();
+    }, 5 * 60 * 1000);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.clearInterval(timer);
+    };
   }, [refresh]);
 
   const isEnabled = useCallback((key: FeatureKey) => features[key] !== false, [features]);

@@ -167,15 +167,19 @@ export function resolveCommissionTiming(ctx: TimingContext): TimingResult {
     (status === "canceled" || status === "refunded")
   ) {
     const signup = ctx.clientSignupDate || earnedDate;
-    const canceledOn = ctx.clientCanceledDate || asOf;
-    const monthsActive = Math.max(0, monthsBetween(signup, canceledOn));
-    if (monthsActive < timing.clawbackBeforeMonths) {
+    const canceledOn = ctx.clientCanceledDate || null;
+    // No recorded cancel date -> fail safe: the window is treated as still open
+    // (never let a missing date drift the commission back to payable).
+    const monthsActive = canceledOn == null ? null : Math.max(0, monthsBetween(signup, canceledOn));
+    if (monthsActive == null || monthsActive < timing.clawbackBeforeMonths) {
       return {
         ...base,
         status: "clawed_back",
         released: false,
         reason: "",
-        clawbackReason: `Client canceled at month ${monthsActive} — inside the ${timing.clawbackBeforeMonths}-month clawback window`,
+        clawbackReason: monthsActive == null
+          ? `Client ${status} with no recorded cancel date — the ${timing.clawbackBeforeMonths}-month clawback window is treated as open`
+          : `Client canceled at month ${monthsActive} — inside the ${timing.clawbackBeforeMonths}-month clawback window`,
       };
     }
   }
@@ -203,7 +207,8 @@ export function resolveCommissionTiming(ctx: TimingContext): TimingResult {
     case "immediate":
       releaseDate = earnedDate;
       holdDays = 0;
-      released = true;
+      released = daysBetween(asOf, releaseDate) <= 0; // never payable before earned
+      waiting = `Releases when earned, on ${releaseDate}`;
       break;
     case "after_days":
       releaseDate = addDaysISO(earnedDate, timing.days);

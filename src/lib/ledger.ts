@@ -153,6 +153,7 @@ export function recomputePaymentCommissions(
   const prior = new Map<
     string,
     {
+      id: string;
       status: CommissionStatus;
       paidDate: string | null;
       releasedOverride: boolean;
@@ -165,6 +166,7 @@ export function recomputePaymentCommissions(
   for (const e of data.commissions) {
     if (e.paymentId) {
       prior.set(`${e.paymentId}:${e.ruleId}`, {
+        id: e.id,
         status: e.status,
         paidDate: e.paidDate,
         releasedOverride: Boolean(e.releasedOverride),
@@ -185,9 +187,12 @@ export function recomputePaymentCommissions(
     const plan = planById.get(sp.commissionPlanId);
     if (!plan) continue;
 
-    for (const e of calculateCommissionForPayment(pay, client, sp, plan)) {
+    for (const e of calculateCommissionForPayment(pay, client, sp, plan, data.payments)) {
       const p = prior.get(`${e.paymentId}:${e.ruleId}`);
       if (p) {
+        // Keep the EXISTING row id for the same payment+rule line so ids
+        // referenced by payout batches survive a recompute.
+        e.id = p.id;
         if (MANUAL.includes(p.status)) e.status = p.status;
         e.paidDate = p.paidDate;
         e.releasedOverride = p.releasedOverride;

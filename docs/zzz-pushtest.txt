@@ -1,6 +1,0 @@
-q="quote"
-bsn=C\nD
-uni=E✓F
-bs=G\\H
-mid·dot
-tab=X	Y

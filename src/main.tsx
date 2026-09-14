@@ -4,6 +4,7 @@ import { BrowserRouter } from "react-router-dom";
 const App = lazy(()=>import('./App'));
 const ReferralJoin = lazy(()=>import('./pages/ReferralJoin'));
 const Login = lazy(()=>import('./pages/Login'));
+const ProposalPublic = lazy(()=>import('./pages/ProposalPublic'));
 import { AppProvider } from "./store/AppContext";
 import { AuthProvider, useAuth } from "./store/AuthContext";
 import { FeaturesProvider } from "./store/FeaturesContext";
@@ -23,6 +24,9 @@ function Root() {
   const { user, loading } = useAuth();
 
   if (window.location.pathname === '/join') return <ReferralJoin />;
+  // Public proposal approval page: prospects open it from an emailed link and
+  // never have a session, so it must bypass the login gate (like /join).
+  if (/^\/p\/[A-Za-z0-9_-]+\/?$/.test(window.location.pathname)) return <ProposalPublic />;
 
   if (loading) {
     return (

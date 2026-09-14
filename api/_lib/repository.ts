@@ -23,6 +23,7 @@ import { query, withTransaction, type PoolClient } from "./db.js";
 import { SCHEMA_SQL, TABLES_CHILD_FIRST } from "./schema.js";
 import { MIGRATIONS_SQL } from "./migrations.js";
 import { ADMIN_ROLES } from "./auth.js";
+import { LOCKED_STATUSES } from "./recompute.js";
 import { preserveExternalMapping } from "./kleegr.js";
 import { emptyAggregate, type RawTenantAggregate } from "./agency-core.js";
 import {
@@ -499,15 +500,34 @@ export async function writeState(tenantId: string, data: AppData, transaction = 
     const { rows: capturedUserLinks } = await c.query<{ id: string; salesperson_id: string }>(
       'SELECT id, salesperson_id FROM users WHERE tenant_id = $1 AND salesperson_id IS NOT NULL', [tenantId]);
 
+    // 0b. capture the payout-LOCKED ledger rows (submitted/approved/paid).
+    //     They are part of an in-flight or completed payout: the snapshot save
+    //     must never delete, re-price, or accept client changes to them.
+    const { rows: lockedLedgerRows } = await c.query<{ id: string; payment_id: string | null; commission_rule_id: string | null }>(
+      `SELECT id, payment_id, commission_rule_id FROM commission_ledger
+        WHERE tenant_id = $1 AND status = ANY($2::text[])`,
+      [tenantId, LOCKED_STATUSES],
+    );
+    const lockedIds = new Set(lockedLedgerRows.map((r) => r.id));
+    const lockedKeys = new Set(lockedLedgerRows.map((r) => `${r.payment_id ?? ""}:${r.commission_rule_id ?? ""}`));
+
     // 1. clear this tenant's data (child-first); tenants row is preserved.
     //    NOTE: payout_batches / payout_batch_entries / payout_events are
     //    SERVER-OWNED (managed by /api/payouts) and are deliberately excluded
     //    so a snapshot save never wipes payout history. See writeState docs.
+    //    Locked ledger rows are likewise server-owned and survive the replace.
     const SNAPSHOT_TABLES = TABLES_CHILD_FIRST.filter(
       (t) => t !== "payout_batches" && t !== "payout_batch_entries",
     );
     for (const table of SNAPSHOT_TABLES) {
-      await c.query(`DELETE FROM ${table} WHERE tenant_id = $1`, [tenantId]);
+      if (table === "commission_ledger") {
+        await c.query(
+          `DELETE FROM commission_ledger WHERE tenant_id = $1 AND status <> ALL($2::text[])`,
+          [tenantId, LOCKED_STATUSES],
+        );
+      } else {
+        await c.query(`DELETE FROM ${table} WHERE tenant_id = $1`, [tenantId]);
+      }
     }
 
     // 2. settings (one row)
@@ -582,8 +602,12 @@ export async function writeState(tenantId: string, data: AppData, transaction = 
       );
     }
 
-    // 7. commission ledger
+    // 7. commission ledger — the client payload only affects UNLOCKED rows.
+    //    A row whose id or payment+rule line is held by a preserved locked row
+    //    is skipped: the server-side locked row stands in for it verbatim.
     for (const e of data.commissions) {
+      if (lockedIds.has(e.id)) continue;
+      if (e.paymentId && lockedKeys.has(`${e.paymentId}:${e.ruleId ?? ""}`)) continue;
       await c.query(
         `INSERT INTO commission_ledger
            (id, tenant_id, salesperson_id, client_id, payment_id, commission_plan_id, commission_rule_id,

@@ -385,3 +385,96 @@ input[type="number"] {
 .st-summary-salesmen li{display:flex;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid #eef2f6}
 .st-summary-salesmen li:last-child{border:0}
 @media(max-width:640px){.st-summary-fields{grid-template-columns:1fr}.st-summary-intro{align-items:flex-start;flex-direction:column}}
+
+/* Structure builder (wizard step 2) and 12-month preview. */
+.st-builder{border:var(--st-border);border-radius:14px;background:#fff;padding:16px 20px;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+.st-builder-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap}
+.st-builder-head h3{font-size:13px;font-weight:700;color:#344054}
+.st-builder-head .st-help{margin:4px 0 0;max-width:520px}
+.st-presets{display:flex;gap:8px;flex-wrap:wrap}
+.st-presets .st-button{padding:7px 11px;font-size:12px}
+.st-layers{list-style:none;display:flex;flex-direction:column;gap:10px;margin:14px 0 0}
+.st-layer{display:grid;grid-template-columns:26px minmax(180px,1.4fr) minmax(120px,1fr) minmax(96px,.7fr) minmax(96px,.7fr) 40px;gap:0 12px;align-items:start;padding:10px 14px 2px;border:1px solid #eef2f6;border-radius:12px;background:#f8fafc}
+.st-layer .st-field{margin:0 0 10px}
+.st-layer-index{margin-top:30px;border:1px solid #d0d5dd;border-radius:50%;width:24px;height:24px;display:grid;place-items:center;font-size:11px;font-weight:600;color:#475467;background:#fff}
+.st-layer-note{grid-column:span 2;margin:30px 0 0}
+.st-layer-remove{margin-top:26px;padding:8px;color:#667085}
+.st-builder-foot{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-top:12px}
+.st-hold{margin:0;max-width:200px}
+.st-builder-sentence{margin-top:14px;padding:11px 15px;border-radius:12px;background:#eff4ff;color:#1d4ed8;font-size:13px;line-height:1.5}
+.st-builder-sentence strong{color:#1e3a8a}
+.st-preview{margin-top:16px}
+.st-preview-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap}
+.st-sample{margin:0;max-width:240px}
+.st-preview-stats{display:flex;gap:24px;flex-wrap:wrap;margin:14px 0}
+.st-preview-stats span{display:flex;flex-direction:column;gap:3px}
+.st-preview-stats small{font-size:11px;color:#667085;text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+.st-preview-stats strong{font-size:20px;letter-spacing:-.4px;color:#101828}
+.st-preview .st-table-wrap{border:var(--st-border);border-radius:12px}
+.st-preview-table th,.st-preview-table td{padding:9px 14px}
+.st-preview-table td:not(:first-child){font-variant-numeric:tabular-nums}
+@media(max-width:760px){.st-layer{grid-template-columns:26px 1fr 1fr 40px}.st-layer .st-field:first-of-type{grid-column:span 2}.st-layer-note{grid-column:span 2}}
+.st-builder .st-field>span:has(>input),.st-preview .st-field>span:has(>input){font-weight:400;color:inherit}
+.st-builder .st-field small[role=alert],.st-preview .st-field small[role=alert]{color:#b42318}
+
+/* Salesman type (connected user / contact / external) and login access. */
+.st-kind-user{background:#eff4ff;color:#175cd3}
+.st-kind-contact{background:#fdf4ff;color:#9f1ab1}
+.st-kind-external{background:#f2f4f7;color:#475467}
+.st-title-with-badge{display:inline-flex;align-items:center;gap:10px;flex-wrap:wrap}
+.st-title-with-badge .st-badge{font-size:11px}
+.st-login-access{margin-top:16px}
+.st-login-state{display:flex;align-items:flex-start;gap:10px;font-size:13px;line-height:1.6;color:#344054;margin:0 0 12px}
+.st-login-state code{font-size:12px;background:#f2f4f7;border-radius:6px;padding:1px 6px}
+.st-login-actions{align-self:end;padding-top:22px}
+
+/* Pipeline → commission policy. */
+.st-policy-toggles{margin-top:16px;padding:16px 20px}
+.st-policy-toggles legend{font-size:13px;font-weight:700;color:#344054;padding:0 6px}
+.st-policy-toggles code{font-size:12px;background:#f2f4f7;border-radius:6px;padding:1px 6px}
+.st-check{display:flex;align-items:center;gap:9px;font-size:13px;color:#344054;padding:5px 0;cursor:pointer}
+.st-check input{width:16px;height:16px;margin:0;accent-color:#2563eb}
+.st-stage-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:2px 20px;margin-bottom:12px}
+.st-policy-toggles .st-row-buttons{align-items:center}
+.st-policy-toggles .st-row-buttons input{flex:1;min-width:200px;border:var(--st-border);border-radius:10px;padding:8px 12px;font-size:13px}
+
+/* FLOW 4 — proposal sharing (Documents page) + the public approval page (/p/<token>). */
+.st-mode-toggle{display:inline-flex;gap:4px;padding:4px;border:1px solid #d0d5dd;border-radius:12px;background:#f8fafc}
+.st-mode-toggle button{display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:9px;font-size:13px;font-weight:600;color:#475467;transition:background .15s ease,color .15s ease,box-shadow .15s ease}
+.st-mode-toggle button.is-active{background:#fff;color:#1d4ed8;box-shadow:0 1px 2px rgba(16,24,40,.08)}
+.dark .st-mode-toggle{background:#0f172a;border-color:#334155}.dark .st-mode-toggle button{color:#94a3b8}.dark .st-mode-toggle button.is-active{background:#1e293b;color:#93c5fd}
+.st-share-banner{display:flex;flex-direction:column;gap:10px;padding:16px 20px;border:1px solid #b2ccff;background:linear-gradient(135deg,#eff6ff,#f5f8ff);border-radius:14px;color:#344054;font-size:13px}
+.st-share-banner-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:#1d4ed8}.st-share-banner-head strong{color:#182230}.st-share-banner-head span{color:#475467}
+.st-share-banner-close{margin-left:auto;font-size:18px;line-height:1;color:#98a2b3;padding:0 4px}.st-share-banner-close:hover{color:#475467}
+.st-share-link{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.st-share-link code{flex:1;min-width:200px;overflow-wrap:anywhere;padding:8px 12px;border:1px solid #d0d5dd;border-radius:10px;background:#fff;font-size:12px;color:#182230}
+.st-share-banner small{color:#667085}
+.dark .st-share-banner{background:#0f172a;border-color:#1e3a8a;color:#cbd5e1}.dark .st-share-banner-head strong{color:#f1f5f9}.dark .st-share-link code{background:#1e293b;border-color:#334155;color:#e2e8f0}
+.st-approval{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:6px;padding:7px 10px;border:1px solid #a6f4c5;background:#ecfdf3;border-radius:10px;font-size:12px;color:#067647;font-weight:500}
+.st-approval-item{display:inline-flex;align-items:center;gap:4px;color:#475467}.st-approval-item::before{content:'·';color:#98a2b3;margin-right:4px}
+.st-approval-amount{margin-left:auto;font-weight:700;color:#067647}
+.dark .st-approval{background:#052e16;border-color:#166534;color:#86efac}.dark .st-approval-item{color:#cbd5e1}
+/* Public approval page — self-contained light theme (not inside .st-shell). */
+.st-proposal{min-height:100vh;background:linear-gradient(to bottom right,#f8fafc,#ffffff,#eff6ff) fixed;color:#182230;color-scheme:light;font-size:14px;padding:0 20px 60px}
+.st-proposal .st-badge{background:#eff6ff;color:#1d4ed8}.st-proposal .st-badge.st-green{background:#ecfdf3;color:#067647}
+.st-proposal-top{max-width:1180px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:22px 0;flex-wrap:wrap}
+.st-proposal-brand{display:flex;align-items:center;gap:12px}.st-proposal-brand img{height:40px;width:auto;max-width:160px;object-fit:contain}.st-proposal-brand strong{display:block;font-size:17px;font-weight:700;color:#101828}.st-proposal-brand small{display:block;color:#667085;font-size:12px;margin-top:2px}
+.st-proposal-mark{height:40px;width:40px;border-radius:12px;background:linear-gradient(135deg,#2563eb,#4f46e5);color:#fff;display:grid;place-items:center;font-weight:700;font-size:16px}
+.st-proposal-layout{max-width:1180px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:24px;align-items:start}
+.st-proposal-paper{background:#fff;border:1px solid rgba(226,232,240,.8);border-radius:16px;padding:40px 44px;box-shadow:0 1px 3px rgba(16,24,40,.04),0 10px 30px -12px rgba(16,24,40,.12)}
+.st-proposal-side{position:sticky;top:20px;display:flex;flex-direction:column;gap:16px}
+.st-proposal-summary,.st-proposal-form,.st-proposal-done{background:#fff;border:1px solid rgba(226,232,240,.8);border-radius:16px;padding:20px 22px;box-shadow:0 1px 3px rgba(16,24,40,.04),0 10px 30px -12px rgba(16,24,40,.12)}
+.st-proposal-summary h3,.st-proposal-form h3{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:700;color:#101828;margin-bottom:10px}
+.st-proposal-summary div{display:flex;justify-content:space-between;gap:12px;padding:6px 0;color:#475467;font-size:13px}.st-proposal-summary div b{color:#182230}
+.st-proposal-summary .is-total{border-top:1px solid #eef2f6;margin-top:6px;padding-top:12px;color:#182230;font-weight:600}.st-proposal-summary .is-total b{color:#1d4ed8;font-size:16px}
+.st-proposal-form p{color:#667085;font-size:12px;margin-bottom:6px;line-height:1.5}
+.st-proposal-form .st-field{margin:6px 0 10px}.st-proposal-form .st-field>span{font-weight:600;color:#344054}
+.st-proposal-form .st-field input{border:1px solid #d0d5dd;padding:10px 12px;border-radius:10px;background:#fff;width:100%;color:#344054;min-height:40px}
+.st-proposal-form .st-field input:focus{outline:none;border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.15)}
+.st-proposal-signature{font-family:"Segoe Script","Brush Script MT","Snell Roundhand",cursive;font-size:20px !important;letter-spacing:.02em}
+.st-proposal-agree{display:flex;align-items:flex-start;gap:10px;font-size:12px;color:#475467;line-height:1.5;margin:8px 0 14px}.st-proposal-agree input{margin-top:3px;flex-shrink:0}
+.st-proposal-form .st-button{width:100%;padding:12px 16px;font-size:14px}
+.st-proposal-error{padding:10px 14px;border:1px solid #fecdca;background:#fef3f2;color:#b42318;border-radius:10px;font-size:13px;margin:12px auto;max-width:1180px}
+.st-proposal-done{display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;color:#067647;border-color:#a6f4c5;background:linear-gradient(180deg,#ecfdf3,#fff)}
+.st-proposal-done h2{font-size:18px;font-weight:700;color:#101828}.st-proposal-done p{color:#344054;font-size:13px;line-height:1.55}
+.st-proposal-contact{text-align:center;color:#98a2b3;font-size:12px;overflow-wrap:anywhere}
+@media(max-width:900px){.st-proposal-layout{grid-template-columns:1fr}.st-proposal-side{position:static}.st-proposal-paper{padding:26px 22px}}

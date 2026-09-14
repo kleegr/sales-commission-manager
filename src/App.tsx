@@ -30,6 +30,7 @@ const Documents = lazy(()=>import('./pages/Documents'));
 const Presentation = lazy(()=>import('./pages/Presentation'));
 const Settings = lazy(()=>import('./pages/Settings'));
 const KleegrIntegration = lazy(()=>import('./pages/KleegrIntegration'));
+const ProposalPublic = lazy(()=>import('./pages/ProposalPublic'));
 
 /** Route guard: redirect to the role's home if it may not see this path, or
  *  show a "feature turned off" notice if the tenant has the feature disabled.
@@ -66,6 +67,11 @@ function Portal() {
 export default function App() {
   const { user } = useAuth();
   const role = (user?.role ?? "salesperson") as Role;
+  const { pathname } = useLocation();
+
+  // FLOW 4: /p/<token> is the recipient's public approval page — rendered OUTSIDE the
+  // Guard/Layout/TrackerGate chain (no nav, no role or feature checks; the token is the credential).
+  if (/^\/p\/[A-Za-z0-9_-]+\/?$/.test(pathname)) return <Suspense fallback={<p className="st-loading" role="status">Loading…</p>}><ProposalPublic /></Suspense>;
 
   return (
     <TrackerProvider><PreferencesProvider><Layout><Suspense fallback={<p className="st-loading" role="status">Loading page…</p>}>

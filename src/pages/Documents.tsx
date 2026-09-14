@@ -14,14 +14,17 @@
 // keeps working and the assist panel explains it's unavailable.
 //
 // Lifecycle: Draft -> Sent -> Viewed -> Signed (or Canceled, then re-openable).
-// E-signature is intentionally NOT wired up — this manages status only.
+// FLOW 4: "Send" emails a private approval link (/p/<token>); the recipient
+// approves + types a signature on the public page, which auto-creates the
+// client (prospect mode), a won opportunity and a pending receipt for the
+// salesperson. Manual "Mark …" status buttons remain as overrides.
 // ============================================================================
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   FileText, FileSignature, Sparkles, Plus, Eye, Pencil, Copy, Trash2,
   Send, CheckCircle2, XCircle, Loader2, Building2, History, ArrowLeft,
-  RotateCcw, Lock,
+  RotateCcw, Lock, Link2, UserPlus,
 } from "lucide-react";
 import { useApp } from "../store/AppContext";
 import { useFeatures } from "../store/FeaturesContext";
@@ -43,6 +46,10 @@ import {
 import { BusinessWizard } from "../components/documents/BusinessWizard";
 import { SectionBuilder, type BuilderSavePayload } from "../components/documents/SectionBuilder";
 import { DocumentPreview, type PreviewBranding } from "../components/documents/DocumentPreview";
+import {
+  ShareDialog, LinkBanner, ProspectFields, ApprovalCard, emptyProspect, recipientOf, mintDocumentLink,
+  type DocRow, type Prospect, type ShareResult,
+} from "../components/documents/ProposalShare";
 import type {
   BusinessProfile, ClientDocument, DocumentTemplate, AiGeneration,
   DocumentKind, DocStatus, DocumentStyle, DocumentSection,
@@ -147,6 +154,12 @@ export default function Documents() {
   const [cClientId, setCClientId] = useState("");
   const [cTitle, setCTitle] = useState("");
   const [creating, setCreating] = useState(false);
+  const [cMode, setCMode] = useState<"client" | "prospect">("client");
+  const [cProspect, setCProspect] = useState<Prospect>(emptyProspect());
+
+  // FLOW 4: share dialog + the one-time link banner
+  const [shareDoc, setShareDoc] = useState<DocRow | null>(null);
+  const [shareResult, setShareResult] = useState<ShareResult | null>(null);
 
   // preview modal
   const [previewData, setPreviewData] = useState<PreviewResponse | null>(null);
@@ -259,6 +272,8 @@ export default function Documents() {
     setCTemplateId(first?.id ?? "");
     setCClientId(clients[0]?.id ?? "");
     setCTitle("");
+    setCMode(clients.length ? "client" : "prospect");
+    setCProspect(emptyProspect());
   }
 
   function openDocumentBuilder(d: ClientDocument) {
@@ -267,7 +282,7 @@ export default function Documents() {
       ctx: {
         scope: "document", kind: d.kind, id: d.id, title: d.title,
         style: d.style, sections: d.sections,
-        subtitle: d.clientId ? `For ${clientName(d.clientId)}` : undefined,
+        subtitle: d.clientId ? `For ${clientName(d.clientId)}` : (d as DocRow).prospect ? `For ${recipientOf(d as DocRow, clientName)} (prospect)` : undefined,
       },
     });
   }
@@ -277,12 +292,15 @@ export default function Documents() {
     setCreating(true);
     setError(null);
     try {
+      const prospect = cMode === "prospect" ? cProspect : null;
+      if (prospect && (!prospect.name.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(prospect.email.trim()))) { setError("Enter the prospect's name and a valid email."); setCreating(false); return; }
       const { id } = await createClientDocument({
         kind: createKind,
-        clientId: cClientId || null,
+        clientId: prospect ? null : cClientId || null,
         templateId: cTemplateId || null,
         title: cTitle.trim() || undefined,
-      });
+        ...(prospect ? { prospect } : {}),
+      } as Parameters<typeof createClientDocument>[0]);
       const docs = await refreshLists();
       const d = docs.documents.find((x) => x.id === id);
       setCreateKind(null);
@@ -303,6 +321,16 @@ export default function Documents() {
       setError(msgOf(e, "Could not update the status."));
     }
   }
+
+  // ---- FLOW 4: send / copy link ---------------------------------------------
+  const defaultRecipient = (d: DocRow) => d.sentTo || clients.find((c) => c.id === d.clientId)?.email || d.prospect?.email || "";
+  async function onNewLink(d: DocRow) {
+    if (d.hasLink && !window.confirm("Generate a new approval link? The previously shared link will stop working.")) return;
+    setError(null);
+    try { setShareResult(await mintDocumentLink(d.id)); await refreshLists(); }
+    catch (e) { setError(msgOf(e, "Could not generate the link.")); }
+  }
+  async function onShared(r: ShareResult) { setShareDoc(null); setShareResult(r); await refreshLists(); }
 
   // ---- builder save --------------------------------------------------------
 
@@ -441,6 +469,7 @@ export default function Documents() {
           {error}
         </Card>
       )}
+      {shareResult && <LinkBanner result={shareResult} onClose={() => setShareResult(null)} />}
 
       {/* Tabs */}
       <div className="flex flex-wrap gap-1 border-b border-slate-200 dark:border-slate-800">
@@ -504,6 +533,8 @@ export default function Documents() {
               onEdit={openDocumentBuilder}
               onPreview={(d) => openPreview("document", d.id, d.clientId)}
               onStatus={changeStatus}
+              onSend={(d) => setShareDoc(d)}
+              onLink={onNewLink}
             />
           )}
 
@@ -516,6 +547,8 @@ export default function Documents() {
               onEdit={openDocumentBuilder}
               onPreview={(d) => openPreview("document", d.id, d.clientId)}
               onStatus={changeStatus}
+              onSend={(d) => setShareDoc(d)}
+              onLink={onNewLink}
             />
           )}
 
@@ -529,7 +562,7 @@ export default function Documents() {
       <Modal
         open={createKind !== null}
         onClose={() => setCreateKind(null)}
-        title={`New ${createKind ?? ""} for a client`}
+        title={`New ${createKind ?? ""}`}
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setCreateKind(null)}>Cancel</Button>
@@ -541,14 +574,25 @@ export default function Documents() {
         }
       >
         <div className="space-y-4">
-          <Field label="Client" hint="Self-serve roles only see their own clients.">
-            <Select value={cClientId} onChange={(e) => setCClientId(e.target.value)}>
-              <option value="">— No client (generic) —</option>
-              {clients.map((c) => (
-                <option key={c.id} value={c.id}>{c.companyName}</option>
-              ))}
-            </Select>
-          </Field>
+          <div className="st-mode-toggle" role="radiogroup" aria-label="Who is this for">
+            <button type="button" role="radio" aria-checked={cMode === "client"} className={cMode === "client" ? "is-active" : ""} onClick={() => setCMode("client")}><Building2 className="h-4 w-4" /> Existing client</button>
+            <button type="button" role="radio" aria-checked={cMode === "prospect"} className={cMode === "prospect" ? "is-active" : ""} onClick={() => setCMode("prospect")}><UserPlus className="h-4 w-4" /> New prospect</button>
+          </div>
+          {cMode === "client" ? (
+            <Field label="Client" hint="Self-serve roles only see their own clients.">
+              <Select value={cClientId} onChange={(e) => setCClientId(e.target.value)}>
+                <option value="">— No client (generic) —</option>
+                {clients.map((c) => (
+                  <option key={c.id} value={c.id}>{c.companyName}</option>
+                ))}
+              </Select>
+            </Field>
+          ) : (
+            <div className="space-y-1">
+              <ProspectFields value={cProspect} onChange={setCProspect} />
+              <p className="text-xs text-slate-500">The client record is created automatically when the prospect approves.</p>
+            </div>
+          )}
           <Field label="Start from template" hint="The template's sections are copied in; client details are merged automatically.">
             <Select value={cTemplateId} onChange={(e) => setCTemplateId(e.target.value)}>
               <option value="">— Blank starter —</option>
@@ -562,6 +606,9 @@ export default function Documents() {
           </Field>
         </div>
       </Modal>
+
+      {/* FLOW 4: send-for-approval dialog */}
+      <ShareDialog key={shareDoc?.id ?? "none"} doc={shareDoc} defaultTo={shareDoc ? defaultRecipient(shareDoc) : ""} onClose={() => setShareDoc(null)} onSent={onShared} />
 
       {/* Preview modal */}
       <Modal
@@ -740,7 +787,7 @@ function TemplateList({
 }
 
 function ClientDocList({
-  kind, docs, clientName, onNew, onEdit, onPreview, onStatus,
+  kind, docs, clientName, onNew, onEdit, onPreview, onStatus, onSend, onLink,
 }: {
   kind: DocumentKind;
   docs: ClientDocument[];
@@ -749,6 +796,8 @@ function ClientDocList({
   onEdit: (d: ClientDocument) => void;
   onPreview: (d: ClientDocument) => void;
   onStatus: (d: ClientDocument, status: DocStatus) => void;
+  onSend: (d: DocRow) => void;
+  onLink: (d: DocRow) => void;
 }) {
   const label = kind === "contract" ? "contract" : "proposal";
   return (
@@ -782,12 +831,18 @@ function ClientDocList({
               </TR>
             </THead>
             <TBody>
-              {docs.map((d) => {
+              {docs.map((raw) => {
+                const d = raw as DocRow;
                 const next = NEXT_STATUS[d.status];
+                const shareable = !isTerminalStatus(d.status);
                 return (
                   <TR key={d.id}>
-                    <TD className="font-medium text-slate-800 dark:text-slate-100">{d.title}</TD>
-                    <TD>{clientName(d.clientId)}</TD>
+                    <TD>
+                      <div className="font-medium text-slate-800 dark:text-slate-100">{d.title}</div>
+                      {d.sentTo && d.status !== "signed" && <div className="text-xs text-slate-500">Sent to {d.sentTo}{d.viewedAt ? ` · viewed ${formatDate(d.viewedAt)}` : ""}</div>}
+                      <ApprovalCard doc={d} />
+                    </TD>
+                    <TD>{recipientOf(d, clientName)}{!d.clientId && d.prospect && <> <Badge tone="violet">Prospect</Badge></>}</TD>
                     <TD>{d.amount ? formatCurrency(d.amount) : "—"}</TD>
                     <TD><DocStatusBadge status={d.status} /></TD>
                     <TD className="text-slate-500">{formatDate(d.updatedAt)}</TD>
@@ -797,9 +852,19 @@ function ClientDocList({
                         {!isTerminalStatus(d.status) && (
                           <Button variant="ghost" size="sm" onClick={() => onEdit(d)} aria-label="Edit"><Pencil className="h-4 w-4" /></Button>
                         )}
+                        {shareable && (
+                          <Button variant="subtle" size="sm" onClick={() => onSend(d)} aria-label="Send for approval">
+                            <Send className="h-4 w-4" /> Send
+                          </Button>
+                        )}
+                        {shareable && (
+                          <Button variant="ghost" size="sm" onClick={() => onLink(d)} aria-label={d.hasLink ? "New link" : "Copy link"} title={d.hasLink ? "Generate a new approval link" : "Create a copyable approval link"}>
+                            <Link2 className="h-4 w-4" /> {d.hasLink ? "New link" : "Copy link"}
+                          </Button>
+                        )}
                         {next && (
-                          <Button variant="subtle" size="sm" onClick={() => onStatus(d, next)}>
-                            {next === "sent" ? <Send className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />}
+                          <Button variant="ghost" size="sm" onClick={() => onStatus(d, next)}>
+                            <CheckCircle2 className="h-4 w-4" />
                             Mark {STATUS_LABELS[next].toLowerCase()}
                           </Button>
                         )}

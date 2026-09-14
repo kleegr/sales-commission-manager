@@ -18,7 +18,8 @@ import {createHash} from 'node:crypto';
 // ============================================================================
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { trackerInstalled, database, id } from '../_lib/tracker-common.js';
+import { trackerInstalled, database } from '../_lib/tracker-common.js';
+import { normalizeWebhookRow, queueTrackerEvent, autoImportEvent } from '../_lib/tracker-sync.js';
 import { hasDb } from "../_lib/db.js";
 import { ensureSchema } from "../_lib/repository.js";
 import { verifyWebhookSignature, isHandledWebhookEvent, normalizeWebhookEvent, KleegrError } from "../_lib/kleegr.js";
@@ -103,12 +104,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Record first (idempotent). A duplicate delivery is acknowledged, not re-applied.
     const recorded = await recordWebhookEvent(tenant?.id ?? null, eventType || "unknown", deliveryId, payload);
     if (tenant && await trackerInstalled() && /^(contact|opportunity)\./.test(eventType)) {
-      // Every verified redelivery can restore the review queue after a crash.
-      // Financial/attribution effects never run implicitly from this receiver.
-      const source = payload.data || payload;
-      const safe = Object.fromEntries(['id','contactId','name','firstName','lastName','email','phone','status','assignedTo','pipelineId','pipelineStageId','monetaryValue','updatedAt'].filter(k=>source[k]!==undefined).map(k=>[k,source[k]]));
-      await database.query(`INSERT INTO import_reviews(id,tenant_id,resource,external_id,payload,reason) VALUES($1,$2,'webhook',$3,$4::jsonb,'Verified Kleegr event: review mapping before applying. Use directory sync for contact profile updates.') ON CONFLICT(tenant_id,resource,external_id) DO NOTHING`, [id('import'),tenant.id,deliveryId,JSON.stringify({eventType,...safe})]);
-      return res.status(200).json({ok:true,queued:true,duplicate:recorded.duplicate,event:eventType});
+      // Every verified redelivery can restore the review queue after a crash: the row is
+      // normalised to the same shape the sync preview stages, so approveImport (manual or
+      // the opted-in automatic pipeline policy) is the single path that applies it.
+      // Financial effects happen only through that path, never implicitly here.
+      const normalized = normalizeWebhookRow(eventType, payload.data || payload);
+      if (!normalized) return res.status(200).json({ok:true,queued:false,action:'unmapped',duplicate:recorded.duplicate,event:eventType});
+      await queueTrackerEvent(database, tenant.id, normalized.resource, normalized.row, `Verified Kleegr ${eventType} event. Match the contact and confirm the mapping before approval.`);
+      const auto = await autoImportEvent(database, tenant.id, normalized.resource, normalized.row.externalId);
+      return res.status(200).json({ok:true,queued:true,resource:normalized.resource,duplicate:recorded.duplicate,event:eventType,auto});
     }
     if (recorded.duplicate) {
       return res.status(200).json({ ok: true, duplicate: true, event: eventType });

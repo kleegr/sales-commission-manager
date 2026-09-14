@@ -12,6 +12,12 @@ export async function enroll(db:SQL,u:SessionUser,b:any){
     if(!e)throw new TrackerError('not_available','A selected user is not active in this workspace.',409);
     const existing=(await db.query('SELECT id FROM salespeople WHERE tenant_id=$1 AND (ghl_user_id=$2 OR kleegr_user_id=$2)',[u.tenantId,externalId])).rows[0];
     if(existing){await db.query('UPDATE salespeople SET enrolled_by=COALESCE(enrolled_by,$3),enrolled_at=COALESCE(enrolled_at,now()) WHERE tenant_id=$1 AND id=$2',[u.tenantId,existing.id,u.id]);await audit(db,u,'salesperson',existing.id,'enrollment_confirmed',{externalId});result.push(existing.id);continue;}
+    // An external salesperson with the same email is the same person: adopt the record (history, links and assignments stay) instead of inserting a duplicate.
+    const email=String(e.email||'').trim().toLowerCase();
+    const adoptable=email?(await db.query("SELECT id FROM salespeople WHERE tenant_id=$1 AND ghl_user_id IS NULL AND lower(trim(email))=$2 ORDER BY created_at,id LIMIT 1",[u.tenantId,email])).rows[0]:null;
+    if(adoptable){await db.query('UPDATE salespeople SET ghl_user_id=$3,ghl_role=$4,ghl_active=true,ghl_synced_at=now(),name=$5,phone=CASE WHEN phone=\'\' THEN $6 ELSE phone END,enrolled_by=COALESCE(enrolled_by,$7),enrolled_at=COALESCE(enrolled_at,now()),updated_at=now() WHERE tenant_id=$1 AND id=$2',[u.tenantId,adoptable.id,externalId,e.provider_role,e.name,e.phone||'',u.id]);
+      await db.query('UPDATE users SET salesperson_id=$1 WHERE tenant_id=$2 AND kleegr_user_id=$3 AND salesperson_id IS NULL',[adoptable.id,u.tenantId,externalId]);
+      await audit(db,u,'salesperson',adoptable.id,'enrollment_adopted',{externalId,role:b.role,matchedBy:'email'});result.push(adoptable.id);continue;}
     const sp=id('sp');await db.query(`INSERT INTO salespeople(id,tenant_id,name,email,phone,role,ghl_user_id,ghl_role,ghl_active,ghl_synced_at,enrolled_at,enrolled_by,referral_code,created_at,updated_at)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,true,now(),now(),$9,$10,now(),now())`,[sp,u.tenantId,e.name,e.email,e.phone,b.role,externalId,e.provider_role,u.id,id('ref')]);
     // Only stable provider identity may link an existing login. Import/enrollment never creates one.
@@ -19,6 +25,27 @@ export async function enroll(db:SQL,u:SessionUser,b:any){
     await audit(db,u,'salesperson',sp,'enrolled',{externalId,role:b.role});result.push(sp);
   }
   return {ids:result};
+}
+/** Link a salesperson to a directory user (login access) or unlink to keep them external. Financial history and links are untouched. */
+export async function linkSalesman(db:SQL,u:SessionUser,b:any){
+  admin(u);await lock(db,u.tenantId);const sp=await participant(db,u,required(b.id,'Salesman',100));
+  const unlinkUsers=async(externalId:string)=>db.query('UPDATE users SET salesperson_id=NULL WHERE tenant_id=$1 AND salesperson_id=$2 AND kleegr_user_id=$3',[u.tenantId,sp.id,externalId]);
+  if(b.externalId===null||b.externalId===undefined||b.externalId===''){
+    if(!sp.ghl_user_id)return{id:sp.id,linked:false,duplicate:true};
+    await unlinkUsers(sp.ghl_user_id);
+    await db.query('UPDATE salespeople SET ghl_user_id=NULL,ghl_role=NULL,ghl_active=NULL,ghl_synced_at=NULL,updated_at=now() WHERE tenant_id=$1 AND id=$2',[u.tenantId,sp.id]);
+    await audit(db,u,'salesperson',sp.id,'login_unlinked',{externalId:sp.ghl_user_id});return{id:sp.id,linked:false};
+  }
+  const externalId=required(b.externalId,'Connected user',200);
+  const e=(await db.query("SELECT * FROM external_users WHERE tenant_id=$1 AND provider='ghl' AND external_id=$2",[u.tenantId,externalId])).rows[0];
+  if(!e)throw new TrackerError('not_available','That user is not in this workspace directory. Refresh connected users first.',404);
+  if((await db.query('SELECT id FROM salespeople WHERE tenant_id=$1 AND (ghl_user_id=$2 OR kleegr_user_id=$2) AND id<>$3',[u.tenantId,externalId,sp.id])).rows.length)throw new TrackerError('user_already_linked','Another salesman is already linked to this user. Unlink them first.',409);
+  if(sp.ghl_user_id===externalId)return{id:sp.id,linked:true,duplicate:true};
+  if(sp.ghl_user_id)await unlinkUsers(sp.ghl_user_id);
+  await db.query('UPDATE salespeople SET ghl_user_id=$3,ghl_role=$4,ghl_active=$5,ghl_synced_at=now(),enrolled_by=COALESCE(enrolled_by,$6),enrolled_at=COALESCE(enrolled_at,now()),updated_at=now() WHERE tenant_id=$1 AND id=$2',[u.tenantId,sp.id,externalId,e.provider_role||'',e.active!==false,u.id]);
+  // Only the stable provider identity may connect an existing login; linking never creates one.
+  await db.query('UPDATE users SET salesperson_id=$1 WHERE tenant_id=$2 AND kleegr_user_id=$3 AND salesperson_id IS NULL',[sp.id,u.tenantId,externalId]);
+  await audit(db,u,'salesperson',sp.id,'login_linked',{externalId,previous:sp.ghl_user_id||null});return{id:sp.id,linked:true};
 }
 export async function saveParticipant(db:SQL,u:SessionUser,b:any){
   admin(u);await lock(db,u.tenantId);const sp=b.id?await participant(db,u,b.id):null;const spId=sp?.id||id('sp');

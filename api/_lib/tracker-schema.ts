@@ -185,5 +185,7 @@ INSERT INTO external_users (tenant_id,external_id,name,email,phone,provider_role
  SELECT tenant_id,ghl_user_id,name,email,phone,COALESCE(ghl_role,''),COALESCE(ghl_active,true),COALESCE(ghl_synced_at,now())
  FROM salespeople WHERE ghl_user_id IS NOT NULL ON CONFLICT DO NOTHING;
 UPDATE salespeople SET enrolled_at=now() WHERE enrolled_at IS NULL;
+-- Pipeline → commission policy: which provider pipeline/stages count as won, and whether won deals post automatically.
+ALTER TABLE tracker_workspaces ADD COLUMN IF NOT EXISTS pipeline_policy jsonb NOT NULL DEFAULT '{"pipelineId":null,"wonStageIds":[],"treatStatusWonAsWon":true,"auto":false,"receipt":"pending"}';
 INSERT INTO schema_migrations(id) VALUES('0012_sales_tracker') ON CONFLICT DO NOTHING;
 `;

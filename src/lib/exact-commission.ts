@@ -107,3 +107,58 @@ export function simulateExact(plan:ExactPlan, input:EarningsInput, months:number
   }
   return result;
 }
+/** Structure builder: plain "layers" a campaign owner composes without knowing rule internals. Values are minor units (basis points for percentages). */
+export interface Layer {id:string;type:'bonus'|'percent'|'fixed';value:string;from:number;to?:number}
+export const LAYER_TYPES:Record<Layer['type'],string>={bonus:'Signup bonus (once, on first sale)',percent:'Percentage of each payment',fixed:'Flat amount per payment'};
+export const formatBps=(bps:string)=>{const n=minor(bps);return `${n/100n}${n%100n?'.'+(n%100n).toString().padStart(2,'0').replace(/0$/,''):''}%`;};
+const layerRange=(l:Layer)=>l.to===undefined?`month ${l.from} onward`:l.to===l.from?`month ${l.from}`:`months ${l.from}–${l.to}`;
+export function layerName(l:Layer,currency:string,digits:number):string{try{return l.type==='bonus'?`Signup bonus ${displayMinor(l.value,currency,digits)}`:l.type==='percent'?`${formatBps(l.value)} of ${layerRange(l)}`:`${displayMinor(l.value,currency,digits)} per payment, ${layerRange(l)}`;}catch{return 'Commission layer';}}
+const layersOverlap=(a:Layer,b:Layer)=>Math.max(a.from,b.from)<=Math.min(a.to??Infinity,b.to??Infinity);
+/** Payment layers share group 'commission': exclusive when their month ranges are disjoint, otherwise every qualifying layer stacks. Signup bonuses are `sale` rules in group 'bonus'. */
+export function compileLayers(layers:Layer[],{currency,minorDigits,holdDays}:{currency:string;minorDigits:number;holdDays:number}):ExactPlan{
+  const payment=layers.filter(l=>l.type!=='bonus'),bonus=layers.filter(l=>l.type==='bonus'),common={beneficiary:'referrer' as const,base:'gross' as const,holdDays};
+  const stacking:ExactRule['stacking']=payment.some((a,i)=>payment.some((b,j)=>j>i&&layersOverlap(a,b)))?'stack':'exclusive';
+  const rules:ExactRule[]=layers.map((l,i)=>l.type==='bonus'?{id:l.id,name:layerName(l,currency,minorDigits),event:'sale' as const,kind:'fixed' as const,value:l.value,...common,chargeFrom:1,group:'bonus',stacking:bonus.length>1?'stack' as const:'exclusive' as const,priority:i+1}
+    :{id:l.id,name:layerName(l,currency,minorDigits),event:'payment' as const,kind:l.type,value:l.value,...common,chargeFrom:l.from,...(l.to!==undefined?{chargeTo:l.to}:{}),group:'commission',stacking,priority:i+1});
+  return {currency,minorDigits,rules};
+}
+/** Inverse of compileLayers when the plan only uses builder-shaped rules; null means "open in advanced rules". Group names are free, but the stacking policy must match what the builder would produce so nothing changes meaning silently. */
+export function decompileLayers(plan:ExactPlan|null|undefined):{layers:Layer[];holdDays:number}|null{
+  if(!plan||!Array.isArray(plan.rules)||!plan.rules.length)return null;
+  const holdDays=plan.rules[0].holdDays,layers:Layer[]=[],groups={payment:new Set<string>(),sale:new Set<string>()};
+  for(const r of plan.rules){
+    if(r.beneficiary!=='referrer'||r.base!=='gross'||r.productId||r.splits?.length||r.tiers?.length||(r.releaseTiming&&r.releaseTiming!=='days')||r.holdDays!==holdDays)return null;
+    if(r.event==='sale'&&r.kind==='fixed'){groups.sale.add(r.group);layers.push({id:r.id,type:'bonus',value:r.value,from:1});}
+    else if(r.event==='payment'){groups.payment.add(r.group);layers.push({id:r.id,type:r.kind,value:r.value,from:r.chargeFrom,...(r.chargeTo!==undefined?{to:r.chargeTo}:{})});}
+    else return null;
+  }
+  if(groups.payment.size>1||groups.sale.size>1||[...groups.sale].some(g=>groups.payment.has(g)))return null;
+  const again=compileLayers(layers,{currency:plan.currency,minorDigits:plan.minorDigits,holdDays});
+  return again.rules.every(r=>r.stacking===plan.rules.find(p=>p.id===r.id)!.stacking)?{layers,holdDays}:null;
+}
+export function layerPresets(digits:number,rateBps:string):Record<string,{label:string;layers:Layer[]}>{
+  const unit=(n:number)=>(BigInt(n)*10n**BigInt(digits)).toString(),id=()=>crypto.randomUUID();
+  return {tiered:{label:'Signup bonus + tiered residuals',layers:[{id:id(),type:'bonus',value:unit(500),from:1},{id:id(),type:'percent',value:'2000',from:1,to:1},{id:id(),type:'percent',value:'3000',from:2,to:5},{id:id(),type:'percent',value:'4000',from:6,to:12}]},
+    flat:{label:'Flat % forever',layers:[{id:id(),type:'percent',value:rateBps,from:1}]},
+    setup:{label:'Setup fee + recurring %',layers:[{id:id(),type:'fixed',value:unit(100),from:1,to:1},{id:id(),type:'percent',value:rateBps,from:1}]}};
+}
+/** Keeps exclusive rules in a group on distinct priorities (first occurrence wins its number; later duplicates move after the group's highest). */
+export function renumberPriorities(rules:ExactRule[]):ExactRule[]{
+  const used=new Map<string,Set<number>>();
+  return rules.map(r=>{if(r.stacking!=='exclusive')return Number.isInteger(r.priority)?r:{...r,priority:1};const s=used.get(r.group)||new Set<number>();used.set(r.group,s);let p=Number.isInteger(r.priority)?r.priority:1;if(s.has(p))p=Math.max(...s)+1;s.add(p);return p===r.priority?r:{...r,priority:p};});
+}
+/** Per-rule hints when two exclusive rules in one group can both qualify for the same charge; only the lower priority number is paid there. */
+export function overlapHints(rules:ExactRule[]):Record<number,string>{
+  const out:Record<number,string>={};
+  rules.forEach((a,i)=>rules.forEach((b,j)=>{if(j<=i||a.group!==b.group||a.stacking!=='exclusive'||b.stacking!=='exclusive'||a.event!==b.event||(a.productId||'')!==(b.productId||''))return;
+    const from=Math.max(a.chargeFrom,b.chargeFrom),to=Math.min(a.chargeTo??Infinity,b.chargeTo??Infinity);if(from>to)return;
+    const span=to===Infinity?`month ${from} onward`:from===to?`month ${from}`:`months ${from}–${to}`,winner=a.priority<=b.priority?i:j;
+    for(const [k,other] of [[i,j],[j,i]]){const note=`Overlaps rule ${other+1} in ${span}; only rule ${winner+1} (priority ${rules[winner].priority}) pays there. Use stacking "add every qualifying rule" to pay both.`;out[k]=out[k]?`${out[k]} ${note}`:note;}}));
+  return out;
+}
+/** One client paying `amountMinor` every month. A zero-churn forecast that adds one customer per month has, in month m, exactly one customer on each charge 1..m, so its month-m total is that single client's cumulative earnings through charge m (customer units are whole, so no rounding). */
+export function clientSchedule(plan:ExactPlan,amountMinor:string,currency:string,date:string,months=12){
+  const input:EarningsInput={event:'payment',amountMinor,taxMinor:'0',feeMinor:'0',discountMinor:'0',currency,productId:'',chargeNumber:1,date,beneficiaries:Object.fromEntries(BENEFICIARIES.map(b=>[b,'preview']))};
+  const sim=simulateExact(plan,input,months,1,0),bonusMinor=calculateExact(plan,{...input,event:'sale'}).reduce((n,e)=>n+minor(e.amountMinor),0n).toString();
+  return {bonusMinor,totalMinor:sim[months-1].commissionMinor,rows:sim.map((m,i)=>({month:m.month,paymentMinor:amountMinor,commissionMinor:(minor(m.commissionMinor)-(i?minor(sim[i-1].commissionMinor):0n)).toString(),cumulativeMinor:m.commissionMinor}))};
+}

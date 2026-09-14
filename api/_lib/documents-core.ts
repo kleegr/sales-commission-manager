@@ -206,7 +206,58 @@ export function rowToTemplate(r: any): DocumentTemplate {
   };
 }
 
-export function rowToDocument(r: any): ClientDocument {
+// ---------------------------------------------------------------------------
+// FLOW 4 — prospect proposals + public approval (pure helpers)
+// ---------------------------------------------------------------------------
+
+/** A document addressed to someone who is not a client yet (stored as JSONB). */
+export interface Prospect { name: string; email: string; company: string; phone: string; setupFee: number; monthlySubscription: number }
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const isEmail = (v: unknown): boolean => typeof v === "string" && v.length <= 254 && EMAIL_RE.test(v.trim());
+const nonNeg = (v: unknown): number => { const n = Number(v ?? 0); return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0; };
+/** Validate + clean an incoming prospect; name + valid email are required. */
+export function normalizeProspect(raw: unknown): Result<Prospect> {
+  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const name = str(o.name).slice(0, 200), email = str(o.email).toLowerCase();
+  if (!name) return { ok: false, error: "prospect_name_required" };
+  if (!isEmail(email)) return { ok: false, error: "prospect_email_invalid" };
+  return { ok: true, value: { name, email, company: str(o.company).slice(0, 200), phone: str(o.phone).slice(0, 50), setupFee: nonNeg(o.setupFee), monthlySubscription: nonNeg(o.monthlySubscription) } };
+}
+export function parseProspect(raw: unknown): Prospect | null {
+  const v = raw && typeof raw === "object" ? raw : safeJson(raw);
+  if (!v || typeof v !== "object") return null;
+  const r = normalizeProspect(v);
+  return r.ok ? r.value : null;
+}
+/** Shape a prospect like a client row so the merge engine + client insert can reuse it. */
+export function prospectAsClient(p: Prospect) {
+  return { companyName: p.company || p.name, contactName: p.name, email: p.email, phone: p.phone, setupFee: p.setupFee, monthlySubscription: p.monthlySubscription, signupDate: "" };
+}
+/** The cash the pending receipt should expect: the setup fee, or the whole amount when there is no split. */
+export function receiptAmount(setupFee: number, total: number): number { return setupFee > 0 ? setupFee : total; }
+/** Major units -> exact minor-unit string for the tracker ledger (never floats). */
+export function toMinor(amount: number, minorDigits = 2): string { return BigInt(Math.round(Math.max(0, amount) * 10 ** minorDigits)).toString(); }
+/** Pure rate-limit decision for the public endpoint. */
+export const PROPOSAL_WINDOW_MIN = 15, PROPOSAL_MAX_REQUESTS = 120, PROPOSAL_MAX_FAILURES = 15;
+export function proposalOverLimit(total: number, failures: number): boolean { return total >= PROPOSAL_MAX_REQUESTS || failures >= PROPOSAL_MAX_FAILURES; }
+/** Validate the public acceptance form (name, email, typed signature, agreement). */
+export function normalizeAcceptance(raw: unknown): Result<{ name: string; email: string; signature: string }> {
+  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const name = str(o.name).slice(0, 200), email = str(o.email).toLowerCase(), signature = str(o.signature).slice(0, 200);
+  if (name.length < 2) return { ok: false, error: "name_required" };
+  if (!isEmail(email)) return { ok: false, error: "email_invalid" };
+  if (signature.length < 2) return { ok: false, error: "signature_required" };
+  if (o.agree !== true) return { ok: false, error: "agreement_required" };
+  return { ok: true, value: { name, email, signature } };
+}
+
+export interface ClientDocumentRow extends ClientDocument {
+  prospect: Prospect | null; sentTo: string | null; hasLink: boolean; linkExpiresAt: string | null;
+  acceptedAt: string | null; acceptedByName: string | null; acceptedEmail: string | null;
+  createdClientId: string | null; createdOpportunityId: string | null; receiptEventKey: string | null;
+}
+
+export function rowToDocument(r: any): ClientDocumentRow {
   return {
     id: r.id,
     kind: r.kind === "contract" ? "contract" : "proposal",
@@ -224,6 +275,9 @@ export function rowToDocument(r: any): ClientDocument {
     viewedAt: isoOrNull(r.viewed_at),
     signedAt: isoOrNull(r.signed_at),
     canceledAt: isoOrNull(r.canceled_at),
+    prospect: parseProspect(r.prospect), sentTo: r.sent_to ?? null, hasLink: !!r.public_token, linkExpiresAt: isoOrNull(r.token_expires_at),
+    acceptedAt: isoOrNull(r.accepted_at), acceptedByName: r.accepted_by_name ?? null, acceptedEmail: r.accepted_email ?? null,
+    createdClientId: r.created_client_id ?? null, createdOpportunityId: r.created_opportunity_id ?? null, receiptEventKey: r.receipt_event_key ?? null,
   };
 }
 

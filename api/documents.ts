@@ -14,6 +14,12 @@
 //   POST { op:'update_document', id, title?, style?, sections? }
 //   POST { op:'set_status', id, status }     draft|sent|viewed|signed|canceled
 //   POST { op:'preview', scope, id, clientId? } -> merge-resolved sections + branding
+//   POST { op:'send', id, to? }   FLOW 4: mint a public approval link (rotates any previous
+//                                 one), set 'sent', queue + attempt the email via
+//                                 tracker_email_outbox -> { link, email:'sent'|'queued'|'unavailable' }
+//   POST { op:'link', id }        FLOW 4: (re)generate the public link without emailing
+//   create also accepts { prospect:{name,email,company,phone,setupFee?,monthlySubscription?} }
+//   when clientId is null: the client row is created automatically on approval (/api/proposal).
 //
 // SECURITY: tenant ALWAYS from the session, never the client; every read/write
 // is tenant_id-filtered so a document cannot cross sub-accounts. Templates are
@@ -23,6 +29,9 @@
 // server-owned and untouched by the /api/state snapshot save.
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { hasDb, query } from "./_lib/db.js";
+import { database, TrackerError } from "./_lib/tracker-common.js";
+import { queueEmail, deliverQueuedEmail } from "./_lib/operations-providers.js";
+import { issueProposalLink, proposalLink, proposalEmail } from "./proposal.js";
 import { ensureSchema, seedIfEmpty } from "./_lib/repository.js";
 import { getSessionUser } from "./_lib/auth.js";
 import { csrfOk } from "./_lib/http.js";
@@ -39,6 +48,10 @@ import {
   deleteSection,
   reorderSections,
   normalizeSections,
+  normalizeProspect,
+  prospectAsClient,
+  isEmail,
+  type Prospect,
 } from "./_lib/documents-core.js";
 import {
   defaultSections,
@@ -138,7 +151,7 @@ async function salespersonName(tenantId: string, salespersonId: string | null, f
   return rows[0]?.name || fallback;
 }
 
-function mergeContextFor(business: BusinessProfile | null, client: any | null, spName: string): MergeContext {
+function mergeContextFor(business: BusinessProfile | null, client: any | null, spName: string, prospect: Prospect | null = null): MergeContext {
   return buildMergeContext({
     business,
     client: client
@@ -151,9 +164,15 @@ function mergeContextFor(business: BusinessProfile | null, client: any | null, s
           monthlySubscription: client.monthly_subscription_amount,
           signupDate: client.signup_date,
         }
-      : null,
+      : prospect ? prospectAsClient(prospect) : null,
     salespersonName: spName,
   });
+}
+
+/** Public origin for links we email (the request host; Vercel routes by host so it is trustworthy here). */
+function requestOrigin(req: VercelRequest): string {
+  const host = String(req.headers.host || ""), proto = String(req.headers["x-forwarded-proto"] || "https").split(",")[0].trim();
+  return host ? `${proto}://${host}` : "";
 }
 
 /** Compact branding payload for the client-facing preview. */
@@ -361,6 +380,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const resolved = await resolveClient(user, body.clientId ? String(body.clientId) : null);
         if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
         const client = resolved.client;
+        // prospect mode: no client yet — the client row is created when the recipient approves
+        let prospect: Prospect | null = null;
+        if (!client && body.prospect != null) { const p = normalizeProspect(body.prospect); if (!p.ok) return res.status(400).json({ error: p.error }); prospect = p.value; }
 
         // template sections (optional). Unknown template id -> 400 to avoid silent empties.
         let baseSections: DocumentSection[];
@@ -381,19 +403,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (business) style = (kind === "contract" ? business.contractStyle : business.proposalStyle) || style;
         const spId = client?.salesperson_id ?? user.salespersonId ?? null;
         const spName = await salespersonName(user.tenantId, spId, user.name ?? "");
-        const ctx = mergeContextFor(business, client, spName);
+        const ctx = mergeContextFor(business, client, spName, prospect);
         const baked = applySectionsMerge(baseSections, ctx);
 
         const id = uid("doc");
         const title =
           String(body.title ?? "").trim() ||
-          `${kind === "contract" ? "Contract" : "Proposal"} — ${client?.company_name ?? "New"}`;
-        const amount = Number(client?.setup_fee_amount ?? 0) + Number(client?.monthly_subscription_amount ?? 0);
+          `${kind === "contract" ? "Contract" : "Proposal"} — ${client?.company_name ?? (prospect ? prospect.company || prospect.name : "New")}`;
+        const amount = client
+          ? Number(client.setup_fee_amount ?? 0) + Number(client.monthly_subscription_amount ?? 0)
+          : prospect ? prospect.setupFee + prospect.monthlySubscription : 0;
         await query(
           `INSERT INTO documents
-             (id, tenant_id, kind, title, client_id, salesperson_id, template_id, body, sections, style, status, amount, created_by_user_id)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,'draft',$11,$12)`,
-          [id, user.tenantId, kind, title, client?.id ?? null, spId, templateId, sectionsToBody(baked), JSON.stringify(baked), style, amount, user.id],
+             (id, tenant_id, kind, title, client_id, salesperson_id, template_id, body, sections, style, status, amount, created_by_user_id, prospect)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,'draft',$11,$12,$13::jsonb)`,
+          [id, user.tenantId, kind, title, client?.id ?? null, spId, templateId, sectionsToBody(baked), JSON.stringify(baked), style, amount, user.id, prospect ? JSON.stringify(prospect) : null],
         );
         return res.status(201).json({ ok: true, id });
       }
@@ -432,6 +456,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ ok: true });
       }
 
+      // ---- FLOW 4: share for approval (send = mint link + email; link = mint link only) ----
+      if (op === "send" || op === "link") {
+        const row = await loadDocumentRow(user, String(body.id ?? ""));
+        if (!row) return res.status(404).json({ error: "document_not_found" });
+        const d = rowToDocument(row);
+        const gate = ensureKind(d.kind);
+        if (gate) return res.status(403).json({ error: gate });
+        const origin = requestOrigin(req);
+        if (!origin) return res.status(400).json({ error: "origin_unavailable" });
+        const client = d.clientId ? (await query<any>(`SELECT * FROM clients WHERE tenant_id = $1 AND id = $2`, [user.tenantId, d.clientId])).rows[0] ?? null : null;
+        let to: string | null = null;
+        if (op === "send") {
+          to = String(body.to ?? "").trim().toLowerCase() || row.sent_to || client?.email || d.prospect?.email || "";
+          if (!isEmail(to)) return res.status(400).json({ error: "recipient_email_invalid" });
+        }
+        let issued;
+        try { issued = await database.transaction((db) => issueProposalLink(db, user.tenantId, row.id, { to, resend: op === "send" })); }
+        catch (e) { if (e instanceof TrackerError) return res.status(e.status).json({ error: e.code }); throw e; }
+        const link = proposalLink(origin, issued.token);
+        let email: "sent" | "queued" | "unavailable" = "unavailable", emailError: string | null = null;
+        if (op === "send" && to) {
+          const business = await loadBusinessProfile(user.tenantId);
+          const spName = await salespersonName(user.tenantId, d.salespersonId, user.name ?? "");
+          const mail = proposalEmail({ title: d.title, businessName: business?.businessName || user.tenantName || "", recipientName: client?.contact_name || d.prospect?.name || "", salespersonName: spName, link, expiresAt: issued.expiresAt });
+          const queued = await queueEmail(database, user.tenantId, { recipient: to, subject: mail.subject, body: mail.body, eventKey: `proposal:${row.id}:${issued.hash.slice(0, 16)}` });
+          if (queued) {
+            email = "queued";
+            try { await deliverQueuedEmail(database, user.tenantId, queued.id); email = "sent"; }
+            catch (e) { emailError = e instanceof TrackerError ? e.code : "delivery_failed"; }
+          }
+        }
+        return res.status(200).json({ ok: true, id: row.id, link, status: issued.status, expiresAt: issued.expiresAt, to, email, emailError });
+      }
+
       // ---- preview: resolve merge fields + return branding for a clean layout ----
       if (op === "preview") {
         const scope = body.scope === "document" ? "document" : "template";
@@ -467,7 +525,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           docClient = r.rows[0] ?? null;
         }
         const spName = await salespersonName(user.tenantId, d.salespersonId, user.name ?? "");
-        const ctx = mergeContextFor(business, docClient, spName);
+        const ctx = mergeContextFor(business, docClient, spName, d.prospect);
         return res.status(200).json({
           kind: d.kind,
           title: d.title,

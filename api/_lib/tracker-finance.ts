@@ -23,7 +23,8 @@ export async function recordPayment(db:SQL,u:SessionUser,b:any,verifiedReferral?
   if(b.opportunityId && !(await db.query('SELECT id FROM opportunities WHERE tenant_id=$1 AND id=$2 AND client_id=$3',[u.tenantId,b.opportunityId,lead.id])).rows[0])throw new TrackerError('invalid_opportunity','Opportunity must belong to this lead.');
   const source=b.source==='ghl'?'ghl':'manual';
   const productId=String(b.productId||'');
-  const chargeNumber=Number((await db.query("SELECT count(*)::text AS n FROM payments WHERE tenant_id=$1 AND client_id=$2 AND receipt_status='confirmed' AND parent_payment_id IS NULL AND financial_inputs->>'productId'=$3",[u.tenantId,lead.id,productId])).rows[0].n)+1;
+  // "Month N" is the client's Nth confirmed root receipt across every product; product-specific rules still match on productId inside calculateExact.
+  const chargeNumber=Number((await db.query("SELECT count(*)::text AS n FROM payments WHERE tenant_id=$1 AND client_id=$2 AND receipt_status='confirmed' AND parent_payment_id IS NULL",[u.tenantId,lead.id])).rows[0].n)+1;
   const inputs:EarningsInput={event:'payment',amountMinor:amount.toString(),taxMinor:String(b.taxMinor||'0'),feeMinor:String(b.feeMinor||'0'),discountMinor:String(b.discountMinor||'0'),currency:b.currency,productId,chargeNumber,date,beneficiaries:{referrer:lead.referrer_id||undefined,owner:lead.salesperson_id||undefined,closer:lead.closer_id||undefined}};
   if(lead.referrer_id)await ancestry(db,u,lead.referrer_id,inputs);
   if([inputs.taxMinor,inputs.feeMinor,inputs.discountMinor].some(v=>minor(v)<0n)||minor(inputs.taxMinor)+minor(inputs.feeMinor)>amount)throw new TrackerError('invalid_breakdown','Tax and fees must not exceed collected cash.');

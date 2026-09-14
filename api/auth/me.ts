@@ -30,7 +30,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         salespersonId: user.salespersonId,
       },
     });
-  } catch (err: any) {
-    return res.status(500).json({ error: String(err?.message ?? err) });
+  } catch (err) {
+    console.error("[scm:error] me:", err instanceof Error ? (err.stack ?? err.message) : String(err));
+    return res.status(500).json({ error: "internal_error" });
   }
 }

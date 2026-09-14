@@ -34,23 +34,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       seededOnThisRequest = seed.seeded;
     }
 
-    const { rows: ver } = await query<{ version: string }>("SELECT version()");
+    // Reachability probe only — the PUBLIC response must not expose the
+    // Postgres version or which env var carries the connection string.
+    await query("SELECT 1");
 
     const body: Record<string, unknown> = {
       ok: true,
-      database: {
-        configured: true,
-        envVar: connectionEnvVar,
-        engine: ver[0]?.version?.split(" on ")[0] ?? "postgres",
-        seededOnThisRequest,
-      },
+      database: { configured: true, seededOnThisRequest },
       generatedAt: new Date().toISOString(),
     };
 
-    // Row-count diagnostics for the caller's OWN tenant only, admins only.
-    // Never a cross-tenant list — that is what leaked before.
+    // Diagnostics (engine, env var name, own-tenant row counts) are for
+    // authenticated admins ONLY. Never a cross-tenant list — that is what
+    // leaked before.
     const user = await getSessionUser(req);
     if (user && isAdminRole(user.role)) {
+      const { rows: ver } = await query<{ version: string }>("SELECT version()");
+      (body.database as Record<string, unknown>).envVar = connectionEnvVar;
+      (body.database as Record<string, unknown>).engine = ver[0]?.version?.split(" on ")[0] ?? "postgres";
       const own = await getTenantBySlug(user.tenantSlug);
       if (own) {
         body.tenant = { slug: own.slug, name: own.name, counts: await tenantCounts(own.id) };
@@ -62,7 +63,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.error("[scm:error] health:", err instanceof Error ? (err.stack ?? err.message) : String(err));
     return res.status(500).json({
       ok: false,
-      database: { configured: true, envVar: connectionEnvVar },
+      database: { configured: true },
       error: "internal_error",
     });
   }

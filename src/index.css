@@ -326,8 +326,13 @@ input[type="number"] {
 .st-table th.st-action-cell{background:#f8fafc;z-index:2}
 .st-table tbody tr:hover .st-action-cell{background:#f8fafc}
 .st-salesmen-table td:first-child,.st-campaigns-table td:first-child{white-space:normal;min-width:210px;max-width:330px;overflow-wrap:anywhere}
-.st-salesmen-table td:nth-child(2){white-space:normal;min-width:180px;max-width:290px}
+.st-salesmen-table td:nth-child(2){white-space:normal;min-width:200px;max-width:320px}
 .st-salesmen-table .st-text-link+.st-text-link{margin-top:7px}
+.st-chips{display:flex;flex-wrap:wrap;gap:6px;max-width:320px;align-items:center}
+.st-chip{display:inline-flex;align-items:center;max-width:220px;padding:3px 10px;border-radius:9999px;background:#eff6ff;color:#1d4ed8;font-size:12px;font-weight:600;line-height:1.6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:1px solid #dbeafe;transition:background .15s}
+.st-chip:hover{background:#dbeafe}
+.st-chip-more{background:#f2f4f7;color:#475467;border-color:#e4e7ec;cursor:pointer}
+.st-chip-more:hover{background:#e4e7ec}
 .st-campaigns-table td:first-child small{margin-top:6px;line-height:1.5}
 .st-action-chooser>div{display:flex;flex-direction:column;gap:10px}
 .st-action-chooser button,.st-action-chooser a{width:100%;justify-content:flex-start;text-align:left;white-space:normal;padding:12px 14px}

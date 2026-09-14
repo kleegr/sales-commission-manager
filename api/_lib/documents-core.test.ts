@@ -54,10 +54,10 @@ let failed = 0;
 function ok(name: string, cond: boolean) {
   if (cond) {
     passed++;
-    console.log(`  ✓ ${name}`);
+    console.log(`  \\u2713 ${name}`);
   } else {
     failed++;
-    console.log(`  ✗ ${name}`);
+    console.log(`  \\u2717 ${name}`);
   }
 }
 
@@ -104,7 +104,7 @@ const client = {
 };
 
 // ---------------------------------------------------------------------------
-console.log("\n[Documents · authorization]");
+console.log("\n[Documents \\u00b7 authorization]");
 ok("owner reads all", docReadScope("owner" as any) === "all");
 ok("admin reads all", docReadScope("admin" as any) === "all");
 ok("sales_manager reads team", docReadScope("sales_manager" as any) === "team");
@@ -130,7 +130,7 @@ ok("salesperson is self role", isSelfRole("salesperson" as any));
 ok("owner is not self role", !isSelfRole("owner" as any));
 
 // ---------------------------------------------------------------------------
-console.log("\n[Documents · section types]");
+console.log("\n[Documents \\u00b7 section types]");
 ok("proposal allows cover", isSectionTypeValid("proposal", "cover"));
 ok("proposal rejects parties", !isSectionTypeValid("proposal", "parties"));
 ok("contract allows parties", isSectionTypeValid("contract", "parties"));
@@ -141,7 +141,7 @@ ok("proposal type list non-empty", sectionTypesForKind("proposal").length > 5);
 ok("contract type list non-empty", sectionTypesForKind("contract").length > 5);
 
 // ---------------------------------------------------------------------------
-console.log("\n[Documents · section normalize + ops]");
+console.log("\n[Documents \\u00b7 section normalize + ops]");
 const ns = normalizeSection("proposal", { type: "pricing", title: "  Cost  ", content: "x", id: "a1" });
 ok("normalizeSection keeps valid type", ns.type === "pricing");
 ok("normalizeSection trims title", ns.title === "Cost");
@@ -186,7 +186,7 @@ const dropped = reorderByIds(r3, ["q", "z"]);
 ok("reorderByIds drops unknown ids", dropped.map((s) => s.id).join(",") === "z,x,y");
 
 // ---------------------------------------------------------------------------
-console.log("\n[Documents · status lifecycle]");
+console.log("\n[Documents \\u00b7 status lifecycle]");
 ok("draft is valid", isValidStatus("draft"));
 ok("garbage is invalid", !isValidStatus("nope"));
 ok("signed is terminal", isTerminalStatus("signed"));
@@ -206,7 +206,7 @@ ok("NEXT_STATUS draft is sent", NEXT_STATUS.draft === "sent");
 ok("NEXT_STATUS signed undefined", NEXT_STATUS.signed === undefined);
 
 // ---------------------------------------------------------------------------
-console.log("\n[Documents · merge fields]");
+console.log("\n[Documents \\u00b7 merge fields]");
 const ctx = buildMergeContext({ business: profile, client, salespersonName: "Sam Sales", startDate: null });
 ok("ctx business_name", ctx.business_name === "Acme Studio");
 ok("ctx client_company", ctx.client_company === "Globex LLC");
@@ -252,7 +252,7 @@ ok(
 );
 
 // ---------------------------------------------------------------------------
-console.log("\n[Documents · business profile normalize]");
+console.log("\n[Documents \\u00b7 business profile normalize]");
 const np = normalizeBusinessProfile({
   businessName: "  Beta Co  ",
   sells: "both",
@@ -297,7 +297,7 @@ const rtBpStr = rowToBusinessProfile({ business_name: "C", profile: '{"descripti
 ok("rowToBusinessProfile parses stringified jsonb", rtBpStr.description === "json-string");
 
 // ---------------------------------------------------------------------------
-console.log("\n[Documents · row mappers]");
+console.log("\n[Documents \\u00b7 row mappers]");
 const tpl = rowToTemplate({
   id: "t1",
   kind: "contract",
@@ -342,7 +342,7 @@ ok("rowToDocument sentAt iso", (doc.sentAt ?? "").startsWith("2026-01-03"));
 ok("rowToDocument null viewedAt", doc.viewedAt === null);
 
 // ---------------------------------------------------------------------------
-console.log("\n[Documents · AI config + prompt + parse]");
+console.log("\n[Documents \\u00b7 AI config + prompt + parse]");
 ok("aiConfigured false when empty", !aiConfigured({}));
 ok("aiConfigured true with OPENAI_API_KEY", aiConfigured({ OPENAI_API_KEY: "sk-x" }));
 ok("aiConfigured true with OPENAI_KEY alias", aiConfigured({ OPENAI_KEY: "sk-y" }));
@@ -383,7 +383,7 @@ const parsedEmpty = parseAiSections('{"title":"x","sections":[]}', "proposal");
 ok("parseAiSections empty sections -> fallback", parsedEmpty.sections.length === 1);
 
 // ---------------------------------------------------------------------------
-console.log("\n[Documents · FLOW 4 prospect + approval helpers]");
+console.log("\n[Documents \\u00b7 FLOW 4 prospect + approval helpers]");
 const pr = normalizeProspect({ name: "  Pat  ", email: " PAT@Example.test ", company: "Prospect Co", phone: "555", setupFee: "500", monthlySubscription: -3 });
 ok("normalizeProspect ok", pr.ok);
 ok("normalizeProspect trims name + lowercases email", pr.ok && pr.value.name === "Pat" && pr.value.email === "pat@example.test");
@@ -407,7 +407,7 @@ ok("proposalOverLimit by total", proposalOverLimit(120, 0));
 ok("isEmail", isEmail("a@b.co") && !isEmail("a@b") && !isEmail(42));
 
 // ---------------------------------------------------------------------------
-console.log("\n[Documents · defaults + style]");
+console.log("\n[Documents \\u00b7 defaults + style]");
 ok("default proposal sections present", defaultSections("proposal").length >= 7);
 ok("default contract sections present", defaultSections("contract").length >= 7);
 ok("default proposal starts with cover", defaultSections("proposal")[0].type === "cover");

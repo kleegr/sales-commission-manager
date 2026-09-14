@@ -36,6 +36,8 @@ const ERROR_TEXT: Record<string, string> = {
   entry_mismatch: "Selection is out of date. Refreshing…",
   bad_state: "That payout already moved to another state. Refreshing…",
   nothing_to_submit: "Select at least one commission line first.",
+  refresh_failed:
+    "The payout list could not be refreshed from the server — the data shown may be out of date. Please retry.",
 };
 
 export default function Payouts() {
@@ -63,7 +65,8 @@ export default function Payouts() {
     try {
       setServerPayouts(await fetchPayouts());
     } catch {
-      /* keep prior list */
+      // Keep the prior list, but say it's stale instead of silently lying.
+      setError("refresh_failed");
     }
   }, [isNeon]);
 
@@ -145,13 +148,33 @@ export default function Payouts() {
     }
 
     setBusy(true);
+    // Submit per person; remember exactly which people (and lines) failed so
+    // nothing quietly disappears from the selection.
+    const failedNames: string[] = [];
+    const failedSelection: Record<string, boolean> = {};
+    let firstError: string | null = null;
     for (const [salespersonId, ids] of byPerson) {
       const res = await submitPayout(salespersonId, ids, notes);
-      if (!res.ok) setError(res.error ?? "forbidden");
+      if (!res.ok) {
+        failedNames.push(spName(salespersonId));
+        for (const id of ids) failedSelection[id] = true;
+        if (!firstError) firstError = res.error ?? "forbidden";
+      }
     }
     await Promise.all([reload(), refreshServer()]);
-    setSelected({});
-    setNotes("");
+    if (failedNames.length > 0) {
+      // Keep the failed rows selected (successful ones drop out of `eligible`
+      // after reload anyway) and name who couldn't be submitted.
+      setSelected(failedSelection);
+      setError(
+        `Couldn't submit payouts for ${failedNames.join(", ")}. ` +
+          (ERROR_TEXT[firstError ?? ""] ?? "Something went wrong. Please try again.") +
+          " Their lines are still selected.",
+      );
+    } else {
+      setSelected({});
+      setNotes("");
+    }
     setBusy(false);
   }
 
@@ -201,7 +224,8 @@ export default function Payouts() {
 
       {error && (
         <p className="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-500/10 dark:text-rose-300">
-          {ERROR_TEXT[error] ?? "Something went wrong. Please try again."}
+          {ERROR_TEXT[error] ??
+            (error.includes(" ") ? error : "Something went wrong. Please try again.")}
         </p>
       )}
 

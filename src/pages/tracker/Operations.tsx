@@ -19,7 +19,7 @@ async function download(resource:string,name:string){const r=await fetch(`/api/o
 
 export default function Operations(){
 
- const [status,setStatus]=useState<any>(null),[tab,setTab]=useState('setup'),[rows,setRows]=useState<any[]>([]),[campaigns,setCampaigns]=useState<any[]>([]),[people,setPeople]=useState<any[]>([]),[logins,setLogins]=useState<any[]>([]),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[revision,setRevision]=useState(0),[result,setResult]=useState<any>(null),[month,setMonth]=useState(new Date().toISOString().slice(0,7));
+ const [status,setStatus]=useState<any>(null),[tab,setTab]=useState('setup'),[rows,setRows]=useState<any[]>([]),[campaigns,setCampaigns]=useState<any[]>([]),[people,setPeople]=useState<any[]>([]),[logins,setLogins]=useState<any[]>([]),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[revision,setRevision]=useState(0),[result,setResult]=useState<any>(null),[month,setMonth]=useState(()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;});
 
  const [previewSource,setPreviewSource]=useState<string|null>(null);
  const [catalog,setCatalog]=useState<any>(null),[catalogKind,setCatalogKind]=useState('funnels');

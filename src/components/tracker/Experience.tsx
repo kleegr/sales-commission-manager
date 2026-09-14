@@ -23,6 +23,8 @@ export function Badge({value}:{value:string}){return <span className={`st-badge 
 export function Field({label,children,hint}:{label:string;children:ReactNode;hint?:string}){return <label className="st-field"><span>{label}</span>{children}{hint&&<small>{hint}</small>}</label>;}
 export function Steps({labels,step}:{labels:string[];step:number}){return <ol className="st-steps">{labels.map((label,i)=><li className={step>=i?'is-current':''} key={label}><b>{i+1}</b>{label}</li>)}</ol>;}
 export function ExportIcon(){return <Download size={16}/>;}
+/** ISO-4217 minor digits for a currency (via Intl), for rows whose currency differs from the workspace's. Falls back to `fallback` for unknown codes. */
+export function currencyMinorDigits(currency:string,fallback=2):number{try{return new Intl.NumberFormat('en',{style:'currency',currency}).resolvedOptions().maximumFractionDigits??fallback;}catch{return fallback;}}
 export function downloadText(text:string,name:string,type='text/csv'){const url=URL.createObjectURL(new Blob([text],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 
 export function useLiveRevision(){const [revision,setRevision]=useState(0);useEffect(()=>{const refresh=()=>{if(document.visibilityState==='visible')setRevision(n=>n+1);};const timer=setInterval(refresh,15000);document.addEventListener('visibilitychange',refresh);return()=>{clearInterval(timer);document.removeEventListener('visibilitychange',refresh);};},[]);return [revision,()=>setRevision(n=>n+1)] as const;}

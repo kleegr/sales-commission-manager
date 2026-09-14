@@ -14,10 +14,15 @@ const presets: { label: string; months: number | null }[] = [
   { label: "All", months: null },
 ];
 
+// Local calendar date, NOT toISOString(): the ledger filters (analytics.ts
+// inRange via isoToDate) parse these as local dates, and UTC conversion shifts
+// the boundary by a day for viewers west of UTC.
 function monthsAgoISO(n: number): string {
   const d = new Date();
   d.setMonth(d.getMonth() - n);
-  return d.toISOString().slice(0, 10);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate(),
+  ).padStart(2, "0")}`;
 }
 
 export function DateRangeFilter({
@@ -57,10 +62,13 @@ export function DateRangeFilter({
           <button
             key={p.label}
             onClick={() =>
-              onChange({
-                from: p.months == null ? null : monthsAgoISO(p.months),
-                to: null,
-              })
+              // "All" clears the whole range; "last N months" only sets the
+              // start, preserving an end date the user already typed.
+              onChange(
+                p.months == null
+                  ? { from: null, to: null }
+                  : { from: monthsAgoISO(p.months), to: value.to },
+              )
             }
             className="rounded-md px-2 py-1 text-xs font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100"
           >

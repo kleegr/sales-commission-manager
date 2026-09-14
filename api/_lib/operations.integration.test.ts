@@ -142,6 +142,18 @@ try{
    order.liveMode=true;await assert.rejects(()=>reconcileCheckout(db,'a',e.id,reader),/does not match/);
   }
   assert.notEqual(campaigns[0],campaigns[1]);assert.equal((await listResource(db,{...u,role:'salesperson',salespersonId:sp},'links',{salespersonId:person})).total,0);
+
+  // The salesman list aggregates every campaign: no campaignId, per salesman x mode x currency.
+  const all=await campaignActivity(db,u,{includeSalesmen:'1'});
+  const of=(id:string,mode:string)=>all.salesmen!.filter((s:any)=>s.salesperson_id===id&&s.mode===mode);
+  const personTest=of(person,'test');assert.equal(personTest.length,1);assert.equal(personTest[0].completed,2);assert.equal(personTest[0].revenue_minor,'20000');assert.equal(personTest[0].commission_minor,'3000');assert.equal(personTest[0].currency,'USD');
+  const personLive=of(person,'live');assert.equal(personLive.length,1);assert.equal(personLive[0].completed,2);assert.equal(personLive[0].revenue_minor,'20000');assert.equal(personLive[0].commission_minor,'3000');
+  const spTest=of(sp,'test');assert.equal(spTest.length,1);assert.equal(spTest[0].completed,1);assert.equal(spTest[0].revenue_minor,'10000');assert.equal(spTest[0].commission_minor,'1000');
+  const spLive=of(sp,'live');assert.equal(spLive.length,1);assert.equal(spLive[0].completed,1);assert.equal(spLive[0].revenue_minor,'8000');assert.equal(spLive[0].commission_minor,'800');
+  // Tenant scoping: another tenant sees no salesman aggregates; a participant sees only their own.
+  assert.equal(((await campaignActivity(db,{...u,tenantId:'b'},{includeSalesmen:'1'}).catch(()=>({salesmen:[]}))).salesmen||[]).length,0);
+  const own=(await campaignActivity(db,{...u,role:'salesperson',salespersonId:person},{includeSalesmen:'1'})).salesmen!;
+  assert.ok(own.length>0);assert.ok(own.every((s:any)=>s.salesperson_id===person));
  });
 
  }

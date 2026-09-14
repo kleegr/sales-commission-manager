@@ -65,7 +65,8 @@ const USAGE_TONE = {
 } as const;
 
 export default function Plans() {
-  const { data, dispatch, tenant, reload } = useApp();
+  const { data, dispatch, tenant, reload, backend } = useApp();
+  const isNeon = backend === "neon";
   const navigate = useNavigate();
   const { can, maxPlans } = useSpPermissions();
 
@@ -81,6 +82,7 @@ export default function Plans() {
       : undefined;
 
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [previewPlan, setPreviewPlan] = useState<CommissionPlan | null>(null);
   const [view, setView] = useState<View>("cards");
   const [search, setSearch] = useState("");
@@ -156,24 +158,40 @@ export default function Plans() {
       createdAt: todayISO(),
       rules: plan.rules.map((r) => ({ ...r, id: uid("rule") })),
     };
+    // Local/demo mode (no DB backend): the local store IS the source of truth.
+    if (!isNeon) {
+      dispatch({ type: "PLAN_ADD", plan: copy });
+      navigate(`/plans/${copy.id}/edit`);
+      return;
+    }
+    setActionError(null);
     try {
       const { id } = await duplicatePlan(plan.id);
       await reload();
       navigate(`/plans/${id}/edit`);
     } catch {
-      dispatch({ type: "PLAN_ADD", plan: copy });
-      navigate(`/plans/${copy.id}/edit`);
+      // Connected mode: never fake success with a local write.
+      setActionError("The plan could not be duplicated. Check your connection and try again.");
     }
   }
 
   async function confirmDelete() {
     if (!deleteId) return;
     const id = deleteId;
+    // Local/demo mode (no DB backend): the local store IS the source of truth.
+    if (!isNeon) {
+      dispatch({ type: "PLAN_DELETE", id });
+      setDeleteId(null);
+      return;
+    }
+    setActionError(null);
     try {
       await deletePlan(id);
       await reload();
     } catch {
-      dispatch({ type: "PLAN_DELETE", id });
+      // Connected mode: surface the failure — never delete locally while the
+      // server still has the plan.
+      setActionError("The plan could not be deleted. Check your connection and try again.");
     }
     setDeleteId(null);
   }
@@ -200,6 +218,12 @@ export default function Plans() {
           </Button>
         }
       />
+
+      {actionError && (
+        <p className="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-500/10 dark:text-rose-300">
+          {actionError}
+        </p>
+      )}
 
       {/* Workspace + at-a-glance numbers */}
       {tenant && (

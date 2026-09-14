@@ -145,6 +145,10 @@ try{
 
   // The salesman list aggregates every campaign: no campaignId, per salesman x mode x currency.
   const all=await campaignActivity(db,u,{includeSalesmen:'1'});
+  // The Salesman page joins these aggregates onto its people rows by id: every aggregate's salesperson_id must be a people-row id.
+  const {experienceRead}=await import('./tracker-experience.js');
+  const peopleIds=new Set((await experienceRead(db,u,'salesmen',{limit:'100'})).rows.map((r:any)=>r.id));
+  assert.ok(all.salesmen!.length>0);for(const s of all.salesmen!)assert.ok(peopleIds.has(s.salesperson_id),`activity salesman ${s.salesperson_id} must match a people-row id`);
   const of=(id:string,mode:string)=>all.salesmen!.filter((s:any)=>s.salesperson_id===id&&s.mode===mode);
   const personTest=of(person,'test');assert.equal(personTest.length,1);assert.equal(personTest[0].completed,2);assert.equal(personTest[0].revenue_minor,'20000');assert.equal(personTest[0].commission_minor,'3000');assert.equal(personTest[0].currency,'USD');
   const personLive=of(person,'live');assert.equal(personLive.length,1);assert.equal(personLive[0].completed,2);assert.equal(personLive[0].revenue_minor,'20000');assert.equal(personLive[0].commission_minor,'3000');

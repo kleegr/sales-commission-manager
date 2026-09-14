@@ -333,4 +333,51 @@ CREATE TABLE IF NOT EXISTS kleegr_launch_tokens (
 INSERT INTO schema_migrations (id) VALUES ('0010_webhook_dedupe_launch_tokens')
 ON CONFLICT (id) DO NOTHING;
 
+-- 0016 — FLOW 4: proposal send → public approval → auto client + receipt -----
+-- A document can now be addressed to a PROSPECT (no client row yet; \`prospect\`
+-- JSONB holds name/email/company/phone/fees) and shared through a public
+-- approval link. \`public_token\` stores ONLY the sha256 of the link token (the
+-- raw token is returned once by the send/link ops, like sessions + launch
+-- tokens). Acceptance stamps the accepted_* columns, and the ids of the rows
+-- the acceptance created (client, opportunity, pending receipt event key) are
+-- recorded so the UI can link to them. All columns are nullable/additive.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS public_token           TEXT UNIQUE;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS token_expires_at       TIMESTAMPTZ;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS prospect               JSONB;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS sent_to                TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS accepted_at            TIMESTAMPTZ;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS accepted_by_name       TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS accepted_email         TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS accepted_ip            TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS signature_data         TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS created_client_id      TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS created_opportunity_id TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS receipt_event_key      TEXT;
+-- Sliding-window rate limit for the unauthenticated /api/proposal endpoint
+-- (same fail-open pattern as login_attempts in rate-limit.ts; rows older than
+-- the window are pruned opportunistically on insert).
+CREATE TABLE IF NOT EXISTS proposal_access_log (
+  id          BIGSERIAL PRIMARY KEY,
+  ip          TEXT NOT NULL DEFAULT '',
+  ok          BOOLEAN NOT NULL DEFAULT false,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_proposal_access_ip_time ON proposal_access_log(ip, created_at DESC);
+INSERT INTO schema_migrations (id) VALUES ('0016_proposal_approval_flow')
+ON CONFLICT (id) DO NOTHING;
+
+-- 0017 — pipeline → commission policy ---------------------------------------
+-- Mirrors the tracker-schema.ts column so a deployed workspace picks it up on
+-- cold start without a manual scripts/migrate-tracker.ts run. Guarded: the
+-- tracker tables only exist once the tracker has been installed.
+DO $pipeline_policy$
+BEGIN
+  IF to_regclass('public.tracker_workspaces') IS NOT NULL THEN
+    EXECUTE $q$ALTER TABLE tracker_workspaces ADD COLUMN IF NOT EXISTS pipeline_policy jsonb NOT NULL DEFAULT '{"pipelineId":null,"wonStageIds":[],"treatStatusWonAsWon":true,"auto":false,"receipt":"pending"}'$q$;
+  END IF;
+END
+$pipeline_policy$;
+INSERT INTO schema_migrations (id) VALUES ('0017_pipeline_policy')
+ON CONFLICT (id) DO NOTHING;
+
 `;

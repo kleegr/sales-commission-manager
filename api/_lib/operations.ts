@@ -48,7 +48,11 @@ export async function reviewEvent(db:SQL,u:SessionUser,b:any){
  if(!e)throw new TrackerError('not_found','Event not found.',404);if(e.status==='approved')return{duplicate:true};
  if(e.status!=='pending')throw new TrackerError('not_pending','Only pending live events can be approved. Test events cannot create financial records.');
  const reason=required(b.reason,'Review evidence',1000);if(b.reject){await db.query("UPDATE tracker_inbox SET status='rejected',reason=$3,reviewed_at=now() WHERE tenant_id=$1 AND id=$2",[u.tenantId,e.id,reason]);await audit(db,u,'source_event',e.id,'rejected',{reason});return{ok:true};}
- const p={...e.payload};if(e.provider==='stripe'&&Number.isInteger(p.occurredAt)){const w=await workspace(db,u);const parts=new Intl.DateTimeFormat('en-CA',{timeZone:w.timezone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(p.occurredAt*1000));const part=(key:string)=>parts.find(v=>v.type===key)?.value;p.date=`${part('year')}-${part('month')}-${part('day')}`;}const lead=await client(db,u,required(b.clientId,'Matched local client'));
+ const p={...e.payload};if(e.provider==='stripe'&&Number.isInteger(p.occurredAt)){const w=await workspace(db,u);const parts=new Intl.DateTimeFormat('en-CA',{timeZone:w.timezone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(p.occurredAt*1000));const part=(key:string)=>parts.find(v=>v.type===key)?.value;p.date=`${part('year')}-${part('month')}-${part('day')}`;}
+ // Stripe pre-match: when the reviewer did not pick a client, the payload email selects one only if it identifies exactly one local client. Ambiguity stays with the reviewer; nothing is auto-approved.
+ let clientId=typeof b.clientId==='string'?b.clientId:'';
+ if(!clientId&&e.provider==='stripe'&&typeof p.email==='string'&&p.email){const matches=(await db.query('SELECT id FROM clients WHERE tenant_id=$1 AND lower(trim(email))=$2 AND archived_at IS NULL LIMIT 2',[u.tenantId,p.email.trim().toLowerCase()])).rows;if(matches.length===1)clientId=matches[0].id;}
+ const lead=await client(db,u,required(clientId,'Matched local client'));
  if(p.email&&lead.email?.toLowerCase()!==p.email)throw new TrackerError('email_mismatch','Selected client email differs from this event; resolve the match before approval.');
  if(e.source_id&&e.kind!=='lead'){
   const evidence=(await db.query('SELECT k.* FROM referral_clicks k JOIN tracker_sources s ON s.tenant_id=k.tenant_id AND s.campaign_id=k.campaign_id WHERE k.tenant_id=$1 AND k.id=$2 AND s.id=$3',[u.tenantId,p.clickId,e.source_id])).rows[0];

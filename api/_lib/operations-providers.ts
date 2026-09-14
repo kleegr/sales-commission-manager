@@ -59,3 +59,13 @@ export async function sendQueuedEmail(db:Database,u:SessionUser,b:any,fetchImpl:
   await db.query("UPDATE tracker_email_outbox SET status='sent',provider_id=$2,sent_at=now() WHERE id=$1",[row.id,result.id]);return{sent:true};
  }catch{await db.query("UPDATE tracker_email_outbox SET status='unknown',last_error='Check the provider delivery log before retrying.' WHERE id=$1",[row.id]);throw new TrackerError('delivery_unknown','Delivery was not confirmed. Check the email provider before retrying.',502);}
 }
+
+/** FLOW 4 (additive): queue a transactional email in tracker_email_outbox. Returns null when connected operations are not installed (the caller then falls back to a copyable link). Idempotent per event key. */
+export async function queueEmail(db:SQL,tenantId:string,b:{recipient:string;subject:string;body:string;eventKey:string}){
+ if(!(await db.query("SELECT 1 FROM schema_migrations WHERE id='0014_connected_operations'")).rows.length)return null;const key=id('email');
+ const r=await db.query('INSERT INTO tracker_email_outbox(id,tenant_id,recipient,subject,body,event_key) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(tenant_id,event_key) DO UPDATE SET recipient=EXCLUDED.recipient RETURNING id',[key,tenantId,required(b.recipient,'Recipient',254),required(b.subject,'Subject',300),required(b.body,'Body',20000),required(b.eventKey,'Event key',200)]);return{id:r.rows[0].id as string};
+}
+/** FLOW 4 (additive): deliver a queued row the caller has ALREADY authorized at the document level (document-scoped send, not a workspace-admin action). Same claim-then-send + unknown-delivery semantics as sendQueuedEmail. */
+export function deliverQueuedEmail(db:Database,tenantId:string,emailId:string,fetchImpl:typeof fetch=fetch){
+ const system:SessionUser={id:'system:proposal',tenantId,tenantSlug:'',tenantName:'',name:'Proposal sender',email:'',role:'owner',salespersonId:null};return sendQueuedEmail(db,system,{id:emailId},fetchImpl);
+}

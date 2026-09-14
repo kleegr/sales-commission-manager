@@ -22,14 +22,14 @@ let failed = 0;
 function ok(name: string, cond: boolean) {
   if (cond) {
     passed++;
-    console.log(`  ✓ ${name}`);
+    console.log(`  \u2713 ${name}`);
   } else {
     failed++;
-    console.log(`  ✗ ${name}`);
+    console.log(`  \u2717 ${name}`);
   }
 }
 
-console.log("\n[Commission · authorization]");
+console.log("\n[Commission \u00b7 authorization]");
 ok("owner can manage plans", canManagePlans("owner" as any));
 ok("admin can manage plans", canManagePlans("admin" as any));
 ok("manager CANNOT manage plans", !canManagePlans("sales_manager" as any));
@@ -48,7 +48,7 @@ ok("owner read scope = all", commissionReadScope("owner" as any) === "all");
 ok("manager read scope = team", commissionReadScope("sales_manager" as any) === "team");
 ok("affiliate read scope = self", commissionReadScope("affiliate" as any) === "self");
 
-console.log("\n[Commission · rule validation]");
+console.log("\n[Commission \u00b7 rule validation]");
 const rBad = normalizeRule({ type: "nope" });
 ok("invalid rule type rejected", !rBad.ok);
 const rSetup = normalizeRule({ type: "setup_fee", mode: "percentage", value: "15" });
@@ -85,7 +85,7 @@ ok("forever residual overlapping a later range rejected", !rulesOverlapForever.o
 const rulesTiered = normalizeRules([resid(1, 6), resid(7, 12), resid(13, null, true)]);
 ok("non-overlapping tiered residuals accepted", rulesTiered.ok && rulesTiered.value.length === 3);
 
-console.log("\n[Commission · plan validation]");
+console.log("\n[Commission \u00b7 plan validation]");
 const pEmpty = normalizePlanInput({});
 ok("empty name -> Untitled plan", pEmpty.ok && pEmpty.value.name === "Untitled plan");
 ok("no rules key -> rules omitted", pEmpty.ok && pEmpty.value.rules === undefined);
@@ -108,7 +108,7 @@ ok("reorder needs ids", !ordBad.ok);
 const ordOk = normalizeOrderedIds({ orderedIds: ["a", "b", "c"] });
 ok("reorder ids accepted", ordOk.ok && ordOk.value.length === 3);
 
-console.log("\n[Commission · payment validation]");
+console.log("\n[Commission \u00b7 payment validation]");
 const payNoClient = normalizePaymentInput({ amount: 100 });
 ok("payment needs a client", !payNoClient.ok && payNoClient.error === "client_required");
 const paySetup = normalizePaymentInput({ clientId: "cl1", type: "setup_fee", amount: "1000" });
@@ -124,7 +124,7 @@ ok("negative amount floored to 0", payNegAmt.ok && payNegAmt.value.amount === 0)
 const payDefaultsDate = normalizePaymentInput({ clientId: "cl1", type: "adjustment", amount: 0 });
 ok("missing date defaults to today (yyyy-mm-dd)", payDefaultsDate.ok && /^\d{4}-\d{2}-\d{2}$/.test(payDefaultsDate.value.date));
 
-console.log("\n[Commission · payment patch]");
+console.log("\n[Commission \u00b7 payment patch]");
 const upEmpty = buildPaymentUpdate({});
 ok("empty payment patch rejected", !upEmpty.ok);
 const upNotes = buildPaymentUpdate({ notes: "late" });
@@ -137,7 +137,7 @@ ok("clientId patch maps to client_id + is commission-affecting", upClient.ok && 
 const upBlankClient = buildPaymentUpdate({ clientId: "" });
 ok("blank clientId patch rejected", !upBlankClient.ok);
 
-console.log("\n[Commission · ledger filters + id list]");
+console.log("\n[Commission \u00b7 ledger filters + id list]");
 const f = parseLedgerFilters({ salespersonId: "sp1", status: "held", from: "2025-01-01", to: "2025-12-31" });
 ok("filters parsed", f.salespersonId === "sp1" && f.status === "held" && f.from === "2025-01-01" && f.to === "2025-12-31");
 const fBadStatus = parseLedgerFilters({ status: "banana" });

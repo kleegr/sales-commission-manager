@@ -21,7 +21,9 @@ import {TrackerError,type SQL} from './tracker-common.js';
 import {resolveProductStructure} from './products.js';
 import {resolveDirectoryTokens} from './ghl-directory.js';
 import {readGatewayEnabled} from './kleegr-read.js';
-import {recordPayment} from './tracker-finance.js';
+import {recordPayment,recordProductCommission} from './tracker-finance.js';
+import {attributeProductSale} from './product-links.js';
+import {decimalToMinor} from '../../src/lib/exact-commission.js';
 import {rowToDocument} from './documents-core.js';
 
 const GHL='https://services.leadconnectorhq.com';
@@ -202,4 +204,121 @@ export async function applyInvoicePaidEvent(db:SQL,event:InvoicePaidEvent):Promi
   await db.query("UPDATE payments SET receipt_status='cancelled',updated_at=now() WHERE tenant_id=$1 AND event_key=$2 AND receipt_status='pending'",[tenantId,`proposal:${row.id}`]);
 
   return{applied:true,action:'invoice_paid',tenantId,documentId:row.id,lineCount:lines.length,earnings:posted};
+}
+
+// ===========================================================================
+// PRODUCT-AFFILIATE SALE  ->  commission-on-purchase (per-product program).
+//
+// A SEPARATE attribution path from the proposal-invoice one above: a GHL PRODUCT
+// order/purchase (not one of our documents) paid by a buyer who came through a
+// rep's tracking link. We parse the paid order into per-product lines, map each to
+// OUR catalog by ghl_product_id, attribute it to a rep via the ?ref link_id or the
+// most-recent product-link click for that (product,contact), and post the product's
+// own commission through recordProductCommission (idempotent on the order line).
+//
+// GHL's live order/purchase webhook FIELD NAMES vary by store/version, so the parse
+// is deliberately tolerant of the common shapes (order|purchase|payment events with
+// a paid/completed status, items|lineItems|products arrays, amount|total|price per
+// line, ref in ref|customFields|attributionSource url). The exact production field
+// names must be confirmed against a LIVE order; the admin `creditProductSale`
+// mutation is the manual fallback when the auto parse misses a field.
+// ===========================================================================
+export interface ProductSaleLine{productGhlId:string;amountMinor:string;currency:string;orderId:string;contactId:string|null;ref:string|null;locationId:string|null}
+
+const REF_RE=/[?&]ref=([A-Za-z0-9_-]{16,64})/;
+function refFromUrl(v:unknown):string|null{const s=str(v);if(!s)return null;const m=s.match(REF_RE);return m?m[1]:null;}
+function refFromCustomFields(cf:any):string|null{
+  if(!cf)return null;
+  if(Array.isArray(cf)){for(const f of cf){const key=str(f?.key||f?.id||f?.name||f?.fieldKey).toLowerCase();if(key.includes('ref')){const v=str(f?.value??f?.fieldValue??f?.field_value);if(v)return refFromUrl(v)||v;}}return null;}
+  if(typeof cf==='object'){for(const [k,v] of Object.entries(cf)){if(String(k).toLowerCase().includes('ref')){const s=str(v);if(s)return refFromUrl(s)||s;}}}
+  return null;
+}
+function extractRef(...objs:any[]):string|null{
+  for(const o of objs){if(!o||typeof o!=='object')continue;
+    for(const k of ['ref','affiliateRef','affiliate_ref','referral','referralRef']){const v=str((o as any)[k]);if(v)return refFromUrl(v)||v;}
+    const cf=refFromCustomFields((o as any).customFields)||refFromCustomFields((o as any).custom_fields);if(cf)return cf;
+    const src=(o as any).attributionSource||(o as any).lastAttributionSource||(o as any).contact?.attributionSource;
+    const fromUrl=refFromUrl(src?.url||src?.landingUrl||src?.referrer||(o as any).url||(o as any).pageUrl);if(fromUrl)return fromUrl;
+  }
+  return null;
+}
+/** Tolerant major-unit-decimal → minor (2 dp). Returns '' when unparseable. GHL order
+ * amounts are decimal major units; a bare integer is treated as whole units. */
+function amtToMinor(v:unknown):string{const s=String(v??'').trim();if(!s||!/^-?\d+(\.\d+)?$/.test(s))return '';try{return decimalToMinor(s,2);}catch{return '';}}
+function lineAmountMinor(o:any,qty:number):string{
+  for(const k of ['amount','total','totalAmount','subtotal','lineTotal','amountPaid']){const m=amtToMinor(o?.[k]);if(m&&BigInt(m)>0n)return m;}
+  for(const k of ['price','unitPrice','unit_price','amountDue']){const m=amtToMinor(o?.[k]);if(m){const total=(BigInt(m)*BigInt(qty>0?qty:1)).toString();if(BigInt(total)>0n)return total;}}
+  return '0';
+}
+
+/**
+ * Parse a paid GHL product order/purchase into per-product sale lines. Returns [] for
+ * anything that is not a paid product order. Each line carries the order id, buyer
+ * contact id, the ?ref link id (when present) and the location id, so a later step can
+ * resolve OUR tenant and rep. Pure/deterministic — no DB, no network.
+ */
+export function parseProductSaleEvent(rawType:unknown,payload:any):ProductSaleLine[]{
+  const t=String(rawType??'').toLowerCase().replace(/[^a-z]/g,'');
+  const p=payload&&typeof payload==='object'?payload:{};
+  const data=p.data&&typeof p.data==='object'?p.data:p;
+  const order=data.order&&typeof data.order==='object'?data.order:data;
+  const isOrderLike=t.includes('order')||t.includes('purchase')||t.includes('payment')||t.includes('transaction');
+  if(!isOrderLike)return [];
+  const status=str(order.status||order.paymentStatus||data.status||p.status).toLowerCase();
+  if(!['paid','completed','complete','success','succeeded','fulfilled','won','active'].includes(status))return [];
+  const orderId=str(order._id||order.id||order.orderId||order.order_id||data.orderId||p.orderId);
+  if(!orderId)return [];
+  const contactId=str(order.contactId||order.contact_id||order.contact?._id||order.contact?.id||data.contactId||p.contactId)||null;
+  const currencyTop=str(order.currency||order.currencyCode||data.currency||p.currency).toUpperCase();
+  const locationId=str(order.altId||order.locationId||order.location_id||data.altId||data.locationId||p.locationId||p.location_id)||null;
+  const ref=extractRef(order,data,p,order.contact);
+  const items:any[]=Array.isArray(order.items)?order.items:Array.isArray(order.lineItems)?order.lineItems:Array.isArray(order.products)?order.products:Array.isArray(order.orderItems)?order.orderItems:Array.isArray(data.items)?data.items:[];
+  const out:ProductSaleLine[]=[];
+  for(const it of items){
+    const o=it&&typeof it==='object'?it:{};
+    const productGhlId=str(o.product?._id||o.product?.id||(typeof o.product==='string'?o.product:'')||o.productId||o.product_id||o._id||o.id);
+    if(!productGhlId)continue;
+    const qty=Number(o.qty??o.quantity??1)||1;
+    const currency=str(o.currency).toUpperCase()||currencyTop||'USD';
+    const amountMinor=lineAmountMinor(o,qty);
+    out.push({productGhlId,amountMinor,currency,orderId,contactId,ref,locationId});
+  }
+  // Fallback: a single-product order with no line-item array but a product + total.
+  if(!out.length){
+    const productGhlId=str(order.productId||order.product_id||order.product?._id||order.product?.id);
+    const amountMinor=lineAmountMinor(order,1);
+    if(productGhlId&&BigInt(amountMinor)>0n)out.push({productGhlId,amountMinor,currency:currencyTop||'USD',orderId,contactId,ref,locationId});
+  }
+  return out;
+}
+
+export interface ProductSaleApplyResult{applied:boolean;action:string;tenantId:string|null;orderId:string|null;credited:number;skipped:number}
+
+/**
+ * Apply parsed product-sale lines: resolve OUR tenant by the order's GHL location id,
+ * then for each line attribute it to a rep (attributeProductSale) and post the product's
+ * commission (recordProductCommission) with event key `productsale:<orderId>:<productGhlId>`.
+ * Idempotent (recordProductCommission dedupes on event_key) and tenant-scoped. Lines with
+ * no attribution or no commission are skipped, never posted.
+ */
+export async function applyProductSaleEvent(db:SQL,lines:ProductSaleLine[],opts:{at?:string}={}):Promise<ProductSaleApplyResult>{
+  if(!lines.length)return{applied:false,action:'no_product_lines',tenantId:null,orderId:null,credited:0,skipped:0};
+  const orderId=lines.find(l=>l.orderId)?.orderId||null;
+  const locationId=lines.find(l=>l.locationId)?.locationId||null;
+  const tenant=locationId?(await db.query("SELECT id FROM tenants WHERE ghl_location_id=$1 AND status='active' LIMIT 1",[locationId])).rows[0]:null;
+  if(!tenant)return{applied:false,action:'no_tenant',tenantId:null,orderId,credited:0,skipped:lines.length};
+  const tenantId:string=tenant.id,at=opts.at||new Date().toISOString().slice(0,10);
+  const system:SessionUser={id:`ghl-order:${orderId||'unknown'}`,tenantId,tenantSlug:'',tenantName:'',name:'GHL Order',email:'',role:'owner',salespersonId:null};
+  let credited=0,skipped=0;
+  for(const line of lines){
+    if(!line.productGhlId||BigInt(line.amountMinor||'0')<=0n){skipped++;continue;}
+    // Attribution window upper-bound is NOW (clicks precede the sale we're posting); the
+    // ledger posting date `at` is separate (it may be a date-only value at midnight).
+    const attr=await attributeProductSale(db,tenantId,{productGhlId:line.productGhlId,ref:line.ref||undefined,contactId:line.contactId||undefined});
+    if(!attr){skipped++;continue;}
+    const clientId=line.contactId?(await db.query('SELECT id FROM clients WHERE tenant_id=$1 AND ghl_contact_id=$2 LIMIT 1',[tenantId,line.contactId])).rows[0]?.id||null:null;
+    const res:any=await recordProductCommission(db,system,{tenantId,productId:attr.productId,salespersonId:attr.salespersonId,orderAmountMinor:line.amountMinor,currency:line.currency,eventKey:`productsale:${orderId}:${line.productGhlId}`,at,contactId:line.contactId||undefined,clientId:clientId||undefined,source:'ghl',notes:`GHL order ${orderId} paid — product ${line.productGhlId} credited to rep ${attr.salespersonId}.`});
+    if(res&&(res.skipped||res.duplicate))skipped++;else credited++;
+  }
+  return{applied:true,action:'product_sale',tenantId,orderId,credited,skipped};
 }

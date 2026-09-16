@@ -17,6 +17,8 @@ import {admin,audit,id,lock,required,TrackerError,type SQL} from './tracker-comm
 import {minor,decimalToMinor} from '../../src/lib/exact-commission.js';
 import {resolveDirectoryTokens} from './ghl-directory.js';
 import {gatewayPage,readGatewayEnabled} from './kleegr-read.js';
+import {safeDestination} from './tracker-attribution.js';
+import {reconcileProductLinks} from './product-links.js';
 
 export interface ProductLineItem {productId:string;name:string;qty:number;unitPriceMinor:string;billingKind:string}
 const BILLING_KINDS=['one_time','recurring','setup'];
@@ -24,6 +26,19 @@ const str=(v:unknown)=>typeof v==='string'?v.trim():'';
 const cur=(v:unknown,fallback:string):string=>{const s=String(v??'').trim().toUpperCase();if(!s)return fallback;if(!/^[A-Z]{3}$/.test(s))throw new TrackerError('invalid_currency','Currency must be a 3-letter ISO code.');return s;};
 
 async function workspaceCurrency(db:SQL,tenantId:string):Promise<string>{const w=(await db.query('SELECT currency FROM tracker_workspaces WHERE tenant_id=$1',[tenantId])).rows[0];return w?.currency||'USD';}
+// Per-product commission config + tracking destination. commission-on-purchase is
+// a later wave; here we validate + persist the payout terms and the buy page a
+// tracking link sends buyers to. destinationUrl reuses safeDestination (HTTPS,
+// no credentials, no private hosts) and may be empty.
+const intInRange=(v:unknown,name:string,min:number,max:number):number=>{const n=Number(v??0);if(!Number.isInteger(n)||n<min||n>max)throw new TrackerError('invalid_commission',`${name} must be a whole number between ${min} and ${max}.`);return n;};
+function commissionConfig(b:any){
+  const commissionType=['none','percent','flat'].includes(String(b.commissionType))?String(b.commissionType):'none';
+  const commissionBps=intInRange(b.commissionBps,'Commission percentage (basis points)',0,100000);
+  const commissionFlatMinor=minor(String(b.commissionFlatMinor??'0'));if(commissionFlatMinor<0n)throw new TrackerError('invalid_commission','Flat commission must be zero or a positive amount in minor units.');
+  const holdDays=intInRange(b.holdDays,'Commission hold days',0,3650);
+  const destinationUrl=str(b.destinationUrl)?safeDestination(b.destinationUrl):'';
+  return{commissionType,commissionBps,commissionFlatMinor:commissionFlatMinor.toString(),holdDays,destinationUrl};
+}
 
 // ---------------------------------------------------------------------------
 // Reads (tenant-scoped)
@@ -63,14 +78,15 @@ export async function saveProduct(db:SQL,u:SessionUser,b:any){
   const currency=cur(b.currency,await workspaceCurrency(db,u.tenantId));
   const priceMinor=minor(String(b.priceMinor??'0'));if(priceMinor<0n)throw new TrackerError('invalid_price','Price must be zero or a positive amount in minor units.');
   const status=['active','inactive','archived'].includes(String(b.status))?String(b.status):'active';
+  const cc=commissionConfig(b);
   if(b.id){
     const existing=(await db.query('SELECT id FROM products WHERE tenant_id=$1 AND id=$2',[u.tenantId,b.id])).rows[0];if(!existing)throw new TrackerError('not_found','Product not found.',404);
-    await db.query(`UPDATE products SET name=$3,sku=$4,category=$5,description=$6,price_minor=$7,currency=$8,billing_kind=$9,recurring_interval=$10,status=$11,updated_at=now() WHERE tenant_id=$1 AND id=$2`,[u.tenantId,b.id,name,sku,category,description,priceMinor.toString(),currency,billingKind,recurringInterval,status]);
-    await audit(db,u,'product',b.id,'updated',{name,priceMinor:priceMinor.toString(),currency});return{id:b.id};
+    await db.query(`UPDATE products SET name=$3,sku=$4,category=$5,description=$6,price_minor=$7,currency=$8,billing_kind=$9,recurring_interval=$10,status=$11,commission_type=$12,commission_bps=$13,commission_flat_minor=$14,commission_hold_days=$15,destination_url=$16,updated_at=now() WHERE tenant_id=$1 AND id=$2`,[u.tenantId,b.id,name,sku,category,description,priceMinor.toString(),currency,billingKind,recurringInterval,status,cc.commissionType,cc.commissionBps,cc.commissionFlatMinor,cc.holdDays,cc.destinationUrl]);
+    await audit(db,u,'product',b.id,'updated',{name,priceMinor:priceMinor.toString(),currency,commissionType:cc.commissionType});return{id:b.id,...cc};
   }
   const productId=id('prod');
-  await db.query(`INSERT INTO products(tenant_id,id,name,sku,category,description,price_minor,currency,billing_kind,recurring_interval,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,[u.tenantId,productId,name,sku,category,description,priceMinor.toString(),currency,billingKind,recurringInterval,status]);
-  await audit(db,u,'product',productId,'created',{name,priceMinor:priceMinor.toString(),currency});return{id:productId};
+  await db.query(`INSERT INTO products(tenant_id,id,name,sku,category,description,price_minor,currency,billing_kind,recurring_interval,status,commission_type,commission_bps,commission_flat_minor,commission_hold_days,destination_url) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,[u.tenantId,productId,name,sku,category,description,priceMinor.toString(),currency,billingKind,recurringInterval,status,cc.commissionType,cc.commissionBps,cc.commissionFlatMinor,cc.holdDays,cc.destinationUrl]);
+  await audit(db,u,'product',productId,'created',{name,priceMinor:priceMinor.toString(),currency,commissionType:cc.commissionType});return{id:productId,...cc};
 }
 export async function deleteProduct(db:SQL,u:SessionUser,b:any){
   admin(u);await lock(db,u.tenantId);const productId=required(b.id,'Product');
@@ -85,6 +101,9 @@ export async function assignProducts(db:SQL,u:SessionUser,b:any){
   if(productIds.length){const found=(await db.query('SELECT id FROM products WHERE tenant_id=$1 AND id=ANY($2::text[])',[u.tenantId,productIds])).rows.map(r=>r.id);const missing=productIds.filter(p=>!found.includes(p));if(missing.length)throw new TrackerError('unknown_product','One or more products do not exist in this workspace.');}
   await db.query('DELETE FROM product_assignments WHERE tenant_id=$1 AND salesperson_id=$2',[u.tenantId,salespersonId]);
   for(const productId of productIds)await db.query('INSERT INTO product_assignments(tenant_id,product_id,salesperson_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',[u.tenantId,productId,salespersonId]);
+  // Mint/reactivate/deactivate the rep's per-product tracking links to match the
+  // new assignment set (stable link_id; removed products keep their inactive row).
+  await reconcileProductLinks(db,u,salespersonId,productIds);
   await audit(db,u,'product_assignment',salespersonId,'replaced',{count:productIds.length});return{salespersonId,productIds};
 }
 export async function setCampaignStructures(db:SQL,u:SessionUser,b:any){

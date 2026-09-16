@@ -61,7 +61,7 @@ async function render(db:SQL,row:any){
   const sp=d.salespersonId?(await db.query('SELECT name,email FROM salespeople WHERE tenant_id=$1 AND id=$2',[tenantId,d.salespersonId])).rows[0]:null;
   const merge=client?{companyName:client.company_name,contactName:client.contact_name,email:client.email,phone:client.phone,setupFee:Number(client.setup_fee_amount||0),monthlySubscription:Number(client.monthly_subscription_amount||0),signupDate:client.signup_date||''}:d.prospect?prospectAsClient(d.prospect):null;
   const currency=(await trackerInstalled(db))?(await db.query('SELECT currency FROM tracker_workspaces WHERE tenant_id=$1',[tenantId])).rows[0]?.currency||'USD':'USD';
-  const setupFee=merge?.setupFee||0,monthly=merge?.monthlySubscription||0,total=merge?setupFee+monthly:d.amount;
+  const setupFee=merge?.setupFee||0,monthly=merge?.monthlySubscription||0,hasLines=Array.isArray(d.lineItems)&&d.lineItems.length>0,total=hasLines?Number(d.amount||0):(merge?setupFee+monthly:d.amount);
   return{kind:d.kind,title:d.title,style:d.style,status:d.status,sections:applySectionsMerge(d.sections,buildMergeContext({business,client:merge,salespersonName:sp?.name||''})),
     branding:{businessName:business?.businessName||tenant?.name||'',logoUrl:business?.logoUrl||'',website:business?.website||'',companyAddress:business?.companyAddress||'',contactEmail:business?.contactEmail||'',contactPhone:business?.contactPhone||'',brandTone:business?.brandTone||'professional'},
     recipient:merge?{name:merge.contactName,company:merge.companyName,email:merge.email}:null,salesperson:sp?{name:sp.name,email:sp.email}:null,
@@ -97,11 +97,17 @@ export async function acceptProposal(db:SQL,token:string,b:any,ip:string){
   if(w){
     await db.query('SAVEPOINT flow4_finance');
     try{
-      const digits=Number(w.payout_terms?.minorDigits??2),setupFee=Number(client.setup_fee_amount||0),total=setupFee+Number(client.monthly_subscription_amount||0),dueNow=receiptAmount(setupFee,total);
-      opportunityId=id('opp');await db.query(`INSERT INTO opportunities(id,tenant_id,client_id,name,owner_id,value_minor,currency,status,source,won_at) VALUES($1,$2,$3,$4,$5,$6,$7,'won','manual',now())`,[opportunityId,tenantId,clientId,d.title,spId,toMinor(total,digits),w.currency]);
-      if(dueNow>0){
+      const digits=Number(w.payout_terms?.minorDigits??2),setupFee=Number(client.setup_fee_amount||0),feeTotal=setupFee+Number(client.monthly_subscription_amount||0);
+      // Line-item proposals value the deal + due amount from the line items (whole
+      // invoice is due); fee-model proposals keep the setup-fee-due-now behaviour.
+      const lineMinor=(d.lineItems||[]).reduce((s:bigint,li:any)=>s+BigInt(Math.round(Number(li.qty||0)*Number(li.unitPriceMinor||0))),0n);
+      const hasLines=(d.lineItems||[]).length>0&&lineMinor>0n;
+      const valueMinor=hasLines?lineMinor.toString():toMinor(feeTotal,digits);
+      const dueMinor=hasLines?lineMinor.toString():toMinor(receiptAmount(setupFee,feeTotal),digits);
+      opportunityId=id('opp');await db.query(`INSERT INTO opportunities(id,tenant_id,client_id,name,owner_id,value_minor,currency,status,source,won_at) VALUES($1,$2,$3,$4,$5,$6,$7,'won','manual',now())`,[opportunityId,tenantId,clientId,d.title,spId,valueMinor,w.currency]);
+      if(BigInt(dueMinor)>0n){
         const key=`proposal:${d.id}`;
-        await recordPayment(db,system,{eventKey:key,clientId,opportunityId,date:calendarDate(w.timezone||'UTC',now),amountMinor:toMinor(dueNow,digits),currency:w.currency,status:'pending',source:'manual',productId:'',notes:`"${d.title}" approved by ${name} (${email}). Confirm when the cash arrives.`});
+        await recordPayment(db,system,{eventKey:key,clientId,opportunityId,date:calendarDate(w.timezone||'UTC',now),amountMinor:dueMinor,currency:w.currency,status:'pending',source:'manual',productId:'',notes:`"${d.title}" approved by ${name} (${email}). Confirm when the cash arrives.`});
         receiptEventKey=key;receipt='recorded';
       }
       await db.query('RELEASE SAVEPOINT flow4_finance');

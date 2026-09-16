@@ -1,6 +1,6 @@
 import type {SessionUser} from './auth.js';
 import {admin,audit,client,dateOnly,id,lock,participant,required,TrackerError,workspace,type SQL} from './tracker-common.js';
-import {calculateExact,minor,refundDelta,type EarningsInput,type ExactPlan} from '../../src/lib/exact-commission.js';
+import {calculateExact,minor,ratio,refundDelta,type EarningsInput,type ExactPlan} from '../../src/lib/exact-commission.js';
 const receiptSignature=(b:any)=>JSON.stringify([b.clientId,b.date,b.amountMinor,b.currency,b.status,b.productId||'',b.taxMinor||'0',b.feeMinor||'0',b.discountMinor||'0',b.opportunityId||null,b.source==='ghl'?'ghl':'manual',b.assignmentParticipantId||null,b.confirmUnattributed===true,b.verifiedReferral||null]);
 
 async function ancestry(db:SQL,u:SessionUser,referrer:string,input:EarningsInput){
@@ -62,6 +62,42 @@ export async function recordPayment(db:SQL,u:SessionUser,b:any,verifiedReferral?
   if(b.status==='confirmed')await db.query('UPDATE clients SET customer_since=COALESCE(customer_since,$3::timestamptz) WHERE tenant_id=$1 AND id=$2',[u.tenantId,lead.id,date]);
   await audit(db,u,'payment',paymentId,confirming?'receipt_confirmed':'receipt_recorded',{eventKey,status:b.status,amountMinor:amount.toString(),currency:b.currency,earnings:versions.flatMap(v=>v.earnings).length});return{id:paymentId};
 }
+// ---------------------------------------------------------------------------
+// COMMISSION-ON-PURCHASE (per-product affiliate program).
+// Post ONE earned commission for a product SALE attributed to a rep via their
+// tracking link (see attributeProductSale). Unlike recordPayment/recordAward this
+// path does NOT run a plan version — the payout is the product's own commission
+// config (percent of the order line, or a flat amount), with the product's hold.
+// It writes the SAME earned-ledger shape those paths use (status 'pending',
+// is_projection=false, amount_minor set, due_date = sale date + hold days) so the
+// row shows in balances and is selectable in Payout exactly like any other earned
+// commission. Idempotent + tenant-scoped on event_key (uq_ledger_event).
+// ---------------------------------------------------------------------------
+function addDays(iso:string,days:number):string{const d=new Date(`${iso}T00:00:00Z`);d.setUTCDate(d.getUTCDate()+days);return d.toISOString().slice(0,10);}
+export async function recordProductCommission(db:SQL,u:SessionUser,b:{tenantId:string;productId:string;salespersonId:string;orderAmountMinor:string;currency?:string;eventKey:string;at:string;contactId?:string;clientId?:string;source?:string;notes?:string}){
+  const tenantId=required(b.tenantId,'Tenant',200);await lock(db,tenantId);
+  const eventKey=required(b.eventKey,'Product sale idempotency key',200),at=dateOnly(b.at);
+  const product=(await db.query('SELECT id,name,commission_type,commission_bps,commission_flat_minor,commission_hold_days,currency FROM products WHERE tenant_id=$1 AND id=$2',[tenantId,b.productId])).rows[0];
+  if(!product)throw new TrackerError('unknown_product','Product not found in this workspace.',404);
+  const sp=(await db.query('SELECT id,status FROM salespeople WHERE tenant_id=$1 AND id=$2',[tenantId,b.salespersonId])).rows[0];
+  if(!sp)throw new TrackerError('not_found','Salesperson not found in this workspace.',404);
+  // Idempotent on event_key (repeat webhook delivery must NOT double-post).
+  const existing=(await db.query('SELECT id,amount_minor,currency FROM commission_ledger WHERE tenant_id=$1 AND event_key=$2',[tenantId,eventKey])).rows[0];
+  if(existing)return{id:existing.id,duplicate:true,commissionMinor:String(existing.amount_minor),currency:existing.currency};
+  const order=minor(String(b.orderAmountMinor)),currency=String(b.currency||product.currency||'').trim().toUpperCase()||'USD';
+  let commissionMinor=0n;
+  if(product.commission_type==='percent')commissionMinor=order>0n?ratio(order,BigInt(product.commission_bps),10000n):0n;
+  else if(product.commission_type==='flat')commissionMinor=minor(String(product.commission_flat_minor));
+  else return{skipped:true,reason:'no_commission',commissionMinor:'0'};
+  if(commissionMinor<=0n)return{skipped:true,reason:'zero_commission',commissionMinor:'0'};
+  if(sp.status!=='active')throw new TrackerError('inactive_beneficiary','Resolve the inactive participant before crediting this product sale.');
+  const holdDays=Number(product.commission_hold_days||0),dueDate=holdDays>0?addDays(at,holdDays):at;
+  const earningId=id('psale');
+  await db.query(`INSERT INTO commission_ledger(id,tenant_id,salesperson_id,client_id,payment_date,payment_type,amount_minor,currency,event_key,applied_inputs,explanation,status,due_date,is_projection,created_at,updated_at) VALUES($1,$2,$3,$4,$5,'product_sale',$6,$7,$8,$9::jsonb,$10,'pending',$11,false,now(),now())`,[earningId,tenantId,b.salespersonId,b.clientId||null,at,commissionMinor.toString(),currency,eventKey,JSON.stringify({productSale:true,productId:product.id,orderAmountMinor:order.toString(),commissionType:product.commission_type,commissionBps:product.commission_bps,commissionFlatMinor:String(product.commission_flat_minor),holdDays,contactId:b.contactId||null,source:b.source||'ghl'}),String(b.notes||`Product affiliate commission — ${product.name} sale (${product.commission_type}).`),dueDate]);
+  await audit(db,u,'earning',earningId,'product_commission_posted',{eventKey,productId:product.id,salespersonId:b.salespersonId,amountMinor:commissionMinor.toString(),currency,dueDate,held:holdDays>0});
+  return{id:earningId,commissionMinor:commissionMinor.toString(),currency,held:holdDays>0,dueDate};
+}
+
 export async function recordRefund(db:SQL,u:SessionUser,b:any){
   admin(u);await lock(db,u.tenantId);const eventKey=required(b.eventKey,'Refund idempotency key',200);
   const duplicate=(await db.query('SELECT id,financial_inputs FROM payments WHERE tenant_id=$1 AND event_key=$2',[u.tenantId,eventKey])).rows[0];

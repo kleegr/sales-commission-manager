@@ -179,7 +179,14 @@ export async function syncGhlProducts(db:SQL,u:SessionUser,b:any,reader=readGhlP
   const defaultCurrency=await workspaceCurrency(db,u.tenantId);
   let synced:GhlSyncedProduct[];
   try{synced=await reader(location,fetchImpl,defaultCurrency);}
-  catch(e:any){if(e instanceof TrackerError)throw e;if(e&&(e.code==='token_service_not_configured'||e.code==='reconnect_required'||e.code==='location_required'||e.code==='token_rejected'))throw new TrackerError('ghl_not_connected','GoHighLevel access is unavailable. Reconnect this sub-account and retry.',409);throw new TrackerError('provider_error','GoHighLevel could not complete the product sync.',502);}
+  catch(e:any){if(e instanceof TrackerError)throw e;
+    // Surface the real reason instead of a vague provider_error. The most common
+    // cause is the connected GoHighLevel app lacking the Products scope — that
+    // needs the app's scopes updated + a reconnect; it can't be fixed by retry.
+    if(e&&(e.code==='scope_required'||e.code==='gateway_scope_mismatch'))throw new TrackerError('scope_required','Product sync needs Products access. Ask your admin to enable products.readonly and products/prices.readonly on the connected GoHighLevel app, then reconnect this sub-account. You can still add products manually with Add Product.',403);
+    if(e&&(e.code==='token_service_not_configured'||e.code==='reconnect_required'||e.code==='location_required'||e.code==='token_rejected'))throw new TrackerError('ghl_not_connected','GoHighLevel access is unavailable. Reconnect this sub-account and retry. You can still add products manually with Add Product.',409);
+    if(e&&(e.code==='gateway_unreachable'||e.code==='gateway_not_configured'||e.code==='gateway_error'))throw new TrackerError('provider_unreachable','GoHighLevel could not be reached for the sync. Try again shortly, or add products manually with Add Product.',502);
+    throw new TrackerError('provider_error','GoHighLevel could not complete the product sync. You can still add products manually with Add Product.',502);}
   let created=0,updated=0;
   for(const p of synced){
     const existing=(await db.query('SELECT id FROM products WHERE tenant_id=$1 AND ghl_product_id=$2',[u.tenantId,p.ghlProductId])).rows[0];

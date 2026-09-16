@@ -23,7 +23,12 @@
     "locations.readonly",
     "users.readonly",
     "contacts.readonly",
-    "opportunities.readonly"
+    "contacts.write",
+    "opportunities.readonly",
+    "products.readonly",
+    "products/prices.readonly",
+    "invoices.readonly",
+    "invoices.write"
   ],
   "requiredPermissions": [],
   "placements": [

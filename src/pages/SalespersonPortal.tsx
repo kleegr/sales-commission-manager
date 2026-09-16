@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { UserRound, Building2, Plus, Loader2, Flag, RefreshCw } from "lucide-react";
 import { useApp } from "../store/AppContext";
 import { useAuth } from "../store/AuthContext";
+import ProductLinks from "../components/tracker/ProductLinks";
 import {
   PageHeader,
   Card,
@@ -281,6 +282,11 @@ export default function SalespersonPortal() {
             <StatCard label="Pending" value={formatCurrency(totals.pending)} tone="amber" />
             <StatCard label="Projected" value={formatCurrency(totals.projected)} tone="cyan" />
           </div>
+
+          <Card className="mb-5">
+            <SectionTitle>Your product tracking links</SectionTitle>
+            <div className="mt-3"><ProductLinks /></div>
+          </Card>
 
           {myGoals.length > 0 && (
             <Card className="mb-5">

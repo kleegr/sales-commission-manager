@@ -54,6 +54,7 @@ const ACCESS: Array<{ path: string; roles: Role[] }> = [
   {path:"/tracker-settings",roles:["owner","admin"]},
   {path:"/sync-review",roles:["owner","admin"]},
   { path: "/", roles: ["admin", "sales_manager"] },
+  { path: "/products", roles: ["owner", "admin"] },
   { path: "/agency", roles: ["owner", "admin"] },
   { path: "/people", roles: ["owner", "admin", "sales_manager"] },
   { path: "/plans", roles: ["owner", "admin"] },

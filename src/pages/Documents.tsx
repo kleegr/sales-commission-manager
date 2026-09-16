@@ -24,10 +24,15 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import {
   FileText, FileSignature, Sparkles, Plus, Eye, Pencil, Copy, Trash2,
   Send, CheckCircle2, XCircle, Loader2, Building2, History, ArrowLeft,
-  RotateCcw, Lock, Link2, UserPlus,
+  RotateCcw, Lock, Link2, UserPlus, Boxes, ExternalLink,
 } from "lucide-react";
 import { useApp } from "../store/AppContext";
+import { useAuth } from "../store/AuthContext";
 import { useFeatures } from "../store/FeaturesContext";
+import { useTracker } from "../components/TrackerGate";
+import { trackerGet } from "../lib/tracker-client";
+import { SELF_ROLES } from "../lib/roles";
+import { LineItemsEditor, type CatalogProduct } from "../components/documents/LineItems";
 import {
   PageHeader, Card, Button, Badge, SectionTitle, EmptyState,
   Field, Input, Select, Table, THead, TBody, TR, TH, TD,
@@ -53,7 +58,14 @@ import {
 import type {
   BusinessProfile, ClientDocument, DocumentTemplate, AiGeneration,
   DocumentKind, DocStatus, DocumentStyle, DocumentSection,
+  ClientDocKind, DocumentLineItem,
 } from "../types";
+
+// Document-type options for the sales-document family (proposal-shaped kinds).
+const DOC_TYPE_LABELS: Record<ClientDocKind, string> = {
+  proposal: "Proposal", contract: "Contract", quote: "Quote", invoice: "Invoice", payment_request: "Payment request",
+};
+const SALES_DOC_TYPES: ClientDocKind[] = ["proposal", "quote", "invoice", "payment_request"];
 
 // ----------------------------------------------------------------------------
 // Small helpers
@@ -74,6 +86,10 @@ const ERROR_LABELS: Record<string, string> = {
   ai_disabled: "AI is turned off for this workspace.",
   ai_not_configured: "AI isn't configured on the server yet.",
   invalid_transition: "That status change isn't allowed.",
+  price_below_floor: "A line item is priced below the product's floor. Raise the price to at least the product price.",
+  product_not_assigned: "One of the products isn't assigned to you. Ask an admin to assign it, or remove it.",
+  unknown_product: "A selected product no longer exists. Remove it and pick another.",
+  invalid_campaign: "That campaign is no longer available.",
 };
 
 function msgOf(e: unknown, fallback: string): string {
@@ -126,10 +142,20 @@ type View =
 
 export default function Documents() {
   const { data } = useApp();
+  const { user } = useAuth();
+  const { workspace } = useTracker();
   const { isEnabled } = useFeatures();
 
   const clients = data.clients;
   const companyName = data.settings.companyName;
+  const isSelf = SELF_ROLES.includes((user?.role ?? "salesperson") as never);
+  const currency = workspace?.currency || "USD";
+  const digits = workspace?.payout_terms?.minorDigits ?? 2;
+
+  // Product catalog + campaigns for the line-item builder and campaign link.
+  const [catalog, setCatalog] = useState<CatalogProduct[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(true);
+  const [campaignOptions, setCampaignOptions] = useState<{ id: string; name: string }[]>([]);
 
   const proposalsOn = isEnabled("proposals");
   const contractsOn = isEnabled("contracts");
@@ -156,6 +182,12 @@ export default function Documents() {
   const [creating, setCreating] = useState(false);
   const [cMode, setCMode] = useState<"client" | "prospect">("client");
   const [cProspect, setCProspect] = useState<Prospect>(emptyProspect());
+  const [cDocType, setCDocType] = useState<ClientDocKind>("proposal");
+  const [cLineItems, setCLineItems] = useState<DocumentLineItem[]>([]);
+  const [cCampaignId, setCCampaignId] = useState("");
+
+  // edit pricing / line items on an existing document
+  const [pricingDoc, setPricingDoc] = useState<DocRow | null>(null);
 
   // FLOW 4: share dialog + the one-time link banner
   const [shareDoc, setShareDoc] = useState<DocRow | null>(null);
@@ -196,6 +228,32 @@ export default function Documents() {
 
   useEffect(() => { reload(); }, [reload]);
 
+  // Load the product catalog (self roles see only their assigned products) + campaigns.
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      setCatalogLoading(true);
+      try {
+        const [prods, camps] = await Promise.all([
+          trackerGet("products", { limit: "100", status: "active" }).catch(() => ({ rows: [] })),
+          trackerGet("campaigns", { limit: "100" }).catch(() => ({ rows: [] })),
+        ]);
+        let rows = (prods.rows ?? []) as any[];
+        if (isSelf && user?.salespersonId) {
+          const asg = await trackerGet("productAssignments", { salespersonId: user.salespersonId }).catch(() => ({ rows: [] }));
+          const allowed = new Set((asg.rows ?? []).map((r: any) => r.product_id));
+          rows = rows.filter((r) => allowed.has(r.id));
+        }
+        if (!live) return;
+        setCatalog(rows.map((r) => ({ id: r.id, name: r.name, price_minor: String(r.price_minor), billing_kind: r.billing_kind, currency: r.currency })));
+        setCampaignOptions((camps.rows ?? []).map((c: any) => ({ id: c.id, name: c.name })));
+      } finally {
+        if (live) setCatalogLoading(false);
+      }
+    })();
+    return () => { live = false; };
+  }, [isSelf, user?.salespersonId]);
+
   useEffect(() => {
     if (tab === "ai" && aiOn) {
       listAiHistory().then(setHistory).catch(() => setHistory([]));
@@ -206,7 +264,8 @@ export default function Documents() {
 
   const proposalTemplates = useMemo(() => templates.filter((t) => t.kind === "proposal"), [templates]);
   const contractTemplates = useMemo(() => templates.filter((t) => t.kind === "contract"), [templates]);
-  const proposalDocs = useMemo(() => documents.filter((d) => d.kind === "proposal"), [documents]);
+  // "Client Proposals" now covers every proposal-shaped sales document (proposal, quote, invoice, payment request); contracts stay separate.
+  const proposalDocs = useMemo(() => documents.filter((d) => d.kind !== "contract"), [documents]);
   const contractDocs = useMemo(() => documents.filter((d) => d.kind === "contract"), [documents]);
 
   const clientName = useCallback(
@@ -268,19 +327,22 @@ export default function Documents() {
 
   function openCreateModal(kind: DocumentKind) {
     setCreateKind(kind);
+    setCDocType(kind === "contract" ? "contract" : "proposal");
     const first = (kind === "proposal" ? proposalTemplates : contractTemplates)[0];
     setCTemplateId(first?.id ?? "");
     setCClientId(clients[0]?.id ?? "");
     setCTitle("");
     setCMode(clients.length ? "client" : "prospect");
     setCProspect(emptyProspect());
+    setCLineItems([]);
+    setCCampaignId("");
   }
 
   function openDocumentBuilder(d: ClientDocument) {
     setView({
       mode: "builder",
       ctx: {
-        scope: "document", kind: d.kind, id: d.id, title: d.title,
+        scope: "document", kind: d.kind === "contract" ? "contract" : "proposal", id: d.id, title: d.title,
         style: d.style, sections: d.sections,
         subtitle: d.clientId ? `For ${clientName(d.clientId)}` : (d as DocRow).prospect ? `For ${recipientOf(d as DocRow, clientName)} (prospect)` : undefined,
       },
@@ -295,12 +357,14 @@ export default function Documents() {
       const prospect = cMode === "prospect" ? cProspect : null;
       if (prospect && (!prospect.name.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(prospect.email.trim()))) { setError("Enter the prospect's name and a valid email."); setCreating(false); return; }
       const { id } = await createClientDocument({
-        kind: createKind,
+        kind: createKind === "contract" ? "contract" : cDocType,
         clientId: prospect ? null : cClientId || null,
         templateId: cTemplateId || null,
         title: cTitle.trim() || undefined,
         ...(prospect ? { prospect } : {}),
-      } as Parameters<typeof createClientDocument>[0]);
+        lineItems: cLineItems.filter((li) => li.productId),
+        campaignId: cCampaignId || null,
+      });
       const docs = await refreshLists();
       const d = docs.documents.find((x) => x.id === id);
       setCreateKind(null);
@@ -535,6 +599,7 @@ export default function Documents() {
               onStatus={changeStatus}
               onSend={(d) => setShareDoc(d)}
               onLink={onNewLink}
+              onPricing={(d) => setPricingDoc(d)}
             />
           )}
 
@@ -549,6 +614,7 @@ export default function Documents() {
               onStatus={changeStatus}
               onSend={(d) => setShareDoc(d)}
               onLink={onNewLink}
+              onPricing={(d) => setPricingDoc(d)}
             />
           )}
 
@@ -562,7 +628,8 @@ export default function Documents() {
       <Modal
         open={createKind !== null}
         onClose={() => setCreateKind(null)}
-        title={`New ${createKind ?? ""}`}
+        title={`New ${createKind === "contract" ? "contract" : DOC_TYPE_LABELS[cDocType].toLowerCase()}`}
+        size="lg"
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setCreateKind(null)}>Cancel</Button>
@@ -574,6 +641,13 @@ export default function Documents() {
         }
       >
         <div className="space-y-4">
+          {createKind !== "contract" && (
+            <Field label="Document type" hint="Proposals and quotes present pricing; invoices and payment requests collect payment in GoHighLevel.">
+              <Select value={cDocType} onChange={(e) => setCDocType(e.target.value as ClientDocKind)}>
+                {SALES_DOC_TYPES.map((k) => <option key={k} value={k}>{DOC_TYPE_LABELS[k]}</option>)}
+              </Select>
+            </Field>
+          )}
           <div className="st-mode-toggle" role="radiogroup" aria-label="Who is this for">
             <button type="button" role="radio" aria-checked={cMode === "client"} className={cMode === "client" ? "is-active" : ""} onClick={() => setCMode("client")}><Building2 className="h-4 w-4" /> Existing client</button>
             <button type="button" role="radio" aria-checked={cMode === "prospect"} className={cMode === "prospect" ? "is-active" : ""} onClick={() => setCMode("prospect")}><UserPlus className="h-4 w-4" /> New prospect</button>
@@ -602,13 +676,37 @@ export default function Documents() {
             </Select>
           </Field>
           <Field label="Title" hint="Leave blank to auto-name from the client.">
-            <Input value={cTitle} onChange={(e) => setCTitle(e.target.value)} placeholder={`${createKind === "contract" ? "Service Agreement" : "Proposal"}…`} />
+            <Input value={cTitle} onChange={(e) => setCTitle(e.target.value)} placeholder={`${createKind === "contract" ? "Service Agreement" : DOC_TYPE_LABELS[cDocType]}…`} />
           </Field>
+          <Field label="Campaign" hint="Link this document to a campaign so a paid sale flows commission to the right plan.">
+            <Select value={cCampaignId} onChange={(e) => setCCampaignId(e.target.value)}>
+              <option value="">— No campaign —</option>
+              {campaignOptions.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </Select>
+          </Field>
+          <LineItemsEditor items={cLineItems} onChange={setCLineItems} products={catalog} currency={currency} digits={digits} loading={catalogLoading} />
         </div>
       </Modal>
 
       {/* FLOW 4: send-for-approval dialog */}
       <ShareDialog key={shareDoc?.id ?? "none"} doc={shareDoc} defaultTo={shareDoc ? defaultRecipient(shareDoc) : ""} onClose={() => setShareDoc(null)} onSent={onShared} />
+
+      {/* Wave 3: edit products, pricing & campaign link on an existing document */}
+      <PricingDialog
+        key={pricingDoc?.id ?? "none-pricing"}
+        doc={pricingDoc}
+        products={catalog}
+        campaigns={campaignOptions}
+        currency={currency}
+        digits={digits}
+        catalogLoading={catalogLoading}
+        onClose={() => setPricingDoc(null)}
+        onSaved={async (lineItems, campaignId) => {
+          await updateClientDocument(pricingDoc!.id, { lineItems: lineItems.filter((li) => li.productId), campaignId: campaignId || null });
+          await refreshLists();
+          setPricingDoc(null);
+        }}
+      />
 
       {/* Preview modal */}
       <Modal
@@ -787,7 +885,7 @@ function TemplateList({
 }
 
 function ClientDocList({
-  kind, docs, clientName, onNew, onEdit, onPreview, onStatus, onSend, onLink,
+  kind, docs, clientName, onNew, onEdit, onPreview, onStatus, onSend, onLink, onPricing,
 }: {
   kind: DocumentKind;
   docs: ClientDocument[];
@@ -798,6 +896,7 @@ function ClientDocList({
   onStatus: (d: ClientDocument, status: DocStatus) => void;
   onSend: (d: DocRow) => void;
   onLink: (d: DocRow) => void;
+  onPricing: (d: DocRow) => void;
 }) {
   const label = kind === "contract" ? "contract" : "proposal";
   return (
@@ -823,6 +922,7 @@ function ClientDocList({
             <THead>
               <TR>
                 <TH>Title</TH>
+                {kind !== "contract" && <TH>Type</TH>}
                 <TH>Client</TH>
                 <TH>Amount</TH>
                 <TH>Status</TH>
@@ -841,7 +941,9 @@ function ClientDocList({
                       <div className="font-medium text-slate-800 dark:text-slate-100">{d.title}</div>
                       {d.sentTo && d.status !== "signed" && <div className="text-xs text-slate-500">Sent to {d.sentTo}{d.viewedAt ? ` · viewed ${formatDate(d.viewedAt)}` : ""}</div>}
                       <ApprovalCard doc={d} />
+                      <InvoiceState doc={d} />
                     </TD>
+                    {kind !== "contract" && <TD><Badge tone="slate">{DOC_TYPE_LABELS[d.kind] ?? d.kind}</Badge></TD>}
                     <TD>{recipientOf(d, clientName)}{!d.clientId && d.prospect && <> <Badge tone="violet">Prospect</Badge></>}</TD>
                     <TD>{d.amount ? formatCurrency(d.amount) : "—"}</TD>
                     <TD><DocStatusBadge status={d.status} /></TD>
@@ -850,7 +952,10 @@ function ClientDocList({
                       <div className="flex flex-wrap justify-end gap-1">
                         <Button variant="ghost" size="sm" onClick={() => onPreview(d)} aria-label="Preview"><Eye className="h-4 w-4" /></Button>
                         {!isTerminalStatus(d.status) && (
-                          <Button variant="ghost" size="sm" onClick={() => onEdit(d)} aria-label="Edit"><Pencil className="h-4 w-4" /></Button>
+                          <Button variant="ghost" size="sm" onClick={() => onEdit(d)} aria-label="Edit sections"><Pencil className="h-4 w-4" /></Button>
+                        )}
+                        {!isTerminalStatus(d.status) && (
+                          <Button variant="ghost" size="sm" onClick={() => onPricing(d)} aria-label="Products & pricing" title="Products, pricing & campaign"><Boxes className="h-4 w-4" /> Pricing</Button>
                         )}
                         {shareable && (
                           <Button variant="subtle" size="sm" onClick={() => onSend(d)} aria-label="Send for approval">
@@ -946,5 +1051,98 @@ function AiHistoryPanel({
         </Card>
       )}
     </div>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// GHL invoice state — shown once an invoice exists for the document. Payment is
+// always collected inside GoHighLevel; we surface the pay link + paid status.
+// ----------------------------------------------------------------------------
+
+function InvoiceState({ doc }: { doc: DocRow }) {
+  if (!doc.ghlInvoiceUrl) return null;
+  const paid = (doc.ghlInvoiceStatus ?? "").toLowerCase() === "paid";
+  return (
+    <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-800 dark:bg-slate-800/40">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge tone={paid ? "green" : "amber"}>{paid ? "Paid" : (doc.ghlInvoiceStatus || "Awaiting payment")}</Badge>
+        <span className="text-slate-500">Invoice sent — payment is collected in GoHighLevel.</span>
+      </div>
+      <div className="mt-1.5 flex items-center gap-2">
+        <a href={doc.ghlInvoiceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-brand-600 hover:underline dark:text-brand-300">
+          <ExternalLink className="h-3.5 w-3.5" /> Open pay link
+        </a>
+        <Button variant="ghost" size="sm" type="button" onClick={() => { navigator.clipboard?.writeText(doc.ghlInvoiceUrl!).catch(() => {}); }}>
+          <Copy className="h-3.5 w-3.5" /> Copy
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// PricingDialog — edit products, pricing & the campaign link on a document.
+// ----------------------------------------------------------------------------
+
+function PricingDialog({
+  doc, products, campaigns, currency, digits, catalogLoading, onClose, onSaved,
+}: {
+  doc: DocRow | null;
+  products: CatalogProduct[];
+  campaigns: { id: string; name: string }[];
+  currency: string;
+  digits: number;
+  catalogLoading: boolean;
+  onClose: () => void;
+  onSaved: (lineItems: DocumentLineItem[], campaignId: string) => Promise<void>;
+}) {
+  const [items, setItems] = useState<DocumentLineItem[]>([]);
+  const [campaignId, setCampaignId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!doc) return;
+    setItems((doc.lineItems ?? []).map((li) => ({ ...li })));
+    setCampaignId(doc.campaignId ?? "");
+    setError("");
+  }, [doc]);
+
+  if (!doc) return null;
+  return (
+    <Modal
+      open
+      onClose={() => { if (!busy) onClose(); }}
+      title="Products, pricing & campaign"
+      size="lg"
+      footer={
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
+          <Button
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true); setError("");
+              try { await onSaved(items, campaignId); }
+              catch (e) { setError(msgOf(e, "Could not save pricing.")); }
+              finally { setBusy(false); }
+            }}
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />} Save
+          </Button>
+        </div>
+      }
+    >
+      <div className="space-y-4">
+        {error && <Card className="border-rose-200 bg-rose-50 text-sm text-rose-700 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-300">{error}</Card>}
+        <Field label="Campaign" hint="Links a paid sale to the campaign that pays commission.">
+          <Select value={campaignId} onChange={(e) => setCampaignId(e.target.value)}>
+            <option value="">— No campaign —</option>
+            {campaigns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </Select>
+        </Field>
+        <LineItemsEditor items={items} onChange={setItems} products={products} currency={currency} digits={digits} loading={catalogLoading} />
+        <p className="text-xs text-slate-500">Prices at or above each product's floor are accepted; a lower price is blocked. The document total updates from these line items.</p>
+      </div>
+    </Modal>
   );
 }

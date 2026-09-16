@@ -394,9 +394,23 @@ export interface DocumentTemplate {
   updatedAt: string;
 }
 
+/** Extended client-document kinds. Templates stay proposal|contract; a client
+ *  document can additionally be a quote, invoice or payment request (all
+ *  proposal-shaped sales documents on the server). */
+export type ClientDocKind = "proposal" | "contract" | "quote" | "invoice" | "payment_request";
+
+/** A product row on a client document (minor-unit prices, GHL-native). */
+export interface DocumentLineItem {
+  productId: string;
+  name: string;
+  qty: number;
+  unitPriceMinor: string;
+  billingKind: string;
+}
+
 export interface ClientDocument {
   id: string;
-  kind: DocumentKind;
+  kind: ClientDocKind;
   title: string;
   clientId: string | null;
   salespersonId: string | null;
@@ -411,6 +425,12 @@ export interface ClientDocument {
   viewedAt: string | null;
   signedAt: string | null;
   canceledAt: string | null;
+  // Wave 3: product line items + campaign link + GHL invoice state.
+  lineItems?: DocumentLineItem[];
+  campaignId?: string | null;
+  ghlInvoiceId?: string | null;
+  ghlInvoiceStatus?: string | null;
+  ghlInvoiceUrl?: string | null;
 }
 
 /** What "sells" — used to tailor proposal/contract generation. */

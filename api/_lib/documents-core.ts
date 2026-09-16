@@ -36,6 +36,51 @@ export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 const str = (v: unknown, fallback = ""): string => (v == null ? fallback : String(v).trim());
 
 // ---------------------------------------------------------------------------
+// Document kinds (extended). The shared DocumentKind stays proposal|contract for
+// section-type/merge purposes; documents now additionally support quote,
+// invoice and payment_request kinds. The `kind` column is free-text TEXT so no
+// schema change is needed. Section validation for the new kinds reuses the
+// proposal section set (they are proposal-shaped sales documents, not contracts).
+// ---------------------------------------------------------------------------
+export const DOCUMENT_KINDS = ["proposal", "contract", "quote", "invoice", "payment_request"] as const;
+export type DocKind = (typeof DOCUMENT_KINDS)[number];
+export function asDocumentKind(v: unknown): DocKind {
+  const s = String(v ?? "").trim();
+  return (DOCUMENT_KINDS as readonly string[]).includes(s) ? (s as DocKind) : "proposal";
+}
+/** The base kind used for section-type validation + merge defaults. */
+export function sectionKind(kind: DocKind): DocumentKind {
+  return kind === "contract" ? "contract" : "proposal";
+}
+
+// ---------------------------------------------------------------------------
+// Document line items (pure). Shape only — catalog existence / assignment /
+// price-floor validation (which needs the database) lives in _lib/products.ts.
+// ---------------------------------------------------------------------------
+export interface DocumentLineItem { productId: string; name: string; qty: number; unitPriceMinor: string; billingKind: string }
+const LINE_BILLING_KINDS = ["one_time", "recurring", "setup"];
+/** Coerce a stored/incoming line-item array into clean shapes (no DB checks). */
+export function normalizeLineItems(raw: unknown): DocumentLineItem[] {
+  if (!Array.isArray(raw)) return [];
+  const out: DocumentLineItem[] = [];
+  for (const entry of raw.slice(0, 200)) {
+    const o = (entry && typeof entry === "object" ? entry : {}) as Record<string, unknown>;
+    const productId = str(o.productId);
+    if (!productId) continue;
+    const qtyN = Number(o.qty);
+    const qty = Number.isInteger(qtyN) && qtyN > 0 ? qtyN : 1;
+    const unitPriceMinor = /^\d{1,28}$/.test(String(o.unitPriceMinor)) ? String(o.unitPriceMinor) : "0";
+    const billingKind = LINE_BILLING_KINDS.includes(String(o.billingKind)) ? String(o.billingKind) : "one_time";
+    out.push({ productId, name: str(o.name), qty, unitPriceMinor, billingKind });
+  }
+  return out;
+}
+/** Sum qty * unitPriceMinor across line items → total in minor units (string). */
+export function lineItemsAmountMinor(items: DocumentLineItem[]): string {
+  return items.reduce((total, i) => total + BigInt(i.qty) * BigInt(i.unitPriceMinor), 0n).toString();
+}
+
+// ---------------------------------------------------------------------------
 // Authorization (pure)
 // ---------------------------------------------------------------------------
 
@@ -251,7 +296,8 @@ export function normalizeAcceptance(raw: unknown): Result<{ name: string; email:
   return { ok: true, value: { name, email, signature } };
 }
 
-export interface ClientDocumentRow extends ClientDocument {
+export interface ClientDocumentRow extends Omit<ClientDocument, "kind"> {
+  kind: DocKind; lineItems: DocumentLineItem[]; campaignId: string | null;
   prospect: Prospect | null; sentTo: string | null; hasLink: boolean; linkExpiresAt: string | null;
   acceptedAt: string | null; acceptedByName: string | null; acceptedEmail: string | null;
   createdClientId: string | null; createdOpportunityId: string | null; receiptEventKey: string | null;
@@ -260,7 +306,11 @@ export interface ClientDocumentRow extends ClientDocument {
 export function rowToDocument(r: any): ClientDocumentRow {
   return {
     id: r.id,
-    kind: r.kind === "contract" ? "contract" : "proposal",
+    kind: asDocumentKind(r.kind),
+    lineItems: normalizeLineItems(
+      Array.isArray(r.line_items) ? r.line_items : typeof r.line_items === "string" ? safeJson(r.line_items) : r.line_items,
+    ),
+    campaignId: r.campaign_id ?? null,
     title: r.title ?? "",
     clientId: r.client_id ?? null,
     salespersonId: r.salesperson_id ?? null,

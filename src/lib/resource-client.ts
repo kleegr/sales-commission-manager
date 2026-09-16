@@ -279,8 +279,10 @@ import type {
   AiTarget,
   BusinessProfile,
   ClientDocument,
+  ClientDocKind,
   DocStatus,
   DocumentKind,
+  DocumentLineItem,
   DocumentSection,
   DocumentStyle,
   DocumentTemplate,
@@ -394,10 +396,13 @@ export const reorderDocSections = (
   docPost({ op: "section_reorder", scope, id, orderedIds });
 
 export interface CreateClientDocInput {
-  kind: DocumentKind;
+  kind: ClientDocKind;
   clientId?: string | null;
   templateId?: string | null;
   title?: string;
+  prospect?: unknown;
+  lineItems?: DocumentLineItem[];
+  campaignId?: string | null;
 }
 
 export const createClientDocument = (input: CreateClientDocInput): Promise<{ id: string }> =>
@@ -405,7 +410,13 @@ export const createClientDocument = (input: CreateClientDocInput): Promise<{ id:
 
 export const updateClientDocument = (
   id: string,
-  patch: { title?: string; style?: DocumentStyle; sections?: DocumentSection[] },
+  patch: {
+    title?: string;
+    style?: DocumentStyle;
+    sections?: DocumentSection[];
+    lineItems?: DocumentLineItem[];
+    campaignId?: string | null;
+  },
 ): Promise<{ id: string }> => docPost({ op: "update_document", id, ...patch });
 
 export const setDocumentStatus = (id: string, status: DocStatus): Promise<{ ok: true }> =>

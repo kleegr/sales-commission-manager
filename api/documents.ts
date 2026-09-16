@@ -51,8 +51,14 @@ import {
   normalizeProspect,
   prospectAsClient,
   isEmail,
+  asDocumentKind,
+  sectionKind,
+  lineItemsAmountMinor,
   type Prospect,
+  type DocKind,
 } from "./_lib/documents-core.js";
+import { validateDocumentLineItems } from "./_lib/products.js";
+import { createInvoiceForDocument } from "./_lib/ghl-invoicing.js";
 import {
   defaultSections,
   coerceStyle,
@@ -66,7 +72,7 @@ import type { DocumentKind, DocumentSection, DocStatus, BusinessProfile } from "
 
 const uid = (p: string) => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
-const asKind = (v: unknown): DocumentKind => (v === "contract" ? "contract" : "proposal");
+const asKind = (v: unknown): DocKind => asDocumentKind(v);
 
 /** Plain-text render of sections, kept in the legacy `body` column for back-compat. */
 function sectionsToBody(sections: DocumentSection[]): string {
@@ -199,9 +205,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await ensureDefaultTemplates(user.tenantId, user.id);
 
     const flags = await readTenantFlags(user.tenantId);
-    const kindEnabled = (kind: DocumentKind) => (kind === "contract" ? flags.contracts !== false : flags.proposals !== false);
-    // Guard a write for a given kind behind its feature flag.
-    const ensureKind = (kind: DocumentKind): string | null =>
+    const kindEnabled = (kind: DocKind) => (kind === "contract" ? flags.contracts !== false : flags.proposals !== false);
+    // Guard a write for a given kind behind its feature flag (extended kinds gate under proposals).
+    const ensureKind = (kind: DocKind): string | null =>
       kindEnabled(kind) ? null : kind === "contract" ? "contracts_disabled" : "proposals_disabled";
 
     // ----------------------------------------------------------------- GET
@@ -245,7 +251,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       return res.status(200).json({
         templates: templatesRes.rows.map(rowToTemplate),
-        documents: docsRes.rows.map(rowToDocument),
+        // Expose the GHL invoice fields alongside the mapped document row (rowToDocument
+        // lives in documents-core and is intentionally left untouched).
+        documents: docsRes.rows.map((r) => ({
+          ...rowToDocument(r),
+          ghlInvoiceId: r.ghl_invoice_id ?? null,
+          ghlInvoiceStatus: r.ghl_invoice_status ?? null,
+          ghlInvoiceUrl: r.ghl_invoice_url ?? null,
+        })),
         features: { proposals: flags.proposals !== false, contracts: flags.contracts !== false, ai: flags.ai !== false },
       });
     }
@@ -266,7 +279,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const description = String(body.description ?? "").trim();
         const style = coerceStyle(body.style);
         const sections =
-          body.sections != null ? normalizeSections(kind, body.sections) : defaultSections(kind);
+          body.sections != null ? normalizeSections(sectionKind(kind), body.sections) : defaultSections(sectionKind(kind));
         const id = uid("tpl");
         await query(
           `INSERT INTO document_templates
@@ -289,7 +302,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const description = body.description != null ? String(body.description) : row.description;
         const style = body.style != null ? coerceStyle(body.style) : coerceStyle(row.style);
         const sections =
-          body.sections != null ? normalizeSections(kind, body.sections) : rowToTemplate(row).sections;
+          body.sections != null ? normalizeSections(sectionKind(kind), body.sections) : rowToTemplate(row).sections;
         await query(
           `UPDATE document_templates
               SET name=$1, description=$2, style=$3, sections=$4::jsonb, body=$5, updated_at=now()
@@ -358,9 +371,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const gate = ensureKind(d.kind);
         if (gate) return res.status(403).json({ error: gate });
         let next: DocumentSection[] = d.sections;
-        if (op === "section_add") next = addSection(d.sections, d.kind, String(body.sectionType ?? "custom"), body.atIndex);
+        if (op === "section_add") next = addSection(d.sections, sectionKind(d.kind), String(body.sectionType ?? "custom"), body.atIndex);
         else if (op === "section_update")
-          next = updateSection(d.sections, String(body.sectionId ?? ""), { title: body.title, content: body.content, type: body.type }, d.kind);
+          next = updateSection(d.sections, String(body.sectionId ?? ""), { title: body.title, content: body.content, type: body.type }, sectionKind(d.kind));
         else if (op === "section_delete") next = deleteSection(d.sections, String(body.sectionId ?? ""));
         else if (op === "section_reorder") next = reorderSections(d.sections, body.orderedIds);
         await query(
@@ -392,11 +405,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           const trow = await loadTemplateRow(user.tenantId, String(body.templateId));
           if (!trow) return res.status(400).json({ error: "invalid_template" });
           const t = rowToTemplate(trow);
-          baseSections = t.sections.length ? t.sections : defaultSections(kind);
+          baseSections = t.sections.length ? t.sections : defaultSections(sectionKind(kind));
           style = t.style;
           templateId = t.id;
         } else {
-          baseSections = defaultSections(kind);
+          baseSections = defaultSections(sectionKind(kind));
+        }
+
+        // Optional campaign link (tenant-scoped) + product line items.
+        let campaignId: string | null = null;
+        if (body.campaignId) {
+          const cr = await query<{ id: string }>(`SELECT id FROM campaigns WHERE tenant_id = $1 AND id = $2`, [user.tenantId, String(body.campaignId)]);
+          if (!cr.rows[0]) return res.status(400).json({ error: "invalid_campaign" });
+          campaignId = cr.rows[0].id;
+        }
+        const docSpId0 = client?.salesperson_id ?? user.salespersonId ?? null;
+        let lineItems: Array<{ productId: string; name: string; qty: number; unitPriceMinor: string; billingKind: string }> = [];
+        let lineItemsAmount: string | null = null;
+        if (body.lineItems != null) {
+          try {
+            const validated = await validateDocumentLineItems(database, user.tenantId, { salespersonId: docSpId0, enforceAssignment: isSelfRole(user.role) }, body.lineItems);
+            lineItems = validated.items;
+            lineItemsAmount = validated.amountMinor;
+          } catch (e) {
+            if (e instanceof TrackerError) return res.status(e.status).json({ error: e.code, message: e.message });
+            throw e;
+          }
         }
 
         const business = await loadBusinessProfile(user.tenantId);
@@ -410,14 +444,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const title =
           String(body.title ?? "").trim() ||
           `${kind === "contract" ? "Contract" : "Proposal"} — ${client?.company_name ?? (prospect ? prospect.company || prospect.name : "New")}`;
-        const amount = client
+        // amount = sum(qty*unitPriceMinor) when line items exist; else the legacy setup+monthly fallback.
+        const amount = lineItemsAmount != null
+          ? Number(lineItemsAmount)
+          : client
           ? Number(client.setup_fee_amount ?? 0) + Number(client.monthly_subscription_amount ?? 0)
           : prospect ? prospect.setupFee + prospect.monthlySubscription : 0;
         await query(
           `INSERT INTO documents
-             (id, tenant_id, kind, title, client_id, salesperson_id, template_id, body, sections, style, status, amount, created_by_user_id, prospect)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,'draft',$11,$12,$13::jsonb)`,
-          [id, user.tenantId, kind, title, client?.id ?? null, spId, templateId, sectionsToBody(baked), JSON.stringify(baked), style, amount, user.id, prospect ? JSON.stringify(prospect) : null],
+             (id, tenant_id, kind, title, client_id, salesperson_id, template_id, body, sections, style, status, amount, created_by_user_id, prospect, line_items, campaign_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,'draft',$11,$12,$13::jsonb,$14::jsonb,$15)`,
+          [id, user.tenantId, kind, title, client?.id ?? null, spId, templateId, sectionsToBody(baked), JSON.stringify(baked), style, amount, user.id, prospect ? JSON.stringify(prospect) : null, lineItems.length ? JSON.stringify(lineItems) : null, campaignId],
         );
         return res.status(201).json({ ok: true, id });
       }
@@ -431,10 +468,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (gate) return res.status(403).json({ error: gate });
         const title = body.title != null ? String(body.title).trim() || d.title : d.title;
         const style = body.style != null ? coerceStyle(body.style) : d.style;
-        const sections = body.sections != null ? normalizeSections(d.kind, body.sections) : d.sections;
+        const sections = body.sections != null ? normalizeSections(sectionKind(d.kind), body.sections) : d.sections;
+        // Optional campaign relink + line-item revalidation (same rules as create).
+        let campaignId: string | null = d.campaignId;
+        if (body.campaignId !== undefined) {
+          if (body.campaignId === null || body.campaignId === "") campaignId = null;
+          else {
+            const cr = await query<{ id: string }>(`SELECT id FROM campaigns WHERE tenant_id = $1 AND id = $2`, [user.tenantId, String(body.campaignId)]);
+            if (!cr.rows[0]) return res.status(400).json({ error: "invalid_campaign" });
+            campaignId = cr.rows[0].id;
+          }
+        }
+        let lineItems = d.lineItems;
+        let amountOverride: string | null = null;
+        if (body.lineItems !== undefined) {
+          try {
+            const validated = await validateDocumentLineItems(database, user.tenantId, { salespersonId: row.salesperson_id ?? user.salespersonId ?? null, enforceAssignment: isSelfRole(user.role) }, body.lineItems ?? []);
+            lineItems = validated.items;
+            // Recompute the amount whenever line items are edited — including clearing
+            // them to none (amount 0) so a removed-product doc can't invoice a stale total.
+            amountOverride = validated.items.length ? validated.amountMinor : "0";
+          } catch (e) {
+            if (e instanceof TrackerError) return res.status(e.status).json({ error: e.code, message: e.message });
+            throw e;
+          }
+        }
+        const amountClause = body.lineItems !== undefined && amountOverride != null ? `, amount=${Number(amountOverride)}` : "";
         await query(
-          `UPDATE documents SET title=$1, style=$2, sections=$3::jsonb, body=$4, updated_at=now() WHERE tenant_id=$5 AND id=$6`,
-          [title, style, JSON.stringify(sections), sectionsToBody(sections), user.tenantId, row.id],
+          `UPDATE documents SET title=$1, style=$2, sections=$3::jsonb, body=$4, line_items=$5::jsonb, campaign_id=$6${amountClause}, updated_at=now() WHERE tenant_id=$7 AND id=$8`,
+          [title, style, JSON.stringify(sections), sectionsToBody(sections), lineItems.length ? JSON.stringify(lineItems) : null, campaignId, user.tenantId, row.id],
         );
         return res.status(200).json({ ok: true, id: row.id });
       }
@@ -488,6 +550,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           }
         }
         return res.status(200).json({ ok: true, id: row.id, link, status: issued.status, expiresAt: issued.expiresAt, to, email, emailError });
+      }
+
+      // ---- create + send a GHL-native invoice for this document (returns the pay link) ----
+      if (op === "send_invoice") {
+        if (!canCreateClientDoc(user.role)) return res.status(403).json({ error: "forbidden" });
+        const row = await loadDocumentRow(user, String(body.id ?? ""));
+        if (!row) return res.status(404).json({ error: "document_not_found" });
+        const gate = ensureKind(asKind(row.kind));
+        if (gate) return res.status(403).json({ error: gate });
+        try {
+          const inv = await database.transaction((db) => createInvoiceForDocument(db, user, row.id));
+          return res.status(200).json({ ok: true, id: row.id, invoiceId: inv.invoiceId, status: inv.status, url: inv.url });
+        } catch (e) {
+          if (e instanceof TrackerError) return res.status(e.status).json({ error: e.code, message: e.message });
+          throw e;
+        }
       }
 
       // ---- preview: resolve merge fields + return branding for a clean layout ----

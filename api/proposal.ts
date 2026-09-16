@@ -16,6 +16,7 @@ import {csrfOk,clientIp} from './_lib/http.js';
 import type {SessionUser} from './_lib/auth.js';
 import {audit,database,id,lock,trackerInstalled,TrackerError,type SQL} from './_lib/tracker-common.js';
 import {recordPayment} from './_lib/tracker-finance.js';
+import {createInvoiceForDocument} from './_lib/ghl-invoicing.js';
 import {rowToDocument,rowToBusinessProfile,prospectAsClient,receiptAmount,toMinor,normalizeAcceptance,proposalOverLimit,PROPOSAL_WINDOW_MIN,type ClientDocumentRow} from './_lib/documents-core.js';
 import {applySectionsMerge,buildMergeContext,canTransitionStatus} from '../src/lib/documents.js';
 
@@ -76,7 +77,7 @@ export async function viewProposal(db:SQL,token:string){
 export async function acceptProposal(db:SQL,token:string,b:any,ip:string){
   const form=normalizeAcceptance(b);if(!form.ok)throw new TrackerError(form.error,ACCEPT_MESSAGES[form.error]||'Check the form and try again.');
   const row=await loadByToken(db,token,true),tenantId:string=row.tenant_id;
-  if(row.status==='signed')return{ok:true,alreadyAccepted:true,accepted:{name:row.accepted_by_name,at:iso(row.accepted_at||row.signed_at)},clientId:row.client_id||row.created_client_id,clientCreated:false,opportunityId:row.created_opportunity_id,receipt:row.receipt_event_key?'recorded':'skipped',receiptError:null};
+  if(row.status==='signed')return{ok:true,alreadyAccepted:true,accepted:{name:row.accepted_by_name,at:iso(row.accepted_at||row.signed_at)},clientId:row.client_id||row.created_client_id,clientCreated:false,opportunityId:row.created_opportunity_id,receipt:row.receipt_event_key?'recorded':'skipped',receiptError:null,invoice:row.ghl_invoice_id?{id:row.ghl_invoice_id,url:row.ghl_invoice_url,status:row.ghl_invoice_status}:null,invoiceError:null};
   const d=rowToDocument(row),{name,email,signature}=form.value,now=new Date();await lock(db,tenantId);
   await db.query(`UPDATE documents SET status='signed',signed_at=now(),accepted_at=now(),accepted_by_name=$2,accepted_email=$3,accepted_ip=$4,signature_data=$5,updated_at=now() WHERE id=$1`,[row.id,name,email,ip.slice(0,64),signature]);
   const tracker=await trackerInstalled(db);
@@ -90,23 +91,36 @@ export async function acceptProposal(db:SQL,token:string,b:any,ip:string){
     client=(await db.query('SELECT * FROM clients WHERE tenant_id=$1 AND id=$2',[tenantId,clientId])).rows[0];
   }
   let opportunityId:string|null=null,receiptEventKey:string|null=null,receipt:'recorded'|'skipped'|'failed'='skipped',receiptError:string|null=null;
+  let invoice:{id:string;url:string|null;status:string}|null=null,invoiceError:string|null=null;
   const w=tracker?(await db.query('SELECT * FROM tracker_workspaces WHERE tenant_id=$1',[tenantId])).rows[0]:null;
+  const system:SessionUser={id:`proposal:${d.id}`,tenantId,tenantSlug:'',tenantName:'',name,email,role:'owner',salespersonId:null};
   if(w){
     await db.query('SAVEPOINT flow4_finance');
     try{
       const digits=Number(w.payout_terms?.minorDigits??2),setupFee=Number(client.setup_fee_amount||0),total=setupFee+Number(client.monthly_subscription_amount||0),dueNow=receiptAmount(setupFee,total);
       opportunityId=id('opp');await db.query(`INSERT INTO opportunities(id,tenant_id,client_id,name,owner_id,value_minor,currency,status,source,won_at) VALUES($1,$2,$3,$4,$5,$6,$7,'won','manual',now())`,[opportunityId,tenantId,clientId,d.title,spId,toMinor(total,digits),w.currency]);
       if(dueNow>0){
-        const system:SessionUser={id:`proposal:${d.id}`,tenantId,tenantSlug:'',tenantName:'',name,email,role:'owner',salespersonId:null},key=`proposal:${d.id}`;
+        const key=`proposal:${d.id}`;
         await recordPayment(db,system,{eventKey:key,clientId,opportunityId,date:calendarDate(w.timezone||'UTC',now),amountMinor:toMinor(dueNow,digits),currency:w.currency,status:'pending',source:'manual',productId:'',notes:`"${d.title}" approved by ${name} (${email}). Confirm when the cash arrives.`});
         receiptEventKey=key;receipt='recorded';
       }
       await db.query('RELEASE SAVEPOINT flow4_finance');
     }catch(e){await db.query('ROLLBACK TO SAVEPOINT flow4_finance');opportunityId=null;receiptEventKey=null;receipt='failed';receiptError=e instanceof TrackerError?e.code:'internal_error';console.error('[scm:error] proposal finance:',e instanceof Error?e.message:String(e));}
+    // GHL-native invoice: if the tenant has GHL connected and the document has an amount, create + send
+    // the invoice so the client gets a pay link. Best-effort in its OWN savepoint — a GHL failure never
+    // rolls back the approval, and the pending receipt above remains the fallback record. Payment of this
+    // invoice later posts commission per line item via the webhook (see ghl-invoicing.ts).
+    const ghlLocation=(await db.query("SELECT ghl_location_id FROM tenants WHERE id=$1 AND status='active' AND kleegr_connection_status='connected'",[tenantId])).rows[0]?.ghl_location_id;
+    const hasAmount=d.lineItems.length>0||Number(client.setup_fee_amount||0)+Number(client.monthly_subscription_amount||0)>0;
+    if(ghlLocation&&hasAmount){
+      await db.query('SAVEPOINT flow_ghl_invoice');
+      try{const inv=await createInvoiceForDocument(db,system,d.id,{clientId});invoice={id:inv.invoiceId,url:inv.url,status:inv.status};await db.query('RELEASE SAVEPOINT flow_ghl_invoice');}
+      catch(e){await db.query('ROLLBACK TO SAVEPOINT flow_ghl_invoice');invoice=null;invoiceError=e instanceof TrackerError?e.code:'invoice_failed';console.error('[scm:error] proposal invoice:',e instanceof Error?e.message:String(e));}
+    }
   }
   await db.query('UPDATE documents SET created_client_id=$2,created_opportunity_id=$3,receipt_event_key=$4 WHERE id=$1',[row.id,clientCreated?clientId:null,opportunityId,receiptEventKey]);
-  await audit(db,{id:`proposal:${d.id}`,tenantId,tenantSlug:'',tenantName:'',name,email,role:'owner',salespersonId:null},'document',d.id,'proposal_accepted',{acceptedBy:name,acceptedEmail:email,clientId,clientCreated,opportunityId,receipt,receiptError});
-  return{ok:true,alreadyAccepted:false,accepted:{name,at:now.toISOString()},clientId,clientCreated,opportunityId,receipt,receiptError};
+  await audit(db,system,'document',d.id,'proposal_accepted',{acceptedBy:name,acceptedEmail:email,clientId,clientCreated,opportunityId,receipt,receiptError,invoice:invoice?.id||null,invoiceError});
+  return{ok:true,alreadyAccepted:false,accepted:{name,at:now.toISOString()},clientId,clientCreated,opportunityId,receipt,receiptError,invoice,invoiceError};
 }
 
 // ---- per-IP sliding window (fail-open) ----
@@ -126,7 +140,7 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
     if(!csrfOk(req))return res.status(403).json({error:'csrf_check_failed'});
     const b=typeof req.body==='string'?JSON.parse(req.body||'{}'):req.body??{};if(JSON.stringify(b).length>4000)return res.status(413).json({error:'too_large'});
     const out=await run(()=>database.transaction(db=>acceptProposal(db,String(b.token||''),b,ip)));
-    return res.json({ok:true,accepted:out.accepted,alreadyAccepted:out.alreadyAccepted});
+    return res.json({ok:true,accepted:out.accepted,alreadyAccepted:out.alreadyAccepted,invoice:out.invoice??null});
   }catch(e){
     if(e instanceof TrackerError)return res.status(e.status).json({error:e.code,message:e.message});
     console.error('[scm:error] proposal:',e instanceof Error?(e.stack??e.message):String(e));return res.status(500).json({error:'internal_error'});

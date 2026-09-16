@@ -1,5 +1,6 @@
 import type {SessionUser} from './auth.js';
 import {admin,isAdmin,visibleIds,TrackerError,type SQL} from './tracker-common.js';
+import {listProducts,listAssignments,campaignStructures} from './products.js';
 
 export interface ResourceSpec {table:string;columns:string;search:string;scope?:string;admin?:boolean;date?:string}
 // Keep existing business history visible; a directory-only legacy import is not an enrollment.
@@ -81,6 +82,11 @@ export async function filteredQuery(db:SQL,u:SessionUser,resource:string,f:any={
   return{base,values,columns:s.columns};
 }
 export async function listResource(db:SQL,u:SessionUser,resource:string,f:any={}){
+  if(resource==='products')return listProducts(db,u,f);
+  // A non-admin may only read their OWN product assignments (their sellable catalog);
+  // the campaign→structure map is admin-only.
+  if(resource==='productAssignments')return listAssignments(db,u,isAdmin(u)?f:{...f,salespersonId:u.salespersonId||'__none__'});
+  if(resource==='campaignStructures'){admin(u);return campaignStructures(db,u,f);}
   const q=await filteredQuery(db,u,resource,f),page=Math.max(1,Math.min(100000,Number(f.page)||1)),limit=Math.max(1,Math.min(100,Number(f.limit)||50));
   const total=Number((await db.query(`SELECT count(*)::text AS n ${q.base}`,q.values)).rows[0].n);
   const key=resource==='directory'?'r.external_id':resource==='links'?'r.link_id':'r.id';

@@ -24,6 +24,7 @@ import { hasDb } from "../_lib/db.js";
 import { ensureSchema } from "../_lib/repository.js";
 import { verifyWebhookSignature, isHandledWebhookEvent, normalizeWebhookEvent, KleegrError } from "../_lib/kleegr.js";
 import { recordWebhookEvent, applyWebhookEvent, extractSubAccountId, resolveTenantBySubAccount } from "../_lib/kleegr-sync.js";
+import { parseInvoicePaidEvent, applyInvoicePaidEvent } from "../_lib/ghl-invoicing.js";
 
 // Disable Vercel's body parser so we can read the exact bytes Kleegr signed.
 export const config = { api: { bodyParser: false } };
@@ -103,6 +104,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Record first (idempotent). A duplicate delivery is acknowledged, not re-applied.
     const recorded = await recordWebhookEvent(tenant?.id ?? null, eventType || "unknown", deliveryId, payload);
+
+    // GHL-native invoice payment -> automatic per-line-item commission. These arrive
+    // proxied through Kleegr like every other webhook; we key on the ORIGINAL event
+    // name (invoice/payment events are outside the location.*/subaccount.* family, so
+    // this is handled before isHandledWebhookEvent). Mapping to our document is by the
+    // globally-unique ghl_invoice_id, and applyInvoicePaidEvent is itself idempotent.
+    const invoicePaid = parseInvoicePaidEvent(eventTypeRaw, payload);
+    if (invoicePaid) {
+      if (recorded.duplicate) {
+        return res.status(200).json({ ok: true, duplicate: true, event: eventType, action: "invoice_paid_duplicate" });
+      }
+      if (!(await trackerInstalled())) {
+        return res.status(200).json({ ok: true, applied: false, action: "tracker_not_installed", event: eventType });
+      }
+      const result = await database.transaction((db) => applyInvoicePaidEvent(db, invoicePaid));
+      return res.status(200).json({ ok: true, applied: result.applied, action: result.action, event: eventType, documentId: result.documentId ?? null, earnings: result.earnings ?? 0 });
+    }
+
     if (tenant && await trackerInstalled() && /^(contact|opportunity)\./.test(eventType)) {
       // Every verified redelivery can restore the review queue after a crash: the row is
       // normalised to the same shape the sync preview stages, so approveImport (manual or

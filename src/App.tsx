@@ -78,6 +78,7 @@ export default function App() {
       <Routes>
         <Route path="/operations" element={<Guard><Operations /></Guard>} />
         <Route path="/" element={<Guard><TrackerGate resource="dashboard"><Dashboard /></TrackerGate></Guard>} />
+        <Route path="/products" element={<Guard><TrackerGate resource="products" /></Guard>} />
         <Route path="/agency" element={<Guard><TrackerGate resource="agency"><Agency /></TrackerGate></Guard>} />
         <Route path="/people" element={<Guard><TrackerGate resource="people"><People /></TrackerGate></Guard>} />
         <Route path="/people/:id" element={<Guard><TrackerGate resource="people"><SalespersonDetail /></TrackerGate></Guard>} />

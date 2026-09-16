@@ -187,5 +187,39 @@ INSERT INTO external_users (tenant_id,external_id,name,email,phone,provider_role
 UPDATE salespeople SET enrolled_at=now() WHERE enrolled_at IS NULL;
 -- Pipeline → commission policy: which provider pipeline/stages count as won, and whether won deals post automatically.
 ALTER TABLE tracker_workspaces ADD COLUMN IF NOT EXISTS pipeline_policy jsonb NOT NULL DEFAULT '{"pipelineId":null,"wonStageIds":[],"treatStatusWonAsWon":true,"auto":false,"receipt":"pending"}';
+-- Product catalog: tenant-scoped products, per-rep assignments, and the
+-- campaign→product→plan-version structure map. GHL-native pricing (price_minor).
+CREATE TABLE IF NOT EXISTS products (
+ tenant_id text NOT NULL, id text NOT NULL, name text NOT NULL, sku text, category text NOT NULL DEFAULT '',
+ description text NOT NULL DEFAULT '', price_minor numeric(30,0) NOT NULL DEFAULT 0, currency char(3) NOT NULL,
+ billing_kind text NOT NULL DEFAULT 'one_time' CHECK (billing_kind IN ('one_time','recurring','setup')),
+ recurring_interval text NOT NULL DEFAULT '', status text NOT NULL DEFAULT 'active',
+ ghl_product_id text, ghl_price_id text, created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now(),
+ archived_at timestamptz, PRIMARY KEY(tenant_id,id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_products_ghl ON products(tenant_id,ghl_product_id) WHERE ghl_product_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_products_status ON products(tenant_id,status);
+CREATE TABLE IF NOT EXISTS product_assignments (
+ tenant_id text NOT NULL, product_id text NOT NULL, salesperson_id text NOT NULL, created_at timestamptz DEFAULT now(),
+ PRIMARY KEY(tenant_id,product_id,salesperson_id),
+ FOREIGN KEY(tenant_id,product_id) REFERENCES products(tenant_id,id),
+ FOREIGN KEY(tenant_id,salesperson_id) REFERENCES salespeople(tenant_id,id)
+);
+CREATE INDEX IF NOT EXISTS idx_product_assignments_sp ON product_assignments(tenant_id,salesperson_id);
+CREATE TABLE IF NOT EXISTS campaign_product_structures (
+ tenant_id text NOT NULL, campaign_id text NOT NULL, product_id text NOT NULL, plan_version_id text NOT NULL,
+ PRIMARY KEY(tenant_id,campaign_id,product_id),
+ FOREIGN KEY(tenant_id,campaign_id) REFERENCES campaigns(tenant_id,id),
+ FOREIGN KEY(tenant_id,product_id) REFERENCES products(tenant_id,id),
+ FOREIGN KEY(tenant_id,plan_version_id) REFERENCES plan_versions(tenant_id,id)
+);
+CREATE INDEX IF NOT EXISTS idx_campaign_structures ON campaign_product_structures(tenant_id,campaign_id);
+-- GHL-native invoicing: the document carries the invoice it spawned on approval
+-- (id + lifecycle status + hosted pay-link). Mirrors migrations.ts 0020 so a
+-- tracker install converges on the same shape. documents exists by this point.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS ghl_invoice_id text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS ghl_invoice_status text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS ghl_invoice_url text;
+CREATE INDEX IF NOT EXISTS idx_documents_ghl_invoice ON documents(ghl_invoice_id) WHERE ghl_invoice_id IS NOT NULL;
 INSERT INTO schema_migrations(id) VALUES('0012_sales_tracker') ON CONFLICT DO NOTHING;
 `;

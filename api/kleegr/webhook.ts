@@ -24,7 +24,7 @@ import { hasDb } from "../_lib/db.js";
 import { ensureSchema } from "../_lib/repository.js";
 import { verifyWebhookSignature, isHandledWebhookEvent, normalizeWebhookEvent, KleegrError } from "../_lib/kleegr.js";
 import { recordWebhookEvent, applyWebhookEvent, extractSubAccountId, resolveTenantBySubAccount } from "../_lib/kleegr-sync.js";
-import { parseInvoicePaidEvent, applyInvoicePaidEvent } from "../_lib/ghl-invoicing.js";
+import { parseInvoicePaidEvent, applyInvoicePaidEvent, parseProductSaleEvent, applyProductSaleEvent } from "../_lib/ghl-invoicing.js";
 
 // Disable Vercel's body parser so we can read the exact bytes Kleegr signed.
 export const config = { api: { bodyParser: false } };
@@ -110,16 +110,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // name (invoice/payment events are outside the location.*/subaccount.* family, so
     // this is handled before isHandledWebhookEvent). Mapping to our document is by the
     // globally-unique ghl_invoice_id, and applyInvoicePaidEvent is itself idempotent.
+    // Two GHL-native paid-money paths, both proxied through Kleegr like every other
+    // webhook. (1) A paid proposal invoice -> our document -> per-line commission
+    // (recordPayment). (2) A paid PRODUCT order -> a rep's tracking-link attribution
+    // -> the product's commission (recordProductCommission). These are DISTINCT
+    // attribution paths: an event that matches our document takes path 1; anything
+    // else that looks like a paid product order falls through to path 2. Best-effort:
+    // never throw out of the webhook.
     const invoicePaid = parseInvoicePaidEvent(eventTypeRaw, payload);
-    if (invoicePaid) {
+    const saleLines = parseProductSaleEvent(eventTypeRaw, payload);
+    if (invoicePaid || saleLines.length) {
       if (recorded.duplicate) {
-        return res.status(200).json({ ok: true, duplicate: true, event: eventType, action: "invoice_paid_duplicate" });
+        return res.status(200).json({ ok: true, duplicate: true, event: eventType, action: "paid_event_duplicate" });
       }
       if (!(await trackerInstalled())) {
         return res.status(200).json({ ok: true, applied: false, action: "tracker_not_installed", event: eventType });
       }
-      const result = await database.transaction((db) => applyInvoicePaidEvent(db, invoicePaid));
-      return res.status(200).json({ ok: true, applied: result.applied, action: result.action, event: eventType, documentId: result.documentId ?? null, earnings: result.earnings ?? 0 });
+      // (1) Proposal invoice -> our document. Only returns here when a document matched.
+      if (invoicePaid) {
+        const result = await database.transaction((db) => applyInvoicePaidEvent(db, invoicePaid));
+        if (result.applied) {
+          return res.status(200).json({ ok: true, applied: true, action: result.action, event: eventType, documentId: result.documentId ?? null, earnings: result.earnings ?? 0 });
+        }
+        // no matching document -> fall through to the product-affiliate path.
+      }
+      // (2) Product-affiliate sale (separate tracking-link attribution path).
+      if (saleLines.length) {
+        let sale: Awaited<ReturnType<typeof applyProductSaleEvent>> | null = null;
+        try { sale = await database.transaction((db) => applyProductSaleEvent(db, saleLines)); }
+        catch (e) { console.error("[scm:error] product-sale apply:", e instanceof Error ? (e.stack ?? e.message) : String(e)); }
+        return res.status(200).json({ ok: true, applied: !!sale?.applied, action: sale?.action ?? "product_sale_error", event: eventType, orderId: sale?.orderId ?? null, credited: sale?.credited ?? 0, skipped: sale?.skipped ?? 0 });
+      }
+      // A paid invoice event that matched no document and had no product lines.
+      return res.status(200).json({ ok: true, applied: false, action: "no_document", event: eventType });
     }
 
     if (tenant && await trackerInstalled() && /^(contact|opportunity)\./.test(eventType)) {

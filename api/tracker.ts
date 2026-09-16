@@ -4,9 +4,9 @@ import {getSessionUser} from './_lib/auth.js';
 import {csrfOk} from './_lib/http.js';
 import {hasDb} from './_lib/db.js';
 import {ensureSchema} from './_lib/repository.js';
-import {admin,audit,database,dateOnly,id,lock,participant,required,trackerInstalled,TrackerError,type SQL} from './_lib/tracker-common.js';
+import {admin,audit,database,dateOnly,id,lock,participant,required,trackerInstalled,TrackerError,workspace,type SQL} from './_lib/tracker-common.js';
 import {enroll,linkSalesman,saveParticipant,saveTeam,publishPlan,assignPlan} from './_lib/tracker-people.js';
-import {recordPayment,recordRefund,recordAward,recordAdjustment,allocateReceipt,closePartialPayout,createPayout,transitionPayout,settlePayout} from './_lib/tracker-finance.js';
+import {recordPayment,recordRefund,recordAward,recordAdjustment,recordProductCommission,allocateReceipt,closePartialPayout,createPayout,transitionPayout,settlePayout} from './_lib/tracker-finance.js';
 import {createLead,editLead,attributeLead,attributionCandidate,saveOpportunity,saveCampaign,safeDestination} from './_lib/tracker-attribution.js';
 import {listResource,report,exportResource,payoutBalances} from './_lib/tracker-read.js';
 import {simulateExact,minor} from '../src/lib/exact-commission.js';
@@ -21,6 +21,10 @@ export const mutations:Record<string,(db:SQL,u:any,b:any)=>Promise<any>>={
   lead:createLead,editLead,attribution:attributeLead,attributionCandidate,opportunity:saveOpportunity,campaign:saveCampaign,
   payment:recordPayment,refund:recordRefund,award:recordAward,adjustment:recordAdjustment,allocateReceipt,closePartialPayout,payout:createPayout,payoutAction:transitionPayout,settlement:settlePayout,approveImport,
   saveProduct,deleteProduct,syncGhlProducts,assignProducts,setCampaignStructures,
+  // Manual fallback for the per-product affiliate program: credit a product sale to a
+  // rep by hand when the live GHL order-webhook field names don't match the auto parser.
+  // Admin-gated; idempotent on `manualproductsale:<reference or generated id>`.
+  async creditProductSale(db,u,b){admin(u);const salespersonId=required(b.salespersonId,'Salesperson');const productId=required(b.productId,'Product');const w=await workspace(db,u);const currency=(String(b.currency||'').trim().toUpperCase())||w.currency;const reference=String(b.reference||'').trim();const eventKey=`manualproductsale:${reference||id('ref').replace(/^ref_/,'')}`;const at=new Date().toISOString().slice(0,10);const res=await recordProductCommission(db,u,{tenantId:u.tenantId,productId,salespersonId,orderAmountMinor:String(b.amountMinor??'0'),currency,eventKey,at,contactId:b.contactId?String(b.contactId):undefined,source:'manual',notes:reference?`Manual product-sale credit (ref ${reference}).`:'Manual product-sale credit.'});await audit(db,u,'earning',(res as any).id||eventKey,'manual_product_sale',{eventKey,productId,salespersonId,reference:reference||null});return res;},
   async confirmReceipt(db,u,b){admin(u);await lock(db,u.tenantId);const original=(await db.query('SELECT * FROM payments WHERE tenant_id=$1 AND id=$2 AND amount_minor IS NOT NULL',[u.tenantId,b.id])).rows[0];if(!original)throw new TrackerError('not_found','Receipt not found.');if(original.receipt_status==='confirmed')return{id:original.id,duplicate:true};if(original.receipt_status!=='pending')throw new TrackerError('invalid_status','Only pending receipts can be confirmed.');required(b.reason,'Confirmation evidence');const payload=JSON.parse(original.financial_inputs.requestFingerprint);const result=await recordPayment(db,u,{...payload,status:'confirmed',confirmExisting:true,...(b.preview?{preview:true}:{})});if(!b.preview)await audit(db,u,'payment',original.id,'confirmation_evidence',{reason:b.reason});return result;},
   async setup(db,u,b){admin(u);await lock(db,u.tenantId);if(!/^[A-Z]{3}$/.test(b.currency)||![0,2,3].includes(Number(b.minorDigits)))throw new TrackerError('invalid_currency','Select currency and decimal precision.');try{new Intl.DateTimeFormat('en',{timeZone:b.timezone}).format();}catch{throw new TrackerError('invalid_timezone','Select a valid IANA timezone.');}
     const current=(await db.query('SELECT * FROM tracker_workspaces WHERE tenant_id=$1',[u.tenantId])).rows[0];

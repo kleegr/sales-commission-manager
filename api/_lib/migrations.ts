@@ -441,4 +441,38 @@ CREATE INDEX IF NOT EXISTS idx_documents_ghl_invoice ON documents(ghl_invoice_id
 INSERT INTO schema_migrations (id) VALUES ('0020_ghl_invoicing')
 ON CONFLICT (id) DO NOTHING;
 
+-- 0021 — per-product affiliate program --------------------------------------
+-- Each product carries its own commission config; assigning a product to a rep
+-- mints a stable, unguessable tracking link (product_links). Sharing the link
+-- and a later purchase auto-credits the rep (commission-on-purchase is a LATER
+-- wave; here we build config + links + click capture). Mirrors tracker-schema.ts
+-- so a deployed workspace converges on the same shape. Guarded on the tracker
+-- install; all product columns are additive/defaulted.
+DO $product_commission_links$
+BEGIN
+  IF to_regclass('public.products') IS NOT NULL THEN
+    EXECUTE $q$ALTER TABLE products ADD COLUMN IF NOT EXISTS commission_type text NOT NULL DEFAULT 'none' CHECK (commission_type IN ('none','percent','flat'))$q$;
+    EXECUTE $q$ALTER TABLE products ADD COLUMN IF NOT EXISTS commission_bps int NOT NULL DEFAULT 0$q$;
+    EXECUTE $q$ALTER TABLE products ADD COLUMN IF NOT EXISTS commission_flat_minor numeric(30,0) NOT NULL DEFAULT 0$q$;
+    EXECUTE $q$ALTER TABLE products ADD COLUMN IF NOT EXISTS commission_hold_days int NOT NULL DEFAULT 0$q$;
+    EXECUTE $q$ALTER TABLE products ADD COLUMN IF NOT EXISTS destination_url text NOT NULL DEFAULT ''$q$;
+    EXECUTE $q$CREATE TABLE IF NOT EXISTS product_links (
+      tenant_id text NOT NULL, link_id text NOT NULL, product_id text NOT NULL, salesperson_id text NOT NULL,
+      active boolean NOT NULL DEFAULT true, created_at timestamptz DEFAULT now(),
+      PRIMARY KEY(tenant_id,link_id), UNIQUE(tenant_id,product_id,salesperson_id),
+      FOREIGN KEY(tenant_id,product_id) REFERENCES products(tenant_id,id),
+      FOREIGN KEY(tenant_id,salesperson_id) REFERENCES salespeople(tenant_id,id))$q$;
+    EXECUTE $q$CREATE INDEX IF NOT EXISTS idx_product_links_sp ON product_links(tenant_id,salesperson_id)$q$;
+    EXECUTE $q$CREATE INDEX IF NOT EXISTS idx_product_links_product ON product_links(tenant_id,product_id)$q$;
+    EXECUTE $q$CREATE TABLE IF NOT EXISTS product_link_clicks (
+      tenant_id text NOT NULL, link_id text NOT NULL, product_id text NOT NULL, salesperson_id text NOT NULL,
+      created_at timestamptz DEFAULT now(), ip text NOT NULL DEFAULT '', contact_id text NOT NULL DEFAULT '')$q$;
+    EXECUTE $q$CREATE INDEX IF NOT EXISTS idx_product_link_clicks_link ON product_link_clicks(link_id,created_at DESC)$q$;
+    EXECUTE $q$CREATE INDEX IF NOT EXISTS idx_product_link_clicks_sp ON product_link_clicks(tenant_id,salesperson_id,created_at DESC)$q$;
+  END IF;
+END
+$product_commission_links$;
+INSERT INTO schema_migrations (id) VALUES ('0021_product_commission_links')
+ON CONFLICT (id) DO NOTHING;
+
 `;

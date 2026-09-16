@@ -26,6 +26,7 @@ import {
 } from "../components/ui";
 import { Modal } from "../components/ui/Modal";
 import { PortalSkeleton } from "../components/PortalSkeleton";
+import { SalespersonGuide } from "../components/tracker/GettingStarted";
 import { portalView } from "../lib/portal-state";
 import { MoneyBarChart } from "../components/charts/Charts";
 import { fullLedger, displayStatus, clientLabel } from "../lib/ledger";
@@ -246,13 +247,15 @@ export default function SalespersonPortal() {
     <div>
       <PageHeader
         title="Salesperson portal"
-        subtitle="Your clients, commissions, and payouts"
+        subtitle="Your clients, commissions, and payouts — create a proposal, send it, get paid."
         actions={
           <Button onClick={() => setLeadOpen(true)}>
             <Plus className="h-4 w-4" /> Add lead
           </Button>
         }
       />
+
+      <div className="mb-5"><SalespersonGuide /></div>
 
       {sp && (
         <>

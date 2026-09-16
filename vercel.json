@@ -9,6 +9,10 @@
       "destination": "/api/kleegr/launch"
     },
     {
+      "source": "/pl/:id",
+      "destination": "/api/pl?l=:id"
+    },
+    {
       "source": "/((?!api/).*)",
       "destination": "/index.html"
     }

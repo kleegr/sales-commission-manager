@@ -380,4 +380,65 @@ $pipeline_policy$;
 INSERT INTO schema_migrations (id) VALUES ('0017_pipeline_policy')
 ON CONFLICT (id) DO NOTHING;
 
+-- 0018 — document line items + campaign link + extended kinds -----------------
+-- Line items are a JSONB array [{productId,name,qty,unitPriceMinor,billingKind}];
+-- campaign_id links a document to a campaign. Both additive/nullable so existing
+-- proposals/contracts (which store setupFee+monthly) keep working unchanged. The
+-- extended document kinds (quote|invoice|payment_request) need no schema change:
+-- the kind column is a free-text TEXT with a 'proposal' default and no CHECK.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS line_items JSONB;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS campaign_id TEXT;
+INSERT INTO schema_migrations (id) VALUES ('0018_document_line_items')
+ON CONFLICT (id) DO NOTHING;
+
+-- 0019 — product catalog ------------------------------------------------------
+-- Mirrors tracker-schema.ts so a deployed workspace picks the tables up on cold
+-- start without a manual scripts/migrate-tracker.ts run. Guarded: the tracker
+-- tables only exist once the tracker has been installed.
+DO $products_catalog$
+BEGIN
+  IF to_regclass('public.tracker_workspaces') IS NOT NULL THEN
+    EXECUTE $q$CREATE TABLE IF NOT EXISTS products (
+      tenant_id text NOT NULL, id text NOT NULL, name text NOT NULL, sku text, category text NOT NULL DEFAULT '',
+      description text NOT NULL DEFAULT '', price_minor numeric(30,0) NOT NULL DEFAULT 0, currency char(3) NOT NULL,
+      billing_kind text NOT NULL DEFAULT 'one_time' CHECK (billing_kind IN ('one_time','recurring','setup')),
+      recurring_interval text NOT NULL DEFAULT '', status text NOT NULL DEFAULT 'active',
+      ghl_product_id text, ghl_price_id text, created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now(),
+      archived_at timestamptz, PRIMARY KEY(tenant_id,id))$q$;
+    EXECUTE $q$CREATE UNIQUE INDEX IF NOT EXISTS uq_products_ghl ON products(tenant_id,ghl_product_id) WHERE ghl_product_id IS NOT NULL$q$;
+    EXECUTE $q$CREATE INDEX IF NOT EXISTS idx_products_status ON products(tenant_id,status)$q$;
+    EXECUTE $q$CREATE TABLE IF NOT EXISTS product_assignments (
+      tenant_id text NOT NULL, product_id text NOT NULL, salesperson_id text NOT NULL, created_at timestamptz DEFAULT now(),
+      PRIMARY KEY(tenant_id,product_id,salesperson_id),
+      FOREIGN KEY(tenant_id,product_id) REFERENCES products(tenant_id,id),
+      FOREIGN KEY(tenant_id,salesperson_id) REFERENCES salespeople(tenant_id,id))$q$;
+    EXECUTE $q$CREATE INDEX IF NOT EXISTS idx_product_assignments_sp ON product_assignments(tenant_id,salesperson_id)$q$;
+    EXECUTE $q$CREATE TABLE IF NOT EXISTS campaign_product_structures (
+      tenant_id text NOT NULL, campaign_id text NOT NULL, product_id text NOT NULL, plan_version_id text NOT NULL,
+      PRIMARY KEY(tenant_id,campaign_id,product_id),
+      FOREIGN KEY(tenant_id,campaign_id) REFERENCES campaigns(tenant_id,id),
+      FOREIGN KEY(tenant_id,product_id) REFERENCES products(tenant_id,id),
+      FOREIGN KEY(tenant_id,plan_version_id) REFERENCES plan_versions(tenant_id,id))$q$;
+    EXECUTE $q$CREATE INDEX IF NOT EXISTS idx_campaign_structures ON campaign_product_structures(tenant_id,campaign_id)$q$;
+  END IF;
+END
+$products_catalog$;
+INSERT INTO schema_migrations (id) VALUES ('0019_products_catalog')
+ON CONFLICT (id) DO NOTHING;
+
+-- 0020 — GHL-native invoicing on documents -----------------------------------
+-- A document can now carry the GoHighLevel invoice it spawned on approval: the
+-- returned invoice id, its lifecycle status (draft|sent|paid|void|...), and the
+-- hosted pay-link URL. All additive/nullable so existing documents are unchanged.
+-- ghl_invoice_id is how a paid-invoice webhook maps a payment back to our
+-- document to post commission per line item (see api/_lib/ghl-invoicing.ts). The
+-- existing receipt_event_key column is retained as the manual pending-receipt
+-- fallback when GHL is not connected.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS ghl_invoice_id     TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS ghl_invoice_status TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS ghl_invoice_url    TEXT;
+CREATE INDEX IF NOT EXISTS idx_documents_ghl_invoice ON documents(ghl_invoice_id) WHERE ghl_invoice_id IS NOT NULL;
+INSERT INTO schema_migrations (id) VALUES ('0020_ghl_invoicing')
+ON CONFLICT (id) DO NOTHING;
+
 `;

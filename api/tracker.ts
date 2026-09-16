@@ -11,6 +11,7 @@ import {createLead,editLead,attributeLead,attributionCandidate,saveOpportunity,s
 import {listResource,report,exportResource,payoutBalances} from './_lib/tracker-read.js';
 import {simulateExact,minor} from '../src/lib/exact-commission.js';
 import {previewSync,approveImport,pipelinePolicy} from './_lib/tracker-sync.js';
+import {saveProduct,deleteProduct,assignProducts,setCampaignStructures,syncGhlProducts} from './_lib/products.js';
 
 export const config={maxDuration:60};
 async function workspaceRead<T>(tenantId:string,fn:(db:SQL)=>Promise<T>){return database.transaction(async db=>{await db.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');const w=(await db.query('SELECT timezone FROM tracker_workspaces WHERE tenant_id=$1',[tenantId])).rows[0];if(w)await db.query("SELECT set_config('TimeZone',$1,true)",[w.timezone]);return fn(db);});}
@@ -19,6 +20,7 @@ export const mutations:Record<string,(db:SQL,u:any,b:any)=>Promise<any>>={
   enroll,linkSalesman,participant:saveParticipant,team:saveTeam,plan:publishPlan,assignment:assignPlan,
   lead:createLead,editLead,attribution:attributeLead,attributionCandidate,opportunity:saveOpportunity,campaign:saveCampaign,
   payment:recordPayment,refund:recordRefund,award:recordAward,adjustment:recordAdjustment,allocateReceipt,closePartialPayout,payout:createPayout,payoutAction:transitionPayout,settlement:settlePayout,approveImport,
+  saveProduct,deleteProduct,syncGhlProducts,assignProducts,setCampaignStructures,
   async confirmReceipt(db,u,b){admin(u);await lock(db,u.tenantId);const original=(await db.query('SELECT * FROM payments WHERE tenant_id=$1 AND id=$2 AND amount_minor IS NOT NULL',[u.tenantId,b.id])).rows[0];if(!original)throw new TrackerError('not_found','Receipt not found.');if(original.receipt_status==='confirmed')return{id:original.id,duplicate:true};if(original.receipt_status!=='pending')throw new TrackerError('invalid_status','Only pending receipts can be confirmed.');required(b.reason,'Confirmation evidence');const payload=JSON.parse(original.financial_inputs.requestFingerprint);const result=await recordPayment(db,u,{...payload,status:'confirmed',confirmExisting:true,...(b.preview?{preview:true}:{})});if(!b.preview)await audit(db,u,'payment',original.id,'confirmation_evidence',{reason:b.reason});return result;},
   async setup(db,u,b){admin(u);await lock(db,u.tenantId);if(!/^[A-Z]{3}$/.test(b.currency)||![0,2,3].includes(Number(b.minorDigits)))throw new TrackerError('invalid_currency','Select currency and decimal precision.');try{new Intl.DateTimeFormat('en',{timeZone:b.timezone}).format();}catch{throw new TrackerError('invalid_timezone','Select a valid IANA timezone.');}
     const current=(await db.query('SELECT * FROM tracker_workspaces WHERE tenant_id=$1',[u.tenantId])).rows[0];

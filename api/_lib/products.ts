@@ -149,7 +149,16 @@ export async function readGhlProducts(locationId:string,fetchImpl:typeof fetch=f
   const tokens=gateway?null:await resolveDirectoryTokens(locationId,fetchImpl);
   const headers:Record<string,string>=gateway?{}:{Authorization:`Bearer ${tokens!.location.accessToken}`,Version:'2021-07-28',accept:'application/json'};
   const ghlGet=async(path:string,params:Record<string,string>)=>{
-    if(gateway){const body=await gatewayPage(locationId,'products',Number(params.offset||0),fetchImpl,params);return body.payload;}
+    if(gateway){
+      // The Smart Productivity read gateway routes by resource name, not path.
+      // Map the catalog-list call to 'products' and the per-product price call to
+      // 'productPrice' (carrying productId), so each reaches the right upstream.
+      const isPrice=/\/products\/[^/]+\/price/.test(path);
+      const gp:Record<string,string>={...params};
+      let resource='products';
+      if(isPrice){resource='productPrice';const m=path.match(/\/products\/([^/]+)\/price/);gp.productId=m?m[1]:'';}
+      const body=await gatewayPage(locationId,resource,Number(params.offset||0),fetchImpl,gp);return body.payload;
+    }
     let r:Response;try{r=await fetchImpl(`${GHL}${path}?${new URLSearchParams(params)}`,{headers,redirect:'error',signal:AbortSignal.timeout(20000)});}catch{throw new TrackerError('provider_unreachable','GoHighLevel could not be reached to sync products.',502);}
     if(!r.ok)throw new TrackerError(r.status===429?'rate_limited':r.status===403?'scope_required':r.status===401?'ghl_not_connected':'provider_error',r.status===403?'The connected GHL app needs products.readonly and products/prices.readonly access.':'GoHighLevel could not list products.',r.status===429?429:r.status===401?409:502);
     return r.json();

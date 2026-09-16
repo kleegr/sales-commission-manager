@@ -478,3 +478,8 @@ input[type="number"] {
 .st-proposal-done h2{font-size:18px;font-weight:700;color:#101828}.st-proposal-done p{color:#344054;font-size:13px;line-height:1.55}
 .st-proposal-contact{text-align:center;color:#98a2b3;font-size:12px;overflow-wrap:anywhere}
 @media(max-width:900px){.st-proposal-layout{grid-template-columns:1fr}.st-proposal-side{position:static}.st-proposal-paper{padding:26px 22px}}
+
+.st-mode-toggle{margin:4px 0 8px}
+.st-mode-toggle .st-tabs{border:1px solid #e4e7ec;border-radius:10px;padding:4px;background:#fff;gap:4px;display:inline-flex}
+.st-mode-toggle .st-tabs button{padding:8px 20px;border:0;border-radius:7px}
+.st-mode-toggle .st-tabs button[aria-current=page]{background:linear-gradient(to right,#2563eb,#4f46e5);color:#fff}

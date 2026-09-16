@@ -33,7 +33,11 @@ export const KLEEGR_MANIFEST = {
     "opportunity.created",
     "opportunity.updated",
   ],
-  scopes: ["locations.readonly", "users.readonly", "contacts.readonly", "opportunities.readonly"],
+  // Products + Invoices scopes power the product catalog sync and GHL-native
+  // invoice/payment collection; contacts.write lets the app create the invoice
+  // recipient. After changing these, the marketplace app scopes must be updated
+  // in GoHighLevel and each sub-account reconnected so its token carries them.
+  scopes: ["locations.readonly", "users.readonly", "contacts.readonly", "contacts.write", "opportunities.readonly", "products.readonly", "products/prices.readonly", "invoices.readonly", "invoices.write"],
   requiredPermissions: [],
   placements: ["agency", "live", "settings", "app_launcher"],
   visibility: { agency: true, mobile: true, settings: true },

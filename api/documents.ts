@@ -157,6 +157,18 @@ async function salespersonName(tenantId: string, salespersonId: string | null, f
   return rows[0]?.name || fallback;
 }
 
+// documents.amount is stored in MAJOR units (dollars) so the whole app formats it
+// consistently. Line-item totals are computed in minor units, so divide by the
+// workspace currency's minor digits (default 2) when persisting them here.
+async function docMinorDigits(tenantId: string): Promise<number> {
+  try {
+    const { rows } = await query<{ payout_terms: any }>(`SELECT payout_terms FROM tracker_workspaces WHERE tenant_id = $1`, [tenantId]);
+    const d = Number(rows[0]?.payout_terms?.minorDigits);
+    return Number.isFinite(d) && d >= 0 && d <= 6 ? d : 2;
+  } catch { return 2; }
+}
+const minorToMajor = (minor: string, digits: number): number => Number(minor) / 10 ** digits;
+
 function mergeContextFor(business: BusinessProfile | null, client: any | null, spName: string, prospect: Prospect | null = null): MergeContext {
   return buildMergeContext({
     business,
@@ -446,7 +458,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           `${kind === "contract" ? "Contract" : "Proposal"} — ${client?.company_name ?? (prospect ? prospect.company || prospect.name : "New")}`;
         // amount = sum(qty*unitPriceMinor) when line items exist; else the legacy setup+monthly fallback.
         const amount = lineItemsAmount != null
-          ? Number(lineItemsAmount)
+          ? minorToMajor(lineItemsAmount, await docMinorDigits(user.tenantId))
           : client
           ? Number(client.setup_fee_amount ?? 0) + Number(client.monthly_subscription_amount ?? 0)
           : prospect ? prospect.setupFee + prospect.monthlySubscription : 0;
@@ -493,7 +505,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             throw e;
           }
         }
-        const amountClause = body.lineItems !== undefined && amountOverride != null ? `, amount=${Number(amountOverride)}` : "";
+        const amountClause = body.lineItems !== undefined && amountOverride != null ? `, amount=${minorToMajor(amountOverride, await docMinorDigits(user.tenantId))}` : "";
         await query(
           `UPDATE documents SET title=$1, style=$2, sections=$3::jsonb, body=$4, line_items=$5::jsonb, campaign_id=$6${amountClause}, updated_at=now() WHERE tenant_id=$7 AND id=$8`,
           [title, style, JSON.stringify(sections), sectionsToBody(sections), lineItems.length ? JSON.stringify(lineItems) : null, campaignId, user.tenantId, row.id],

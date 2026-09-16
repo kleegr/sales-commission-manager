@@ -18,6 +18,10 @@ export async function recordPayment(db:SQL,u:SessionUser,b:any,verifiedReferral?
   if(duplicate&&!confirming){if(receiptSignature(JSON.parse(duplicate.financial_inputs.requestFingerprint))!==receiptSignature(b))throw new TrackerError('idempotency_conflict','This receipt key was already used with different financial details.',409);return{id:duplicate.id,duplicate:true};}
   if(verifiedReferral){const allowed=(await db.query("SELECT 1 FROM campaign_participants cp JOIN campaigns c ON c.tenant_id=cp.tenant_id AND c.id=cp.campaign_id WHERE cp.tenant_id=$1 AND cp.campaign_id=$2 AND cp.salesperson_id=$3 AND cp.active=true AND c.status='active'",[u.tenantId,verifiedReferral.campaignId,verifiedReferral.referrerId])).rows.length;if(!allowed)throw new TrackerError('invalid_referral','The verified order referral is no longer assigned to this campaign.');}
   const savedLead=await client(db,u,required(b.clientId,'Lead')),lead=verifiedReferral?{...savedLead,referrer_id:verifiedReferral.referrerId,campaign_id:verifiedReferral.campaignId}:savedLead,date=dateOnly(b.date),amount=minor(b.amountMinor);
+  // OPTIONAL campaign override (trusted callers only, e.g. the GHL invoice→commission path): lets a
+  // document's campaign flow through even when the client row itself carries no campaign_id, closing the
+  // proposal→commission NULL-campaign gap. When absent this is a no-op (behaviour is exactly as before).
+  if(b.campaignId&&!verifiedReferral)lead.campaign_id=b.campaignId;
   if(amount<=0n||b.currency!==w.currency)throw new TrackerError('invalid_amount','Use a positive amount in the workspace currency.');
   if(!['confirmed','failed','pending','cancelled'].includes(b.status))throw new TrackerError('invalid_status','Choose the actual receipt status.');
   if(b.opportunityId && !(await db.query('SELECT id FROM opportunities WHERE tenant_id=$1 AND id=$2 AND client_id=$3',[u.tenantId,b.opportunityId,lead.id])).rows[0])throw new TrackerError('invalid_opportunity','Opportunity must belong to this lead.');
@@ -34,9 +38,15 @@ export async function recordPayment(db:SQL,u:SessionUser,b:any,verifiedReferral?
     // Explicit referrer is primary. Ownership is never silently treated as lead generation.
     const basis=b.assignmentParticipantId||lead.referrer_id;
     if(basis){await participant(db,u,basis);if(!Object.values(inputs.beneficiaries).includes(basis))throw new TrackerError('invalid_beneficiary','Assignment participant must be an attributed beneficiary of this lead.');
-      const candidates=(await db.query(`SELECT v.*,a.id AS assignment_id FROM plan_assignments a JOIN plan_versions v ON v.tenant_id=a.tenant_id AND v.id=a.plan_version_id WHERE a.tenant_id=$1 AND a.salesperson_id=$2 AND a.effective_from<=$3::date AND (a.effective_to IS NULL OR a.effective_to>=$3::date) AND (a.product_id IS NULL OR a.product_id=$4) AND (a.campaign_id IS NULL OR a.campaign_id=$5)`,[u.tenantId,basis,date,productId,lead.campaign_id])).rows;
-      if(candidates.length!==1)throw new TrackerError('assignment_required','Assign exactly one effective plan for this participant, product and campaign.',409);
-      const version=candidates[0],plan=version.config as ExactPlan;
+      // planVersionOverride FORCES the per-product/campaign structure a trusted caller already resolved
+      // (e.g. resolveProductStructure for a paid GHL invoice line). Absent it, the exact same effective-
+      // assignment lookup runs as before, so every existing recordPayment path is unchanged.
+      let version:any;
+      if(b.planVersionOverride){version=(await db.query('SELECT v.*,NULL AS assignment_id FROM plan_versions v WHERE v.tenant_id=$1 AND v.id=$2',[u.tenantId,b.planVersionOverride])).rows[0];if(!version)throw new TrackerError('invalid_plan_version','The forced commission structure does not exist in this workspace.',409);}
+      else{const candidates=(await db.query(`SELECT v.*,a.id AS assignment_id FROM plan_assignments a JOIN plan_versions v ON v.tenant_id=a.tenant_id AND v.id=a.plan_version_id WHERE a.tenant_id=$1 AND a.salesperson_id=$2 AND a.effective_from<=$3::date AND (a.effective_to IS NULL OR a.effective_to>=$3::date) AND (a.product_id IS NULL OR a.product_id=$4) AND (a.campaign_id IS NULL OR a.campaign_id=$5)`,[u.tenantId,basis,date,productId,lead.campaign_id])).rows;
+        if(candidates.length!==1)throw new TrackerError('assignment_required','Assign exactly one effective plan for this participant, product and campaign.',409);
+        version=candidates[0];}
+      const plan=version.config as ExactPlan;
       const earnings=calculateExact(plan,inputs);
       const firstSale=!(await db.query("SELECT id FROM payments WHERE tenant_id=$1 AND client_id=$2 AND receipt_status='confirmed' AND parent_payment_id IS NULL LIMIT 1",[u.tenantId,lead.id])).rows.length;
       if(firstSale)earnings.push(...calculateExact(plan,{...inputs,event:'sale'}));

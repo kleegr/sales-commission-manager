@@ -214,6 +214,34 @@ CREATE TABLE IF NOT EXISTS campaign_product_structures (
  FOREIGN KEY(tenant_id,plan_version_id) REFERENCES plan_versions(tenant_id,id)
 );
 CREATE INDEX IF NOT EXISTS idx_campaign_structures ON campaign_product_structures(tenant_id,campaign_id);
+-- Per-product affiliate program (WAVE): each product carries its own commission
+-- config; assigning a product to a rep mints a stable, unguessable tracking link.
+-- Mirrors migrations.ts 0021. All additive/defaulted so existing rows are unchanged.
+ALTER TABLE products ADD COLUMN IF NOT EXISTS commission_type text NOT NULL DEFAULT 'none' CHECK (commission_type IN ('none','percent','flat'));
+ALTER TABLE products ADD COLUMN IF NOT EXISTS commission_bps int NOT NULL DEFAULT 0;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS commission_flat_minor numeric(30,0) NOT NULL DEFAULT 0;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS commission_hold_days int NOT NULL DEFAULT 0;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS destination_url text NOT NULL DEFAULT '';
+-- One tracking link per (product,rep). link_id never changes once shared: unassign
+-- flips active=false (kept), re-assign reactivates the SAME row/link_id.
+CREATE TABLE IF NOT EXISTS product_links (
+ tenant_id text NOT NULL, link_id text NOT NULL, product_id text NOT NULL, salesperson_id text NOT NULL,
+ active boolean NOT NULL DEFAULT true, created_at timestamptz DEFAULT now(),
+ PRIMARY KEY(tenant_id,link_id), UNIQUE(tenant_id,product_id,salesperson_id),
+ FOREIGN KEY(tenant_id,product_id) REFERENCES products(tenant_id,id),
+ FOREIGN KEY(tenant_id,salesperson_id) REFERENCES salespeople(tenant_id,id)
+);
+CREATE INDEX IF NOT EXISTS idx_product_links_sp ON product_links(tenant_id,salesperson_id);
+CREATE INDEX IF NOT EXISTS idx_product_links_product ON product_links(tenant_id,product_id);
+-- Click capture for the public /pl/<link_id> redirect. tenant/product/rep resolve
+-- from the product_links row; the appended ?ref=<link_id> is the seam a later wave
+-- uses to credit the rep from a paid GHL order.
+CREATE TABLE IF NOT EXISTS product_link_clicks (
+ tenant_id text NOT NULL, link_id text NOT NULL, product_id text NOT NULL, salesperson_id text NOT NULL,
+ created_at timestamptz DEFAULT now(), ip text NOT NULL DEFAULT '', contact_id text NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_product_link_clicks_link ON product_link_clicks(link_id,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_product_link_clicks_sp ON product_link_clicks(tenant_id,salesperson_id,created_at DESC);
 -- GHL-native invoicing: the document carries the invoice it spawned on approval
 -- (id + lifecycle status + hosted pay-link). Mirrors migrations.ts 0020 so a
 -- tracker install converges on the same shape. documents exists by this point.
@@ -222,4 +250,5 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS ghl_invoice_status text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS ghl_invoice_url text;
 CREATE INDEX IF NOT EXISTS idx_documents_ghl_invoice ON documents(ghl_invoice_id) WHERE ghl_invoice_id IS NOT NULL;
 INSERT INTO schema_migrations(id) VALUES('0012_sales_tracker') ON CONFLICT DO NOTHING;
+INSERT INTO schema_migrations(id) VALUES('0021_product_commission_links') ON CONFLICT DO NOTHING;
 `;

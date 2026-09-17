@@ -292,7 +292,7 @@ import type {
 // --- Business profile ---
 
 export async function getBusinessProfile(): Promise<BusinessProfile | null> {
-  const res = await fetch("/api/business-profile", { headers: { accept: "application/json" } });
+  const res = await fetch("/api/business-profile", { cache: "no-store", headers: { accept: "application/json" } });
   const body = await asJson(res);
   return (body?.profile ?? null) as BusinessProfile | null;
 }

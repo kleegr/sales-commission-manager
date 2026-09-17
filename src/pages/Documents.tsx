@@ -177,6 +177,7 @@ export default function Documents() {
   const [templates, setTemplates] = useState<DocumentTemplate[]>([]);
   const [documents, setDocuments] = useState<ClientDocument[]>([]);
   const [profile, setProfile] = useState<BusinessProfile | null>(null);
+  const [profileError, setProfileError] = useState(false);
   const [ai, setAi] = useState<{ configured: boolean; model: string }>({ configured: false, model: "" });
   const [history, setHistory] = useState<AiGeneration[]>([]);
 
@@ -220,15 +221,16 @@ export default function Documents() {
   const reload = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setProfileError(false);
     try {
       const [docs, prof, aist] = await Promise.all([
         listDocuments({}),
-        getBusinessProfile().catch(() => null),
+        getBusinessProfile().catch(() => { setProfileError(true); return undefined; }),
         aiStatus().catch(() => ({ configured: false, model: "" })),
       ]);
       setTemplates(docs.templates);
       setDocuments(docs.documents);
-      setProfile(prof);
+      if (prof !== undefined) setProfile(prof);
       setAi(aist);
     } catch (e) {
       setError(msgOf(e, "Failed to load documents."));
@@ -492,7 +494,8 @@ export default function Documents() {
         <BackBar label="Back to documents" onBack={() => setView({ mode: "home" })} />
         <BusinessWizard
           initial={profile}
-          onSaved={(p) => { setProfile(p); setTab("business"); setView({ mode: "home" }); }}
+          onProgress={setProfile}
+          onSaved={(p) => { setProfile(p); setSavedNotice("Business profile saved for this location."); setTab("business"); setView({ mode: "home" }); }}
           onCancel={() => setView({ mode: "home" })}
         />
       </div>
@@ -550,7 +553,7 @@ export default function Documents() {
 
   const headerActions = (
     <div className="flex flex-wrap items-center gap-2">
-      <Button variant="secondary" onClick={() => setView({ mode: "wizard" })}>
+      <Button variant="secondary" disabled={loading||profileError} onClick={() => setView({ mode: "wizard" })}>
         <Sparkles className="h-4 w-4" /> {profile ? "Edit business profile" : "Set up business"}
       </Button>
     </div>
@@ -605,7 +608,7 @@ export default function Documents() {
       ) : (
         <>
           {activeTab === "business" && (
-            <BusinessPanel profile={profile} onEdit={() => setView({ mode: "wizard" })} />
+            profileError ? <Card><p role="alert">We could not load this location’s saved business profile. Your saved details have not been changed.</p><Button onClick={() => void reload()}>Retry loading profile</Button></Card> : <BusinessPanel profile={profile} onEdit={() => setView({ mode: "wizard" })} />
           )}
 
           {activeTab === "proposalTemplates" && (

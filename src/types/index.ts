@@ -401,6 +401,10 @@ export type ClientDocKind = "proposal" | "contract" | "quote" | "invoice" | "pay
 
 /** A product row on a client document (minor-unit prices, GHL-native). */
 export interface DocumentLineItem {
+  description?: string;
+  category?: string;
+  recurringInterval?: string;
+  currency?: string;
   productId: string;
   name: string;
   qty: number;

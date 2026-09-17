@@ -537,3 +537,46 @@ input[type="number"] {
 .dark .st-fieldset{border-color:#334155}
 .dark .st-fieldset>legend,.dark .st-subhead,.dark .st-product-links .st-disclosure h3{color:#f1f5f9}
 .dark .st-panel-inset{border-top-color:#334155}
+
+/* Guided proposals: a catalog-led editor with a persistent price summary. */
+.proposal-builder{max-width:1280px;margin:auto;color:#182230;padding:8px 0 40px}
+.proposal-builder-header{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:28px}
+.proposal-builder-header h1{font-size:28px;font-weight:750;letter-spacing:-.7px;margin:12px 0 8px}
+.proposal-builder-header p,.proposal-caption{color:#667085;font-size:13px;line-height:1.7}
+.proposal-back{display:inline-flex;align-items:center;gap:8px;color:#475467;font-size:13px}
+.proposal-draft{background:#eef4ff;color:#354a8a;border:1px solid #d8e3ff;border-radius:24px;padding:8px 14px;font-size:12px;white-space:nowrap}
+.proposal-steps{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid #e4e7ec;background:#fff;border-radius:14px;padding:14px;margin-bottom:24px;gap:8px}
+.proposal-steps button{display:flex;gap:10px;align-items:center;font-size:13px;padding:10px;border-radius:8px;color:#667085;text-align:left}
+.proposal-steps button span{display:grid;place-items:center;flex:0 0 27px;height:27px;border:1px solid #d0d5dd;border-radius:50%;font-size:12px}
+.proposal-steps button[aria-current]{background:#eef4ff;color:#2453d4;font-weight:650}
+.proposal-steps button[aria-current] span{background:#2453d4;color:#fff;border-color:#2453d4}
+.proposal-builder-grid{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:24px;align-items:start}
+.proposal-editor,.proposal-builder-summary{border:1px solid #e4e7ec;background:#fff;border-radius:16px;padding:28px;box-shadow:0 4px 20px #10182804;min-width:0}
+.proposal-editor>h2,.proposal-builder-summary>h2{font-size:19px;font-weight:700;margin:0 0 20px}
+.proposal-builder-summary{position:sticky;top:24px;padding:24px;background:#f8faff;border-color:#dce5fb}
+.proposal-builder-summary>p{font-size:13px;color:#667085;margin-bottom:18px}
+.proposal-eyebrow{font-size:10px;letter-spacing:1.5px;font-weight:750;color:#5270a4;display:block;margin-bottom:12px}
+.proposal-fields{display:grid;gap:20px}.proposal-fields-two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.proposal-builder textarea{width:100%;border:1px solid #d0d5dd;border-radius:9px;padding:12px;font:inherit;font-size:14px;line-height:1.7;resize:vertical;background:#fff;color:#182230}
+.proposal-builder :is(input,select,textarea,button):focus-visible{outline:3px solid #abc3ff;outline-offset:2px}
+.proposal-inline,.proposal-builder-footer{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.proposal-inline h3{font-size:14px;font-weight:650}
+.proposal-builder-footer{margin-top:28px;padding-top:20px;border-top:1px solid #eaecf0}
+.proposal-pricing{margin:16px 0}.proposal-pricing h3{font-size:15px;font-weight:700;margin-bottom:14px}
+.proposal-pricing dl{margin:0}.proposal-pricing dl>div{display:flex;justify-content:space-between;gap:16px;font-size:13px;padding:10px 0}
+.proposal-pricing dd{font-weight:650;white-space:nowrap}.proposal-pricing .proposal-total{border-top:1px solid #dce3ef;margin-top:10px;padding-top:16px;font-size:16px}
+.proposal-pricing>.proposal-caption{font-size:11px;margin-top:12px}
+.proposal-item{display:flex;justify-content:space-between;gap:20px;padding:16px 0;border-bottom:1px solid #eaecf0;font-size:14px}
+.proposal-item>div{min-width:0}.proposal-item>b{white-space:nowrap}.proposal-item p{font-size:13px;color:#667085;margin:6px 0;white-space:pre-line;overflow-wrap:anywhere}.proposal-item small{font-size:12px;color:#667085}
+.proposal-product-description{font-size:12px;color:#667085;margin-top:10px;line-height:1.6}.proposal-product-description p{white-space:pre-line;overflow-wrap:anywhere}
+.proposal-tracking-note{display:flex;align-items:flex-start;gap:10px;border-top:1px solid #dce3ef;padding-top:20px;font-size:13px;color:#344054}.proposal-tracking-note svg{flex-shrink:0;color:#16835c}.proposal-tracking-note small{display:block;margin-top:6px;font-size:12px;color:#667085;line-height:1.6}
+.proposal-advanced{border-top:1px solid #eaecf0;margin-top:24px;padding-top:16px;font-size:13px}.proposal-advanced summary{cursor:pointer;margin-bottom:14px;color:#475467}
+.proposal-catalog-link{display:inline-block;color:#2453d4;font-size:13px;margin-top:16px}
+.proposal-error{color:#b42318;background:#fff0ed;border:1px solid #fecdca;padding:14px 18px;border-radius:10px;margin-bottom:20px;font-size:14px}
+.proposal-success{color:#067647;background:#ecfdf3;border:1px solid #abefc6;padding:14px 18px;border-radius:10px;font-size:14px}
+.proposal-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}.proposal-metrics>div{border:1px solid #e4e7ec;border-radius:12px;background:#fff;padding:20px}.proposal-metrics span{font-size:12px;color:#667085}.proposal-metrics strong{display:block;font-size:28px;letter-spacing:-1px;margin-top:8px}
+.proposal-activity{display:flex;flex-direction:column;gap:3px;font-size:11px;color:#667085;margin-top:6px}
+@media(max-width:1000px){.proposal-builder-grid{grid-template-columns:minmax(0,1fr) 270px;gap:16px}.proposal-editor{padding:20px}.proposal-steps button{font-size:12px;padding:6px}}
+@media(max-width:760px){.proposal-builder-grid{grid-template-columns:1fr}.proposal-builder-summary{position:static;order:-1;padding:18px}.proposal-builder-summary .proposal-caption,.proposal-builder-summary .proposal-tracking-note{display:none}.proposal-builder-summary>h2{margin-bottom:4px}.proposal-builder-summary .proposal-pricing{margin:8px 0}.proposal-builder-header{align-items:flex-start}.proposal-builder-header h1{font-size:24px}.proposal-steps{grid-template-columns:repeat(2,1fr);padding:8px}.proposal-fields-two{grid-template-columns:1fr}.proposal-metrics{grid-template-columns:repeat(2,1fr)}.proposal-editor{padding:18px}.proposal-draft{display:none}}
+@media print{.st-proposal-top,.st-proposal-side,.proposal-print{display:none!important}.st-proposal-layout{display:block!important}.st-proposal-paper{border:0!important;box-shadow:none!important}.proposal-item{break-inside:avoid}}
+.dark .proposal-builder{color:#e2e8f0}.dark :is(.proposal-editor,.proposal-steps,.proposal-metrics>div){background:#111827;border-color:#334155}.dark .proposal-builder-summary{background:#162033;border-color:#334155}.dark .proposal-builder textarea{background:#0f172a;color:#e2e8f0;border-color:#475569}.dark .proposal-pricing dd{color:#e2e8f0}

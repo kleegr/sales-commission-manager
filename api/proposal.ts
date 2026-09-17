@@ -1,3 +1,4 @@
+import {proposalTotals} from '../src/lib/proposal-pricing.js';
 // /api/proposal — FLOW 4: the UNAUTHENTICATED public approval endpoint.
 //   GET  ?token=<raw>                              -> rendered document (marks 'viewed' on first open)
 //   POST {token,name,email,signature,agree:true}   -> approve & sign; ONE transaction that also creates the
@@ -61,11 +62,15 @@ async function render(db:SQL,row:any){
   const sp=d.salespersonId?(await db.query('SELECT name,email FROM salespeople WHERE tenant_id=$1 AND id=$2',[tenantId,d.salespersonId])).rows[0]:null;
   const merge=client?{companyName:client.company_name,contactName:client.contact_name,email:client.email,phone:client.phone,setupFee:Number(client.setup_fee_amount||0),monthlySubscription:Number(client.monthly_subscription_amount||0),signupDate:client.signup_date||''}:d.prospect?prospectAsClient(d.prospect):null;
   const currency=(await trackerInstalled(db))?(await db.query('SELECT currency FROM tracker_workspaces WHERE tenant_id=$1',[tenantId])).rows[0]?.currency||'USD':'USD';
-  const setupFee=merge?.setupFee||0,monthly=merge?.monthlySubscription||0,hasLines=Array.isArray(d.lineItems)&&d.lineItems.length>0,total=hasLines?Number(d.amount||0):(merge?setupFee+monthly:d.amount);
+  const hasLines=Array.isArray(d.lineItems)&&d.lineItems.length>0;
+  const workspace=(await db.query('SELECT payout_terms FROM tracker_workspaces WHERE tenant_id=$1',[tenantId])).rows[0];
+  const digits=Number(workspace?.payout_terms?.minorDigits??2),totals=proposalTotals(d.lineItems);
+  const setupFee=hasLines?Number(totals.oneTime)/10**digits:merge?.setupFee||0,monthly=hasLines?Number(totals.recurring.month||0n)/10**digits:merge?.monthlySubscription||0,total=hasLines?Number(totals.firstPayment)/10**digits:(merge?setupFee+monthly:d.amount);
   return{kind:d.kind,title:d.title,style:d.style,status:d.status,sections:applySectionsMerge(d.sections,buildMergeContext({business,client:merge,salespersonName:sp?.name||''})),
     branding:{businessName:business?.businessName||tenant?.name||'',logoUrl:business?.logoUrl||'',website:business?.website||'',companyAddress:business?.companyAddress||'',contactEmail:business?.contactEmail||'',contactPhone:business?.contactPhone||'',brandTone:business?.brandTone||'professional'},
     recipient:merge?{name:merge.contactName,company:merge.companyName,email:merge.email}:null,salesperson:sp?{name:sp.name,email:sp.email}:null,
-    amount:{total,setupFee,monthly,dueNow:receiptAmount(setupFee,total),currency},accepted:d.status==='signed'?{name:d.acceptedByName,at:d.acceptedAt||d.signedAt}:null,sentAt:d.sentAt};
+    lineItems:d.lineItems,digits,expiresAt:iso(row.token_expires_at),invoice:row.ghl_invoice_id?{status:row.ghl_invoice_status,url:row.ghl_invoice_url}:null,
+    amount:{total,setupFee,monthly,dueNow:hasLines?total:receiptAmount(setupFee,total),currency},accepted:d.status==='signed'?{name:d.acceptedByName,at:d.acceptedAt||d.signedAt}:null,sentAt:d.sentAt};
 }
 /** GET: render for the recipient; the first open of a 'sent' document marks it 'viewed'. */
 export async function viewProposal(db:SQL,token:string){
@@ -90,6 +95,7 @@ export async function acceptProposal(db:SQL,token:string,b:any,ip:string){
     await db.query(`INSERT INTO clients(${base.join(',')}) VALUES(${base.map((_,k)=>`$${k+1}`).join(',')})`,vals);
     client=(await db.query('SELECT * FROM clients WHERE tenant_id=$1 AND id=$2',[tenantId,clientId])).rows[0];
   }
+  if(clientCreated)await db.query('UPDATE documents SET created_client_id=$2 WHERE id=$1',[row.id,clientId]);
   let opportunityId:string|null=null,receiptEventKey:string|null=null,receipt:'recorded'|'skipped'|'failed'='skipped',receiptError:string|null=null;
   let invoice:{id:string;url:string|null;status:string}|null=null,invoiceError:string|null=null;
   const w=tracker?(await db.query('SELECT * FROM tracker_workspaces WHERE tenant_id=$1',[tenantId])).rows[0]:null;
@@ -100,14 +106,14 @@ export async function acceptProposal(db:SQL,token:string,b:any,ip:string){
       const digits=Number(w.payout_terms?.minorDigits??2),setupFee=Number(client.setup_fee_amount||0),feeTotal=setupFee+Number(client.monthly_subscription_amount||0);
       // Line-item proposals value the deal + due amount from the line items (whole
       // invoice is due); fee-model proposals keep the setup-fee-due-now behaviour.
-      const lineMinor=(d.lineItems||[]).reduce((s:bigint,li:any)=>s+BigInt(Math.round(Number(li.qty||0)*Number(li.unitPriceMinor||0))),0n);
+      const lineMinor=proposalTotals(d.lineItems||[]).firstPayment;
       const hasLines=(d.lineItems||[]).length>0&&lineMinor>0n;
       const valueMinor=hasLines?lineMinor.toString():toMinor(feeTotal,digits);
       const dueMinor=hasLines?lineMinor.toString():toMinor(receiptAmount(setupFee,feeTotal),digits);
       opportunityId=id('opp');await db.query(`INSERT INTO opportunities(id,tenant_id,client_id,name,owner_id,value_minor,currency,status,source,won_at) VALUES($1,$2,$3,$4,$5,$6,$7,'won','manual',now())`,[opportunityId,tenantId,clientId,d.title,spId,valueMinor,w.currency]);
       if(BigInt(dueMinor)>0n){
         const key=`proposal:${d.id}`;
-        await recordPayment(db,system,{eventKey:key,clientId,opportunityId,date:calendarDate(w.timezone||'UTC',now),amountMinor:dueMinor,currency:w.currency,status:'pending',source:'manual',productId:'',notes:`"${d.title}" approved by ${name} (${email}). Confirm when the cash arrives.`});
+        await recordPayment(db,system,{eventKey:key,clientId,opportunityId,date:calendarDate(w.timezone||'UTC',now),amountMinor:dueMinor,currency:w.currency,status:'pending',source:'manual',productId:'',notes:`"${d.title}" approved by ${name} (${email}). Confirm when the cash arrives.`},undefined,spId?d.id:undefined);
         receiptEventKey=key;receipt='recorded';
       }
       await db.query('RELEASE SAVEPOINT flow4_finance');

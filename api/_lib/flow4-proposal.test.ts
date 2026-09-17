@@ -51,6 +51,27 @@ try{
     const d=rowToDocument({id:'d',prospect:'{"name":"P","email":"p@x.co"}',public_token:'h',accepted_by_name:'P'});assert.equal(d.prospect?.name,'P');assert.equal(d.hasLink,true);assert.equal(d.acceptedByName,'P');assert.equal(d.createdClientId,null);
   });
 
+  await check('catalog proposal tracks owner, product snapshots, public pricing and locked shared content',async()=>{
+    await db.query("INSERT INTO sessions(id,user_id,tenant_id,expires_at) VALUES($1,'owner','a',now()+interval '1 hour')",[sha('owner-session')]);
+    await db.query("INSERT INTO products(tenant_id,id,name,description,category,price_minor,currency,billing_kind,recurring_interval,status) VALUES('a','wa','WhatsApp','Managed account','Messaging',1900,'USD','recurring','month','active'),('a','setup','Setup','Configuration','Services',10000,'USD','setup','','active')");
+    const own=(body:any)=>({method:'POST',headers:{authorization:'Bearer owner-session',host:'app.test'},body});
+    const r=await call(documentsHandler,own({op:'create',kind:'proposal',salespersonId:'sp-alice',prospect:{name:'Catalog Client',email:'catalog@example.test'},lineItems:[{productId:'wa',qty:3,unitPriceMinor:'1900'},{productId:'setup',qty:1,unitPriceMinor:'10000'}],sections:[{id:'summary',type:'solution',title:'Summary',content:'An editable summary'}]}));
+    assert.equal(r.status,201,JSON.stringify(r.body));const doc=r.body.id;
+    const saved=(await db.query('SELECT * FROM documents WHERE id=$1',[doc])).rows[0];assert.equal(saved.salesperson_id,'sp-alice');assert.equal(saved.line_items[0].description,'Managed account');assert.equal(Number(saved.amount),157);
+    const invalid=await call(documentsHandler,own({op:'create',kind:'proposal',salespersonId:'not-in-tenant'}));assert.equal(invalid.status,403);
+    const share=await call(documentsHandler,own({op:'link',id:doc}));const first=share.body.link.split('/p/')[1];
+    const view=await pub({method:'GET',query:{token:first}});assert.equal(view.status,200);assert.equal(view.body.lineItems[0].description,'Managed account');assert.deepEqual(view.body.amount,{total:157,setupFee:100,monthly:57,dueNow:157,currency:'USD'});
+    assert.equal((await call(documentsHandler,own({op:'update_document',id:doc,title:'Silent edit'}))).status,409);
+    assert.equal((await call(documentsHandler,own({op:'section_update',id:doc,scope:'document',sectionId:'summary',content:'Silent edit'}))).status,409);
+    assert.equal((await call(documentsHandler,own({op:'set_status',id:doc,status:'signed'}))).body.error,'automatic_status');
+    assert.equal((await call(documentsHandler,own({op:'set_status',id:doc,status:'canceled'}))).status,200);
+    assert.equal((await pub({method:'GET',query:{token:first}})).status,404);
+    await call(documentsHandler,own({op:'set_status',id:doc,status:'draft'}));
+    assert.equal((await call(documentsHandler,own({op:'update_document',id:doc,title:'Revised draft'}))).status,200);
+    // Keep the original test's document counts independent of this draft.
+    await db.query('DELETE FROM documents WHERE id=$1',[doc]);
+  });
+
   let docId='',token='';
   await check('salesperson creates a PROSPECT proposal (no client yet); amount = setup + monthly',async()=>{
     const r=await call(documentsHandler,asRep({op:'create',kind:'proposal',prospect:{name:'Pat Prospect',email:'pat@example.test',company:'Prospect Co',phone:'555-0100',setupFee:500,monthlySubscription:250},title:'Growth plan'}));

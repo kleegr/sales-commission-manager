@@ -6,6 +6,9 @@
 // clear inline message and the server rejects them too). Shows a live total.
 // GHL-native minor-unit pricing; used on proposals, quotes, invoices, etc.
 // ============================================================================
+import {useState} from 'react';
+import {billingLabel} from '../../lib/proposal-pricing';
+import {ProposalPricing} from './ProposalPricing';
 import { Plus, Trash2, AlertTriangle } from "lucide-react";
 import { Button, Field, Input, Select } from "../ui";
 import { DecimalInput } from "../TrackerForm";
@@ -18,6 +21,10 @@ export interface CatalogProduct {
   price_minor: string;
   billing_kind: string;
   currency?: string;
+  description?: string;
+  category?: string;
+  recurring_interval?: string;
+  ghl_product_id?: string;
 }
 
 const BILLING: Record<string, string> = { one_time: "One-time", recurring: "Recurring", setup: "Setup fee" };
@@ -30,7 +37,7 @@ export function lineItemsTotalMinor(items: DocumentLineItem[]): bigint {
 }
 
 export function LineItemsEditor({
-  items, onChange, products, currency, digits, loading,
+  items, onChange, products, currency, digits, loading, showSummary = true,
 }: {
   items: DocumentLineItem[];
   onChange: (items: DocumentLineItem[]) => void;
@@ -38,7 +45,12 @@ export function LineItemsEditor({
   currency: string;
   digits: number;
   loading?: boolean;
+  showSummary?: boolean;
 }) {
+  const [search,setSearch]=useState('');
+  const [category,setCategory]=useState('');
+  const categories=[...new Set(products.map(p=>p.category).filter(Boolean))];
+  const available=products.filter(p=>(!p.currency||p.currency===currency)&&(!category||p.category===category)&&`${p.name} ${p.description||''}`.toLowerCase().includes(search.toLowerCase()));
   const byId = new Map(products.map((p) => [p.id, p]));
   const money = (v: string) => displayMinor(v || "0", currency, digits);
   const set = (i: number, patch: Partial<DocumentLineItem>) => onChange(items.map((it, j) => (j === i ? { ...it, ...patch } : it)));
@@ -47,11 +59,11 @@ export function LineItemsEditor({
     const p = byId.get(productId);
     if (!p) { set(i, { productId: "" }); return; }
     // Prefill the floor price + name + billing when a product is chosen.
-    set(i, { productId, name: p.name, unitPriceMinor: p.price_minor, billingKind: p.billing_kind });
+    set(i, { productId, name: p.name, unitPriceMinor: p.price_minor, billingKind: p.billing_kind, description:p.description, category:p.category, recurringInterval:p.recurring_interval, currency:p.currency });
   };
   const floorOf = (productId: string): bigint => { try { return BigInt(byId.get(productId)?.price_minor || "0"); } catch { return 0n; } };
   const belowFloor = (it: DocumentLineItem): boolean => { try { return !!it.productId && BigInt(it.unitPriceMinor || "0") < floorOf(it.productId); } catch { return false; } };
-  const total = lineItemsTotalMinor(items);
+
 
   return (
     <div className="space-y-3">
@@ -68,6 +80,7 @@ export function LineItemsEditor({
         </p>
       ) : (
         <>
+          <div className="proposal-fields-two"><Input aria-label="Search catalog products" placeholder="Search products…" value={search} onChange={e=>setSearch(e.target.value)}/><Select aria-label="Product category" value={category} onChange={e=>setCategory(e.target.value)}><option value="">All categories</option>{categories.map(c=><option key={c} value={c}>{c}</option>)}</Select></div>
           {items.length > 0 && (
             <div className="space-y-2">
               {items.map((it, i) => {
@@ -79,7 +92,7 @@ export function LineItemsEditor({
                         <Field label="Product">
                           <Select value={it.productId} onChange={(e) => pickProduct(i, e.target.value)}>
                             <option value="">Choose a product…</option>
-                            {products.map((p) => (
+                            {[...available, ...products.filter(p=>p.id===it.productId&&!available.some(a=>a.id===p.id))].map((p) => (
                               <option key={p.id} value={p.id}>{p.name} — {money(p.price_minor)} · {BILLING[p.billing_kind] ?? p.billing_kind}</option>
                             ))}
                           </Select>
@@ -87,12 +100,12 @@ export function LineItemsEditor({
                       </div>
                       <div className="sm:col-span-2">
                         <Field label="Qty">
-                          <Input type="number" min={1} value={it.qty} onChange={(e) => set(i, { qty: Math.max(1, Number(e.target.value) || 1) })} />
+                          <Input type="number" min={1} max={1000000} step={1} value={it.qty} onChange={(e) => set(i, { qty: Math.min(1000000, Math.max(1, Math.floor(Number(e.target.value)) || 1)) })} />
                         </Field>
                       </div>
                       <div className="sm:col-span-3">
                         <Field label={`Unit price (${currency})`}>
-                          <DecimalInput label="Unit price" value={it.unitPriceMinor} digits={digits} onChange={(v) => set(i, { unitPriceMinor: v })} />
+                          <DecimalInput key={it.productId} label="Unit price" value={it.unitPriceMinor} digits={digits} onChange={(v) => set(i, { unitPriceMinor: v })} />
                         </Field>
                       </div>
                       <div className="sm:col-span-1 flex justify-end pb-1">
@@ -101,12 +114,13 @@ export function LineItemsEditor({
                         </Button>
                       </div>
                     </div>
+                    {it.productId&&<div className="proposal-product-description"><strong>{it.category||'Product'} · {billingLabel(it)}</strong><p>{it.description||'No description provided in the product catalog.'}</p></div>}
                     <div className="mt-1 flex items-center justify-between text-xs">
                       {bad ? (
                         <span className="flex items-center gap-1 text-rose-600 dark:text-rose-400">
                           <AlertTriangle className="h-3.5 w-3.5" /> Below the product floor — minimum {money(byId.get(it.productId)?.price_minor || "0")}.
                         </span>
-                      ) : <span className="text-slate-400">Line total {money((BigInt(it.qty || 1) * BigInt(it.unitPriceMinor || "0")).toString())}</span>}
+                      ) : <span className="text-slate-400">Line total {money(lineItemsTotalMinor([it]).toString())}</span>}
                     </div>
                   </div>
                 );
@@ -119,9 +133,10 @@ export function LineItemsEditor({
               <Plus className="h-4 w-4" /> Add product
             </Button>
             {items.length > 0 && (
-              <span className="text-sm font-semibold text-slate-800 dark:text-slate-100">Total {money(total.toString())}</span>
+              <span className="text-xs text-slate-500">{items.length} product rows</span>
             )}
           </div>
+          {showSummary&&items.length>0&&<ProposalPricing items={items.filter(i=>i.productId)} currency={currency} digits={digits} detailed={false}/>}
         </>
       )}
     </div>

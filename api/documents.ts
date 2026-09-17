@@ -145,6 +145,10 @@ async function resolveClient(
   if (isSelfRole(user.role) && client.salesperson_id !== user.salespersonId) {
     return { ok: false, status: 403, error: "client_not_yours" };
   }
+  if(user.role==='sales_manager') {
+    const owned=(await query('SELECT id FROM salespeople WHERE tenant_id=$1 AND id=$2 AND manager_user_id=$3',[user.tenantId,client.salesperson_id,user.id])).rows.length;
+    if(!owned)return {ok:false,status:403,error:'client_not_yours'};
+  }
   return { ok: true, client };
 }
 
@@ -380,6 +384,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const row = await loadDocumentRow(user, String(body.id ?? ""));
         if (!row) return res.status(404).json({ error: "document_not_found" });
         const d = rowToDocument(row);
+        if(row.status!=='draft'||row.ghl_invoice_id)return res.status(409).json({error:'document_locked',message:'Shared proposals are locked. Cancel and reopen as a draft before editing; previous links will stop working.'});
         const gate = ensureKind(d.kind);
         if (gate) return res.status(403).json({ error: gate });
         let next: DocumentSection[] = d.sections;
@@ -388,10 +393,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           next = updateSection(d.sections, String(body.sectionId ?? ""), { title: body.title, content: body.content, type: body.type }, sectionKind(d.kind));
         else if (op === "section_delete") next = deleteSection(d.sections, String(body.sectionId ?? ""));
         else if (op === "section_reorder") next = reorderSections(d.sections, body.orderedIds);
-        await query(
-          `UPDATE documents SET sections=$1::jsonb, body=$2, updated_at=now() WHERE tenant_id=$3 AND id=$4`,
+        const changed = await query(
+          `UPDATE documents SET sections=$1::jsonb, body=$2, updated_at=now() WHERE tenant_id=$3 AND id=$4 AND status='draft' AND ghl_invoice_id IS NULL RETURNING id`,
           [JSON.stringify(next), sectionsToBody(next), user.tenantId, row.id],
         );
+        if(!changed.rows.length)return res.status(409).json({error:"document_locked"});
         return res.status(200).json({ ok: true, sections: next });
       }
 
@@ -431,7 +437,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           if (!cr.rows[0]) return res.status(400).json({ error: "invalid_campaign" });
           campaignId = cr.rows[0].id;
         }
-        const docSpId0 = client?.salesperson_id ?? user.salespersonId ?? null;
+        let docSpId0 = client?.salesperson_id ?? user.salespersonId ?? null;
+        if (body.salespersonId) {
+          if (isSelfRole(user.role) && body.salespersonId !== user.salespersonId) return res.status(403).json({error:'forbidden'});
+          const seller = (await query<any>('SELECT id,manager_user_id FROM salespeople WHERE tenant_id=$1 AND id=$2',[user.tenantId,String(body.salespersonId)])).rows[0];
+          if (!seller || (user.role==='sales_manager' && seller.manager_user_id!==user.id)) return res.status(403).json({error:'invalid_salesperson'});
+          if(client?.salesperson_id&&client.salesperson_id!==seller.id)return res.status(400).json({error:'salesperson_mismatch',message:'Use the existing client owner for consistent sales attribution.'});
+          docSpId0=seller.id;
+        }
+        if (user.role==='sales_manager' && docSpId0) {
+          const owned=(await query('SELECT id FROM salespeople WHERE tenant_id=$1 AND id=$2 AND manager_user_id=$3',[user.tenantId,docSpId0,user.id])).rows.length;
+          if(!owned)return res.status(403).json({error:'forbidden'});
+        }
         let lineItems: Array<{ productId: string; name: string; qty: number; unitPriceMinor: string; billingKind: string }> = [];
         let lineItemsAmount: string | null = null;
         if (body.lineItems != null) {
@@ -447,10 +464,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         const business = await loadBusinessProfile(user.tenantId);
         if (business) style = (kind === "contract" ? business.contractStyle : business.proposalStyle) || style;
-        const spId = client?.salesperson_id ?? user.salespersonId ?? null;
+        const spId = docSpId0;
         const spName = await salespersonName(user.tenantId, spId, user.name ?? "");
         const ctx = mergeContextFor(business, client, spName, prospect);
-        const baked = applySectionsMerge(baseSections, ctx);
+        const baked = applySectionsMerge(body.sections != null ? normalizeSections(sectionKind(kind), body.sections) : baseSections, ctx);
 
         const id = uid("doc");
         const title =
@@ -476,6 +493,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const row = await loadDocumentRow(user, String(body.id ?? ""));
         if (!row) return res.status(404).json({ error: "document_not_found" });
         const d = rowToDocument(row);
+        if(row.status!=='draft'||row.ghl_invoice_id)return res.status(409).json({error:'document_locked',message:'Shared proposals are locked. Cancel and reopen as a draft before editing; previous links will stop working.'});
         const gate = ensureKind(d.kind);
         if (gate) return res.status(403).json({ error: gate });
         const title = body.title != null ? String(body.title).trim() || d.title : d.title;
@@ -506,10 +524,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           }
         }
         const amountClause = body.lineItems !== undefined && amountOverride != null ? `, amount=${minorToMajor(amountOverride, await docMinorDigits(user.tenantId))}` : "";
-        await query(
-          `UPDATE documents SET title=$1, style=$2, sections=$3::jsonb, body=$4, line_items=$5::jsonb, campaign_id=$6${amountClause}, updated_at=now() WHERE tenant_id=$7 AND id=$8`,
+        const saved = await query(
+          `UPDATE documents SET title=$1, style=$2, sections=$3::jsonb, body=$4, line_items=$5::jsonb, campaign_id=$6${amountClause}, updated_at=now() WHERE tenant_id=$7 AND id=$8 AND status='draft' AND ghl_invoice_id IS NULL RETURNING id`,
           [title, style, JSON.stringify(sections), sectionsToBody(sections), lineItems.length ? JSON.stringify(lineItems) : null, campaignId, user.tenantId, row.id],
         );
+        if(!saved.rows.length)return res.status(409).json({error:'document_locked'});
         return res.status(200).json({ ok: true, id: row.id });
       }
 
@@ -518,14 +537,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const row = await loadDocumentRow(user, String(body.id ?? ""));
         if (!row) return res.status(404).json({ error: "document_not_found" });
         const to = String(body.status ?? "");
+        if(row.kind!=='contract' && ['sent','viewed','signed'].includes(to))return res.status(400).json({error:'automatic_status',message:'Send a link to share. Views and acceptance are tracked from the client link automatically.'});
         if (!isValidStatus(to)) return res.status(400).json({ error: "invalid_status" });
         const from = (row.status ?? "draft") as DocStatus;
         if (!canTransitionStatus(from, to)) return res.status(400).json({ error: "invalid_transition" });
         const stampCol =
           to === "sent" ? "sent_at" : to === "viewed" ? "viewed_at" : to === "signed" ? "signed_at" : to === "canceled" ? "canceled_at" : null;
         await query(
-          `UPDATE documents SET status=$1, updated_at=now()${stampCol ? `, ${stampCol}=now()` : ""} WHERE tenant_id=$2 AND id=$3`,
-          [to, user.tenantId, row.id],
+          `UPDATE documents SET status=$1, public_token=NULL, token_expires_at=NULL, updated_at=now()${stampCol ? `, ${stampCol}=now()` : ""} WHERE tenant_id=$2 AND id=$3 AND status=$4`,
+          [to, user.tenantId, row.id, from],
         );
         return res.status(200).json({ ok: true });
       }
@@ -621,6 +641,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           title: d.title,
           style: d.style,
           status: d.status,
+          lineItems:d.lineItems, digits:await docMinorDigits(user.tenantId),
+          currency:(await query('SELECT currency FROM tracker_workspaces WHERE tenant_id=$1',[user.tenantId])).rows[0]?.currency||'USD',
           sections: applySectionsMerge(d.sections, ctx),
           branding: brandingOf(business),
         });

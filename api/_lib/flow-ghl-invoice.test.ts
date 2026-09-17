@@ -93,6 +93,8 @@ try{
     assert.equal(await count('commission_ledger'),0,'no commission until the invoice is paid');
   });
 
+  // Later CRM attribution changes must not steal this proposal's commission.
+  await db.query("UPDATE clients SET referrer_id=NULL WHERE id=(SELECT created_client_id FROM documents WHERE id=$1)",[docId]);
   await check('a paid-invoice webhook posts ONE commission per line item at PRODUCT-SPECIFIC rates, flows the campaign, marks paid, cancels the fallback',async()=>{
     const r=await tx((c:any)=>applyInvoicePaidEvent(c,{ghlInvoiceId:invoiceId,status:'paid',locationId:'loc_a'}));
     assert.equal(r.applied,true);assert.equal(r.action,'invoice_paid');assert.equal(r.lineCount,2);assert.equal(r.earnings,2);

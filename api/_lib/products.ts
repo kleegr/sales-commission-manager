@@ -20,7 +20,7 @@ import {gatewayPage,readGatewayEnabled} from './kleegr-read.js';
 import {safeDestination} from './tracker-attribution.js';
 import {reconcileProductLinks} from './product-links.js';
 
-export interface ProductLineItem {productId:string;name:string;qty:number;unitPriceMinor:string;billingKind:string}
+export interface ProductLineItem {productId:string;name:string;qty:number;unitPriceMinor:string;billingKind:string;description?:string;category?:string;recurringInterval?:string;currency?:string}
 const BILLING_KINDS=['one_time','recurring','setup'];
 const str=(v:unknown)=>typeof v==='string'?v.trim():'';
 const cur=(v:unknown,fallback:string):string=>{const s=String(v??'').trim().toUpperCase();if(!s)return fallback;if(!/^[A-Z]{3}$/.test(s))throw new TrackerError('invalid_currency','Currency must be a 3-letter ISO code.');return s;};
@@ -138,18 +138,22 @@ export async function resolveProductStructure(db:SQL,tenantId:string,campaignId:
 // ---------------------------------------------------------------------------
 export async function validateDocumentLineItems(db:SQL,tenantId:string,opts:{salespersonId:string|null;enforceAssignment:boolean},raw:unknown):Promise<{items:ProductLineItem[];amountMinor:string}>{
   if(!Array.isArray(raw))return{items:[],amountMinor:'0'};
+  if(raw.length>200)throw new TrackerError('too_many_products','A proposal can contain up to 200 products.');
+  const currency=await workspaceCurrency(db,tenantId);
   const items:ProductLineItem[]=[];let total=0n;
   for(const entry of raw.slice(0,200)){
     const o=(entry&&typeof entry==='object'?entry:{}) as Record<string,unknown>;
     const productId=str(o.productId);if(!productId)throw new TrackerError('unknown_product','Each line item must reference a product.');
     const product=(await db.query('SELECT * FROM products WHERE tenant_id=$1 AND id=$2',[tenantId,productId])).rows[0];
     if(!product)throw new TrackerError('unknown_product','A line item references a product that does not exist in this workspace.');
+    if(product.status!=='active')throw new TrackerError('inactive_product','Only active products can be added to a proposal.');
+    if(product.currency!==currency)throw new TrackerError('currency_mismatch','Choose products in the workspace currency.');
     if(opts.enforceAssignment){const assigned=(await db.query('SELECT 1 FROM product_assignments WHERE tenant_id=$1 AND product_id=$2 AND salesperson_id=$3',[tenantId,productId,opts.salespersonId||'__none__'])).rows.length;if(!assigned)throw new TrackerError('product_not_assigned','This product is not assigned to you.',403);}
     const qty=Number(o.qty);if(!Number.isInteger(qty)||qty<=0||qty>1000000)throw new TrackerError('invalid_quantity','Line item quantity must be a positive whole number.');
     const unitPriceMinor=minor(String(o.unitPriceMinor??'0'));if(unitPriceMinor<0n)throw new TrackerError('invalid_price','Line item price must not be negative.');
     if(unitPriceMinor<minor(String(product.price_minor)))throw new TrackerError('price_below_floor','Line item price is below the product floor.');
-    const name=str(o.name)||product.name;const billingKind=BILLING_KINDS.includes(String(o.billingKind))?String(o.billingKind):product.billing_kind;
-    items.push({productId,name,qty,unitPriceMinor:unitPriceMinor.toString(),billingKind});
+    // Snapshot catalog details; the browser cannot override product identity or billing.
+    items.push({productId,name:product.name,description:product.description||'',category:product.category||'',recurringInterval:product.recurring_interval||'',currency:product.currency,qty,unitPriceMinor:unitPriceMinor.toString(),billingKind:product.billing_kind});
     total+=BigInt(qty)*unitPriceMinor;
   }
   return{items,amountMinor:total.toString()};

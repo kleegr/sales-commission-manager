@@ -396,6 +396,8 @@ export const reorderDocSections = (
   docPost({ op: "section_reorder", scope, id, orderedIds });
 
 export interface CreateClientDocInput {
+  salespersonId?: string | null;
+  sections?: DocumentSection[];
   kind: ClientDocKind;
   clientId?: string | null;
   templateId?: string | null;
@@ -423,6 +425,9 @@ export const setDocumentStatus = (id: string, status: DocStatus): Promise<{ ok: 
   docPost({ op: "set_status", id, status });
 
 export interface PreviewResponse {
+  lineItems?: DocumentLineItem[];
+  currency?: string;
+  digits?: number;
   kind: DocumentKind;
   title: string;
   style: DocumentStyle;

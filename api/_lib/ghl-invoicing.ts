@@ -196,7 +196,7 @@ export async function applyInvoicePaidEvent(db:SQL,event:InvoicePaidEvent):Promi
       externalId:event.ghlInvoiceId,productId:li.productId||'',campaignId:campaignId||undefined,
       planVersionOverride:planVersionOverride||undefined,
       notes:`GHL invoice ${event.ghlInvoiceId} paid — "${d.title}" line ${index+1} (${li.name||li.productId||'item'}).`,
-    });
+    },undefined,d.salespersonId?d.id:undefined);
     posted++;
   }
   // Supersede the manual pending fallback receipt (`proposal:<docId>`): the GHL

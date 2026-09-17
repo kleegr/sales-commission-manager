@@ -17,9 +17,9 @@ export default function ProposalOverview({refreshToken,from,to,campaignId}:{refr
  return <section className="dashboard-proposals" aria-label="Proposal overview">
    <div className="st-panel-heading"><div><h2>Proposals</h2><p className="st-help">From draft to client approval. Date filters use proposal creation date (UTC); sales mode applies to orders below.</p></div><Link className="st-button" to="/documents">View proposals →</Link></div>
    {error&&<p role="alert" className="proposal-error">{error}{docs?' Showing the last loaded data.':''}</p>}
-   <div className="dashboard-proposal-stats">{counts.map(([label,count])=><div className="st-panel" key={label}><span>{label}</span><strong>{docs?count:'—'}</strong></div>)}</div>
+   <div className="dashboard-proposal-workspace"><div className="dashboard-proposal-stats">{counts.map(([label,count])=><div className="st-panel" key={label}><span>{label}</span><strong>{docs?count:'—'}</strong></div>)}</div>
    <div className="st-panel dashboard-proposal-recent"><div className="st-panel-heading"><h3>Recent proposals</h3><span className="st-help">Latest updates</span></div>
      {!docs?<p role="status">{error?'Proposal data unavailable.':'Loading proposals…'}</p>:!recent.length?<p className="st-help">{from||to||campaignId?'No proposals match these filters.':'No proposals yet. Create your first proposal to see its progress here.'}</p>:<ul>{recent.map(d=><li key={d.id}><div><Link to="/documents">{d.title||'Untitled proposal'}</Link><small>Updated {new Date(d.updatedAt).toLocaleDateString()}</small></div><span className={`dashboard-proposal-status is-${d.status}`}>{labels[d.status]||d.status}</span></li>)}</ul>}
-   </div><p className="st-help">Approved proposals are agreements, not collected revenue. Sales and commissions follow verified payments.</p>
+   </div></div><p className="st-help">Approved proposals are agreements, not collected revenue. Sales and commissions follow verified payments.</p>
  </section>;
 }

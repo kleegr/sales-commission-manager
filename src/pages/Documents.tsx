@@ -22,7 +22,7 @@ import {ProposalSheet} from '../components/documents/ProposalSheet';
 // salesperson. Manual "Mark …" status buttons remain as overrides.
 // ============================================================================
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   FileText, FileSignature, Sparkles, Plus, Eye, Pencil, Copy, Trash2,
   Send, CheckCircle2, XCircle, Loader2, Building2, History, ArrowLeft,
@@ -197,6 +197,11 @@ export default function Documents() {
   // FLOW 4: share dialog + the one-time link banner
   const [shareDoc, setShareDoc] = useState<DocRow | null>(null);
   const [shareResult, setShareResult] = useState<ShareResult | null>(null);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkBusy, setLinkBusy] = useState(false);
+  const [linkError, setLinkError] = useState('');
+  const linkRequest = useRef(false);
+  const sessionLinks = useRef(new Map<string, ShareResult>());
 
   // preview modal
   const [previewData, setPreviewData] = useState<PreviewResponse | null>(null);
@@ -395,6 +400,7 @@ export default function Documents() {
     setError(null);
     try {
       await setDocumentStatus(d.id, status);
+      sessionLinks.current.delete(d.id);
       await refreshLists();
     } catch (e) {
       setError(msgOf(e, "Could not update the status."));
@@ -404,12 +410,24 @@ export default function Documents() {
   // ---- FLOW 4: send / copy link ---------------------------------------------
   const defaultRecipient = (d: DocRow) => d.sentTo || clients.find((c) => c.id === d.clientId)?.email || d.prospect?.email || "";
   async function onNewLink(d: DocRow) {
-    if (d.hasLink && !window.confirm("Generate a new approval link? The previously shared link will stop working.")) return;
-    setError(null);
-    try { setShareResult(await mintDocumentLink(d.id)); await refreshLists(); }
-    catch (e) { setError(msgOf(e, "Could not generate the link.")); }
+    if (linkRequest.current) return;
+    const cached = sessionLinks.current.get(d.id);
+    if (cached && (!cached.expiresAt || new Date(cached.expiresAt).getTime() > Date.now())) { setShareResult(cached); setLinkError(''); setLinkOpen(true); return; }
+    if (d.hasLink && !window.confirm("Generate a replacement approval link? The previously shared link will stop working. Cancel to keep it unchanged.")) return;
+    linkRequest.current = true;
+    setError(null); setShareResult(null); setLinkError(''); setLinkOpen(true); setLinkBusy(true);
+    try {
+      const result = await mintDocumentLink(d.id);
+      sessionLinks.current.set(d.id, result);
+      setShareResult(result);
+      await refreshLists();
+    } catch (e) { setLinkError(msgOf(e, "Could not generate the link. Please try again.")); }
+    finally { linkRequest.current = false; setLinkBusy(false); }
   }
-  async function onShared(r: ShareResult) { setShareDoc(null); setShareResult(r); await refreshLists(); }
+  async function onShared(r: ShareResult) {
+    if (shareDoc) sessionLinks.current.set(shareDoc.id, r);
+    setShareDoc(null); setShareResult(r); setLinkError(''); setLinkOpen(true); await refreshLists();
+  }
 
   // ---- builder save --------------------------------------------------------
 
@@ -552,7 +570,11 @@ export default function Documents() {
       )}
       {savedNotice&&<p role="status" className="proposal-success">{savedNotice}</p>}
       {activeTab==='proposalDocs'&&<div className="proposal-metrics">{[{label:'Drafts',value:proposalDocs.filter(d=>d.status==='draft').length},{label:'Awaiting client',value:proposalDocs.filter(d=>d.status==='sent'||d.status==='viewed').length},{label:'Approved',value:proposalDocs.filter(d=>d.status==='signed').length},{label:'Paid invoices',value:proposalDocs.filter(d=>d.ghlInvoiceStatus==='paid').length}].map(m=><div key={m.label}><span>{m.label}</span><strong>{m.value}</strong></div>)}</div>}
-      {shareResult && <LinkBanner result={shareResult} onClose={() => setShareResult(null)} />}
+      <Modal open={linkOpen} title={linkBusy ? 'Creating your proposal link' : 'Share proposal'} onClose={() => { if (!linkBusy) setLinkOpen(false); }} size="lg">
+        {linkBusy && !shareResult && <p role="status" className="flex items-center gap-2 py-6"><Loader2 className="h-5 w-5 animate-spin"/>Creating your private approval link…</p>}
+        {linkError && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-rose-700">{linkError}</p>}
+        {shareResult && <LinkBanner key={shareResult.link} result={shareResult} onClose={() => setLinkOpen(false)} />}
+      </Modal>
 
       {/* Tabs */}
       <div className="flex flex-wrap gap-1 border-b border-slate-200 dark:border-slate-800">
@@ -994,8 +1016,8 @@ function ClientDocList({
                           </Button>
                         )}
                         {shareable && (
-                          <Button variant="ghost" size="sm" onClick={() => onLink(d)} aria-label={d.hasLink ? "New link" : "Copy link"} title={d.hasLink ? "Generate a new approval link" : "Create a copyable approval link"}>
-                            <Link2 className="h-4 w-4" /> {d.hasLink ? "New link" : "Copy link"}
+                          <Button variant="ghost" size="sm" onClick={() => onLink(d)} aria-label={d.hasLink ? "Get link" : "Create link"} title="Show a shareable proposal link">
+                            <Link2 className="h-4 w-4" /> {d.hasLink ? "Get link" : "Create link"}
                           </Button>
                         )}
                         {next && (

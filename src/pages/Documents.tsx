@@ -22,7 +22,7 @@ import {ProposalSheet} from '../components/documents/ProposalSheet';
 // salesperson. Manual "Mark …" status buttons remain as overrides.
 // ============================================================================
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   FileText, FileSignature, Sparkles, Plus, Eye, Pencil, Copy, Trash2,
   Send, CheckCircle2, XCircle, Loader2, Building2, History, ArrowLeft,
@@ -947,6 +947,7 @@ function ClientDocList({
   const label = kind === "contract" ? "contract" : "proposal";
   const [search,setSearch]=useState('');
   const [statusFilter,setStatusFilter]=useState('');
+  const [expandedId,setExpandedId]=useState<string|null>(null);
   const visible=docs.filter(d=>(!statusFilter||d.status===statusFilter)&&`${d.title} ${recipientOf(d as DocRow,clientName)} ${salespeople.find(s=>s.id===d.salespersonId)?.name||''}`.toLowerCase().includes(search.toLowerCase()));
   return (
     <div className="space-y-4">
@@ -967,7 +968,7 @@ function ClientDocList({
           />
         </Card>
       ) : (
-        <Card className="p-0">
+        <Card className="p-0 proposal-register">
           <Table>
             <THead>
               <TR>
@@ -987,23 +988,20 @@ function ClientDocList({
                 const next = kind==='contract'?NEXT_STATUS[d.status]:null;
                 const shareable = !isTerminalStatus(d.status);
                 return (
-                  <TR key={d.id}>
+                  <Fragment key={d.id}><TR>
                     <TD>
-                      <div className="font-medium text-slate-800 dark:text-slate-100">{d.title}</div>
-                      {d.sentTo && d.status !== "signed" && <div className="text-xs text-slate-500">Sent to {d.sentTo}{d.viewedAt ? ` · viewed ${formatDate(d.viewedAt)}` : ""}</div>}
-                      <div className="proposal-activity"><span>{d.sentAt?`Shared ${formatDate(d.sentAt)}`:'Not shared yet'}</span>{d.viewedAt&&<span>Viewed {formatDate(d.viewedAt)}</span>}{d.signedAt&&<span>Approved {formatDate(d.signedAt)}</span>}</div>
-                      <ApprovalCard doc={d} />
-                      <InvoiceState doc={d} />
+                      <button className="proposal-register-title" onClick={()=>onPreview(d)}>{d.title}</button>
+                      <button className="proposal-register-details" aria-expanded={expandedId===d.id} aria-controls={`activity-${d.id}`} onClick={()=>setExpandedId(expandedId===d.id?null:d.id)}>{expandedId===d.id?'Hide details':'Activity & payment details'} <span aria-hidden="true">{expandedId===d.id?'−':'+'}</span></button>
                     </TD>
                     {kind !== "contract" && <TD><Badge tone="slate">{DOC_TYPE_LABELS[d.kind] ?? d.kind}</Badge></TD>}
                     <TD>{recipientOf(d, clientName)}{!d.clientId && d.prospect && <> <Badge tone="violet">Prospect</Badge></>}</TD>
                     <TD>{d.amount.toLocaleString("en-US",{style:"currency",currency})}</TD>
                     <TD>{salespeople.find(s=>s.id===d.salespersonId)?.name||"Unassigned"}</TD>
-                    <TD><DocStatusBadge status={d.status} /></TD>
+                    <TD>{kind!=='contract'&&d.status==='signed'?<Badge tone={STATUS_TONE.signed}>Approved</Badge>:<DocStatusBadge status={d.status} />}</TD>
                     <TD className="text-slate-500">{formatDate(d.updatedAt)}</TD>
                     <TD>
                       <div className="flex flex-wrap justify-end gap-1">
-                        <Button variant="ghost" size="sm" onClick={() => onPreview(d)} aria-label="Preview"><Eye className="h-4 w-4" /></Button>
+                        <Button variant="ghost" size="sm" onClick={() => onPreview(d)} aria-label="Preview"><Eye className="h-4 w-4" /> View</Button>
                         {d.status === "draft" && !d.ghlInvoiceId && (
                           <Button variant="ghost" size="sm" onClick={() => onEdit(d)} aria-label="Edit sections"><Pencil className="h-4 w-4" /></Button>
                         )}
@@ -1038,6 +1036,16 @@ function ClientDocList({
                       </div>
                     </TD>
                   </TR>
+                  {expandedId===d.id&&<TR><TD colSpan={kind==='contract'?7:8}><section id={`activity-${d.id}`} className="proposal-register-panel" aria-label={`Activity for ${d.title}`}>
+                    <h3>Proposal activity</h3>
+                    <div className="proposal-register-timeline">
+                      <div><span>Shared</span><strong>{d.sentAt?formatDate(d.sentAt):'Not shared yet'}</strong>{d.sentTo&&<small>{d.sentTo}</small>}</div>
+                      <div><span>Viewed</span><strong>{d.viewedAt?formatDate(d.viewedAt):'Not viewed yet'}</strong></div>
+                      <div><span>Approved</span><strong>{d.signedAt?formatDate(d.signedAt):'Awaiting approval'}</strong></div>
+                    </div>
+                    <ApprovalCard doc={d}/><InvoiceState doc={d}/>
+                  </section></TD></TR>}
+                  </Fragment>
                 );
               })}
             </TBody>

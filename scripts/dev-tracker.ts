@@ -27,6 +27,11 @@ const {recordAdjustment}=await import('../api/_lib/tracker-finance.js');
 for(const [key,amount]of [['local-positive','125000'],['local-offset','-25000']])await pg.transaction((c:any)=>recordAdjustment(wrap(c),testUser as any,{salespersonId:fixtureSalesman.id,amountMinor:amount,currency:'USD',date:'2026-01-01',eventKey:key,reason:'Isolated browser payout verification only'}));
 
 
+// Proposal fixtures live only in the isolated database, never in production.
+await mutate('saveProduct',{name:'WhatsApp account',description:'A managed WhatsApp account with messaging setup and support.',category:'Messaging',priceMinor:'1900',billingKind:'recurring',recurringInterval:'month'});
+await mutate('saveProduct',{name:'Business setup',description:'Configure the workspace, contacts and core automations.',category:'Services',priceMinor:'24900',billingKind:'setup'});
+await pg.query("INSERT INTO business_profiles(tenant_id,business_name,contact_email) VALUES('test','Kleegr Preview','hello@example.test') ON CONFLICT DO NOTHING");
+
 // Fake catalog for testing the source wizard; it cannot reach a provider.
 process.env.KLEEGR_READ_GATEWAY_ENABLED='1';process.env.KLEEGR_TOKEN_SERVICE_KEY='isolated-catalog-signing-key';
 globalThis.fetch=async(input:any)=>{const url=new URL(String(input));if(url.pathname!=='/api/auth/ghl/read')throw new Error('External requests disabled in isolated harness');const resource=url.searchParams.get('resource');if(resource==='pageDetails')return Response.json({locationId:'fake-location',resource,payload:{funnelId:'test-funnel',stepId:'test-page',url:'https://example.com/checkout',products:[{id:'funnelproduct',productId:'product-test',name:'Checkout test product',type:'one_time',currency:'USD',amount:100}]}});return Response.json({locationId:'fake-location',resource,payload:{funnels:[{_id:'test-funnel',name:'Checkout verification funnel',type:'funnel',locationId:'fake-location',url:'/offer',steps:[{id:'test-page',name:'Checkout',url:'/checkout',pages:['preview-test']},{id:'thanks-page',name:'Thank you',url:'/thanks'}]},{_id:'test-site',name:'Verification website',type:'website',steps:[{id:'home',name:'Home',url:'/home'}]}]}});};

@@ -50,10 +50,12 @@ const STEPS = ["Business basics", "Services & offers", "Pricing & packages", "Te
 export function BusinessWizard({
   initial,
   onSaved,
+  onProgress,
   onCancel,
 }: {
   initial: BusinessProfile | null;
   onSaved: (p: BusinessProfile) => void;
+  onProgress: (p: BusinessProfile) => void;
   onCancel: () => void;
 }) {
   const [step, setStep] = useState(0);
@@ -64,15 +66,17 @@ export function BusinessWizard({
   const set = <K extends keyof BusinessProfile>(key: K, value: BusinessProfile[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
 
-  const next = () => setStep((s) => Math.min(s + 1, STEPS.length - 1));
+  const next = () => void save(false);
   const prev = () => setStep((s) => Math.max(s - 1, 0));
 
-  async function save() {
+  async function save(close = true) {
     setSaving(true);
     setError(null);
     try {
       const saved = await saveBusinessProfile(form);
-      onSaved(saved);
+      onProgress(saved);
+      if (close) onSaved(saved);
+      else setStep((s) => Math.min(s + 1, STEPS.length - 1));
     } catch (e: any) {
       setError(e?.message === "forbidden" ? "Only an owner or admin can edit the business profile." : "Could not save. Check your connection and try again.");
     } finally {
@@ -82,11 +86,13 @@ export function BusinessWizard({
 
   return (
     <Card className="p-0">
+      <p className="px-5 pt-4 text-sm text-slate-500">Your business profile is saved for this connected location and reused in its proposals. Next saves your progress; Save profile saves and closes setup.</p>
       {/* Stepper */}
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 px-5 py-4 dark:border-slate-700">
         {STEPS.map((label, i) => (
           <button
             key={label}
+            disabled={saving}
             onClick={() => setStep(i)}
             className={[
               "flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium transition",
@@ -214,25 +220,25 @@ export function BusinessWizard({
                 </div>
               ))}
             </div>
-            {error && <p className="text-sm text-rose-600">{error}</p>}
+
           </>
         )}
       </div>
 
+      {error && <p role="alert" className="px-5 pb-4 text-sm text-rose-600">{error}</p>}
       {/* Footer nav */}
       <div className="flex items-center justify-between border-t border-slate-200 px-5 py-4 dark:border-slate-700">
-        <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+        <Button variant="ghost" onClick={onCancel} disabled={saving}>Cancel</Button>
         <div className="flex items-center gap-2">
           {step > 0 && (
-            <Button variant="secondary" onClick={prev}><ArrowLeft className="h-4 w-4" /> Back</Button>
+            <Button variant="secondary" onClick={prev} disabled={saving}><ArrowLeft className="h-4 w-4" /> Back</Button>
           )}
-          {step < STEPS.length - 1 ? (
-            <Button variant="primary" onClick={next}>Next <ArrowRight className="h-4 w-4" /></Button>
-          ) : (
-            <Button variant="primary" onClick={save} disabled={saving}>
+          {step < STEPS.length - 1 && (
+            <Button variant="secondary" onClick={next} disabled={saving}>Next <ArrowRight className="h-4 w-4" /></Button>
+          )}
+            <Button variant="primary" onClick={() => void save()} disabled={saving}>
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Save profile
             </Button>
-          )}
         </div>
       </div>
     </Card>

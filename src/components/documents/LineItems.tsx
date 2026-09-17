@@ -9,8 +9,9 @@
 import {useState} from 'react';
 import {billingLabel} from '../../lib/proposal-pricing';
 import {ProposalPricing} from './ProposalPricing';
+import {SearchSelect} from './SearchSelect';
 import { Plus, Trash2, AlertTriangle } from "lucide-react";
-import { Button, Field, Input, Select } from "../ui";
+import { Button, Field, Input } from "../ui";
 import { DecimalInput } from "../TrackerForm";
 import { displayMinor } from "../../lib/exact-commission";
 import type { DocumentLineItem } from "../../types";
@@ -87,14 +88,14 @@ export function LineItemsEditor({
         </p>
       ) : (
         <>
-          <div className="proposal-fields-two"><Input aria-label="Search catalog products" placeholder="Search products…" value={search} onChange={e=>setSearch(e.target.value)}/><Select aria-label="Product category" value={category} onChange={e=>setCategory(e.target.value)}><option value="">All categories</option>{categories.map(c=><option key={c} value={c}>{c}</option>)}</Select></div>
+          <div className="proposal-fields-two"><Input aria-label="Search catalog products" placeholder="Search products…" value={search} onChange={e=>setSearch(e.target.value)}/><SearchSelect label="Product category" value={category} onChange={setCategory} options={[{value:'',label:'All categories'},...categories.map(c=>({value:c,label:c}))]}/></div>
           <div className="flex items-center justify-between gap-2 text-sm text-slate-500">
-            <span role="status">{available.length} matching {available.length===1?'product':'products'}{filtering?'':' — search or choose a category to find a product'}</span>
+            <span role="status">{available.length} matching {available.length===1?'product':'products'}{filtering?'':' available to add'}</span>
             {filtering&&<Button type="button" variant="ghost" size="sm" onClick={()=>{setSearch('');setCategory('');}}>Clear filters</Button>}
           </div>
-          {filtering&&<div aria-label="Matching catalog products" className="max-h-64 overflow-y-auto rounded-lg border border-slate-200 divide-y divide-slate-200">
-            {available.length===0?<p className="p-3 text-sm text-slate-500">No products match these filters. Try another search or clear the filters.</p>:available.map(p=><div key={p.id} className="flex items-center justify-between gap-3 p-3">
-              <div className="min-w-0"><strong className="block break-words text-sm">{p.name}</strong><span className="text-xs text-slate-500">{p.category||'Uncategorized'} · {money(p.price_minor)} · {billingLabel({billingKind:p.billing_kind,recurringInterval:p.recurring_interval})}</span></div>
+          {<div aria-label="Matching catalog products" className="proposal-product-catalog">
+            {available.length===0?<p className="p-3 text-sm text-slate-500">No products match these filters. Try another search or clear the filters.</p>:available.map(p=><div key={p.id} className="proposal-catalog-card">
+              <div className="min-w-0"><span className="proposal-catalog-category">{p.category||'Product'}</span><strong className="block break-words text-sm">{p.name}</strong><p className="proposal-catalog-description">{p.description||'No description has been added to this product yet.'}</p><span className="text-xs text-slate-500">{p.category||'Uncategorized'} · {money(p.price_minor)} · {billingLabel({billingKind:p.billing_kind,recurringInterval:p.recurring_interval})}</span></div>
               <Button type="button" variant="secondary" size="sm" disabled={items.some(it=>it.productId===p.id)} aria-label={`Add ${p.name}`} onClick={()=>addProduct(p)}>{items.some(it=>it.productId===p.id)?'Added':<><Plus size={14}/> Add</>}</Button>
             </div>)}
           </div>}
@@ -107,12 +108,7 @@ export function LineItemsEditor({
                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-12 sm:items-end">
                       <div className="sm:col-span-6">
                         <Field label="Product">
-                          <Select value={it.productId} onChange={(e) => pickProduct(i, e.target.value)}>
-                            <option value="">Choose a product…</option>
-                            {[...available, ...products.filter(p=>p.id===it.productId&&!available.some(a=>a.id===p.id))].map((p) => (
-                              <option key={p.id} value={p.id}>{p.name} — {money(p.price_minor)} · {BILLING[p.billing_kind] ?? p.billing_kind}</option>
-                            ))}
-                          </Select>
+                          <SearchSelect label="Product" value={it.productId} onChange={value=>pickProduct(i,value)} options={[...eligible,...products.filter(p=>p.id===it.productId&&!eligible.some(a=>a.id===p.id))].map(p=>({value:p.id,label:p.name,detail:`${money(p.price_minor)} · ${BILLING[p.billing_kind]??p.billing_kind}`}))} placeholder="Choose a product…"/>
                         </Field>
                       </div>
                       <div className="sm:col-span-2">

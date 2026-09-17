@@ -156,6 +156,7 @@ export default function Documents() {
 
   // Product catalog + campaigns for the line-item builder and campaign link.
   const [catalog, setCatalog] = useState<CatalogProduct[]>([]);
+  const [proposalSalespeople,setProposalSalespeople]=useState<{id:string;name:string;email?:string}[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [catalogError,setCatalogError]=useState('');
   const [campaignOptions, setCampaignOptions] = useState<{ id: string; name: string }[]>([]);
@@ -250,9 +251,10 @@ export default function Documents() {
         for(;;){const result=await trackerGet(resource,{...filters,limit:'100',page:String(page)});const batch=result.rows||[];rows.push(...batch);if(!batch.length||rows.length>=Number(result.total??rows.length))return {rows};page++;}
       };
       try {
-        const [prods, camps] = await Promise.all([
+        const [prods, camps, sellers] = await Promise.all([
           allRows("products", {status: "active"}),
           allRows("campaigns"),
+          allRows("people", {status:"active"}),
         ]);
         let rows = (prods.rows ?? []) as any[];
         if (isSelf && user?.salespersonId) {
@@ -261,6 +263,7 @@ export default function Documents() {
           rows = rows.filter((r) => allowed.has(r.id));
         }
         if (!live) return;
+        setProposalSalespeople(sellers.rows.map(r=>({id:r.id,name:r.name,email:r.email})));
         setCatalog(rows.map((r) => ({ id: r.id, name: r.name, price_minor: String(r.price_minor), billing_kind: r.billing_kind, currency: r.currency, description:r.description, category:r.category, recurring_interval:r.recurring_interval, ghl_product_id:r.ghl_product_id })));
         setCampaignOptions((camps.rows ?? []).map((c: any) => ({ id: c.id, name: c.name })));
       } catch(e) {
@@ -553,7 +556,7 @@ export default function Documents() {
     </div>
   );
 
-  if(guided) return <ProposalBuilder key={guided.existing?.id||'new'} existing={guided.existing} clients={clients} salespeople={data.salespeople} salespersonId={user?.salespersonId} self={isSelf} products={catalog} campaigns={campaignOptions} currency={currency} digits={digits} loading={catalogLoading} loadError={catalogError} branding={brandingFromProfile(profile,companyName)} aiReady={aiOn&&ai.configured} businessName={profile?.businessName} defaultTerms={profile?.paymentTerms} onClose={()=>setGuided(null)} onSaved={async()=>{await refreshLists();setGuided(null);setTab('proposalDocs');setSavedNotice('Proposal saved as a draft. Preview it, then share a client approval link.');}}/>;
+  if(guided) return <ProposalBuilder key={guided.existing?.id||'new'} existing={guided.existing} clients={clients} salespeople={proposalSalespeople} salespersonId={user?.salespersonId} self={isSelf} products={catalog} campaigns={campaignOptions} currency={currency} digits={digits} loading={catalogLoading} loadError={catalogError} branding={brandingFromProfile(profile,companyName)} aiReady={aiOn&&ai.configured} businessName={profile?.businessName} defaultTerms={profile?.paymentTerms} onClose={()=>setGuided(null)} onSaved={async()=>{await refreshLists();setGuided(null);setTab('proposalDocs');setSavedNotice('Proposal saved as a draft. Preview it, then share a client approval link.');}}/>;
 
   return (
     <div className="space-y-6 proposal-center">

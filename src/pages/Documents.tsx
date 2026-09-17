@@ -1,5 +1,5 @@
 import {ProposalBuilder} from '../components/documents/ProposalBuilder';
-import {ProposalPricing} from '../components/documents/ProposalPricing';
+import {ProposalSheet} from '../components/documents/ProposalSheet';
 // ============================================================================
 // DOCUMENTS — Proposals & Contracts center
 //
@@ -746,14 +746,14 @@ export default function Documents() {
               <span>Status:</span>
               {previewData.status ? <DocStatusBadge status={previewData.status} /> : <Badge tone="slate">Template</Badge>}
             </div>
-            <DocumentPreview
+            {previewData.kind==='contract'?<DocumentPreview
               kind={previewData.kind}
               title={previewData.title}
               style={previewData.style}
               sections={previewData.sections}
               branding={previewData.branding ?? brandingFromProfile(profile, companyName)}
-            />
-            {!!previewData.lineItems?.length&&<ProposalPricing items={previewData.lineItems} currency={previewData.currency||currency} digits={previewData.digits??digits}/>}
+            />:<ProposalSheet title={previewData.title} sections={previewData.sections} branding={previewData.branding ?? brandingFromProfile(profile, companyName)} items={previewData.lineItems} currency={previewData.currency||currency} digits={previewData.digits??digits}/>}
+
           </div>
         ) : null}
       </Modal>

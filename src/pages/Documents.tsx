@@ -1,3 +1,5 @@
+import {ProposalBuilder} from '../components/documents/ProposalBuilder';
+import {ProposalPricing} from '../components/documents/ProposalPricing';
 // ============================================================================
 // DOCUMENTS — Proposals & Contracts center
 //
@@ -155,15 +157,18 @@ export default function Documents() {
   // Product catalog + campaigns for the line-item builder and campaign link.
   const [catalog, setCatalog] = useState<CatalogProduct[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(true);
+  const [catalogError,setCatalogError]=useState('');
   const [campaignOptions, setCampaignOptions] = useState<{ id: string; name: string }[]>([]);
 
   const proposalsOn = isEnabled("proposals");
   const contractsOn = isEnabled("contracts");
   const aiOn = isEnabled("ai");
 
+  const [guided, setGuided] = useState<{existing?:DocRow}|null>(null);
+  const [savedNotice,setSavedNotice]=useState('');
   const [view, setView] = useState<View>({ mode: "home" });
   const [tab, setTab] = useState<Tab>(
-    proposalsOn ? "proposalTemplates" : contractsOn ? "contractTemplates" : "business",
+    proposalsOn ? "proposalDocs" : contractsOn ? "contractDocs" : "business",
   );
 
   const [loading, setLoading] = useState(true);
@@ -227,16 +232,22 @@ export default function Documents() {
   }, []);
 
   useEffect(() => { reload(); }, [reload]);
+  useEffect(()=>{const refresh=()=>{if(document.visibilityState==='visible')void refreshLists().catch(()=>{});};const timer=window.setInterval(refresh,15000);window.addEventListener('focus',refresh);return()=>{clearInterval(timer);window.removeEventListener('focus',refresh);};},[refreshLists]);
 
   // Load the product catalog (self roles see only their assigned products) + campaigns.
   useEffect(() => {
     let live = true;
     (async () => {
       setCatalogLoading(true);
+      setCatalogError('');
+      const allRows=async(resource:string,filters:Record<string,string>={})=>{
+        let rows:any[]=[];let page=1;
+        for(;;){const result=await trackerGet(resource,{...filters,limit:'100',page:String(page)});const batch=result.rows||[];rows.push(...batch);if(!batch.length||rows.length>=Number(result.total??rows.length))return {rows};page++;}
+      };
       try {
         const [prods, camps] = await Promise.all([
-          trackerGet("products", { limit: "100", status: "active" }).catch(() => ({ rows: [] })),
-          trackerGet("campaigns", { limit: "100" }).catch(() => ({ rows: [] })),
+          allRows("products", {status: "active"}),
+          allRows("campaigns"),
         ]);
         let rows = (prods.rows ?? []) as any[];
         if (isSelf && user?.salespersonId) {
@@ -245,14 +256,16 @@ export default function Documents() {
           rows = rows.filter((r) => allowed.has(r.id));
         }
         if (!live) return;
-        setCatalog(rows.map((r) => ({ id: r.id, name: r.name, price_minor: String(r.price_minor), billing_kind: r.billing_kind, currency: r.currency })));
+        setCatalog(rows.map((r) => ({ id: r.id, name: r.name, price_minor: String(r.price_minor), billing_kind: r.billing_kind, currency: r.currency, description:r.description, category:r.category, recurring_interval:r.recurring_interval, ghl_product_id:r.ghl_product_id })));
         setCampaignOptions((camps.rows ?? []).map((c: any) => ({ id: c.id, name: c.name })));
+      } catch(e) {
+        if(live)setCatalogError(e instanceof Error?e.message:"Could not load your catalog. Refresh to retry.");
       } finally {
         if (live) setCatalogLoading(false);
       }
     })();
     return () => { live = false; };
-  }, [isSelf, user?.salespersonId]);
+  }, [isSelf, user?.salespersonId, !!guided]);
 
   useEffect(() => {
     if (tab === "ai" && aiOn) {
@@ -269,7 +282,7 @@ export default function Documents() {
   const contractDocs = useMemo(() => documents.filter((d) => d.kind === "contract"), [documents]);
 
   const clientName = useCallback(
-    (id: string | null) => clients.find((c) => c.id === id)?.companyName ?? "—",
+    (id: string | null) => {const client=clients.find(c=>c.id===id);return client?.companyName||client?.contactName||"Unassigned client";},
     [clients],
   );
 
@@ -326,9 +339,10 @@ export default function Documents() {
   // ---- client document actions ---------------------------------------------
 
   function openCreateModal(kind: DocumentKind) {
+    if(kind==='proposal'){setGuided({});return;}
     setCreateKind(kind);
     setCDocType(kind === "contract" ? "contract" : "proposal");
-    const first = (kind === "proposal" ? proposalTemplates : contractTemplates)[0];
+    const first = contractTemplates[0];
     setCTemplateId(first?.id ?? "");
     setCClientId(clients[0]?.id ?? "");
     setCTitle("");
@@ -339,6 +353,7 @@ export default function Documents() {
   }
 
   function openDocumentBuilder(d: ClientDocument) {
+    if(d.kind==='proposal'){setGuided({existing:d as DocRow});return;}
     setView({
       mode: "builder",
       ctx: {
@@ -504,11 +519,11 @@ export default function Documents() {
     { id: "business", label: "Business Setup", icon: <Building2 className="h-4 w-4" />, show: true },
     { id: "proposalTemplates", label: "Proposal Templates", icon: <FileText className="h-4 w-4" />, show: proposalsOn },
     { id: "contractTemplates", label: "Contract Templates", icon: <FileSignature className="h-4 w-4" />, show: contractsOn },
-    { id: "proposalDocs", label: "Client Proposals", icon: <FileText className="h-4 w-4" />, show: proposalsOn },
+    { id: "proposalDocs", label: "Proposals", icon: <FileText className="h-4 w-4" />, show: proposalsOn },
     { id: "contractDocs", label: "Client Contracts", icon: <FileSignature className="h-4 w-4" />, show: contractsOn },
     { id: "ai", label: "AI History", icon: <History className="h-4 w-4" />, show: aiOn },
   ];
-  const tabs = allTabs.filter((t) => t.show);
+  const tabs = allTabs.sort((a,b)=>(a.id==='proposalDocs'?-1:b.id==='proposalDocs'?1:0)).filter((t) => t.show);
 
   const activeTab: Tab = tabs.some((t) => t.id === tab) ? tab : tabs[0].id;
 
@@ -520,11 +535,13 @@ export default function Documents() {
     </div>
   );
 
+  if(guided) return <ProposalBuilder key={guided.existing?.id||'new'} existing={guided.existing} clients={clients} salespeople={data.salespeople} salespersonId={user?.salespersonId} self={isSelf} products={catalog} campaigns={campaignOptions} currency={currency} digits={digits} loading={catalogLoading} loadError={catalogError} branding={brandingFromProfile(profile,companyName)} aiReady={aiOn&&ai.configured} defaultTerms={profile?.paymentTerms} onClose={()=>setGuided(null)} onSaved={async()=>{await refreshLists();setGuided(null);setTab('proposalDocs');setSavedNotice('Proposal saved as a draft. Preview it, then share a client approval link.');}}/>;
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 proposal-center">
       <PageHeader
-        title="Documents"
-        subtitle="Build branded proposals and contracts from reusable sections."
+        title="Proposals & contracts"
+        subtitle="Choose your products, prepare a proposal, and track it from first view to payment."
         actions={headerActions}
       />
 
@@ -533,6 +550,8 @@ export default function Documents() {
           {error}
         </Card>
       )}
+      {savedNotice&&<p role="status" className="proposal-success">{savedNotice}</p>}
+      {activeTab==='proposalDocs'&&<div className="proposal-metrics">{[{label:'Drafts',value:proposalDocs.filter(d=>d.status==='draft').length},{label:'Awaiting client',value:proposalDocs.filter(d=>d.status==='sent'||d.status==='viewed').length},{label:'Approved',value:proposalDocs.filter(d=>d.status==='signed').length},{label:'Paid invoices',value:proposalDocs.filter(d=>d.ghlInvoiceStatus==='paid').length}].map(m=><div key={m.label}><span>{m.label}</span><strong>{m.value}</strong></div>)}</div>}
       {shareResult && <LinkBanner result={shareResult} onClose={() => setShareResult(null)} />}
 
       {/* Tabs */}
@@ -592,6 +611,8 @@ export default function Documents() {
             <ClientDocList
               kind="proposal"
               docs={proposalDocs}
+              salespeople={data.salespeople}
+              currency={currency}
               clientName={clientName}
               onNew={() => openCreateModal("proposal")}
               onEdit={openDocumentBuilder}
@@ -732,6 +753,7 @@ export default function Documents() {
               sections={previewData.sections}
               branding={previewData.branding ?? brandingFromProfile(profile, companyName)}
             />
+            {!!previewData.lineItems?.length&&<ProposalPricing items={previewData.lineItems} currency={previewData.currency||currency} digits={previewData.digits??digits}/>}
           </div>
         ) : null}
       </Modal>
@@ -885,10 +907,12 @@ function TemplateList({
 }
 
 function ClientDocList({
-  kind, docs, clientName, onNew, onEdit, onPreview, onStatus, onSend, onLink, onPricing,
+  kind, docs, clientName, salespeople=[], currency="USD", onNew, onEdit, onPreview, onStatus, onSend, onLink, onPricing,
 }: {
   kind: DocumentKind;
   docs: ClientDocument[];
+  salespeople?: {id:string;name:string}[];
+  currency?: string;
   clientName: (id: string | null) => string;
   onNew: () => void;
   onEdit: (d: ClientDocument) => void;
@@ -899,6 +923,9 @@ function ClientDocList({
   onPricing: (d: DocRow) => void;
 }) {
   const label = kind === "contract" ? "contract" : "proposal";
+  const [search,setSearch]=useState('');
+  const [statusFilter,setStatusFilter]=useState('');
+  const visible=docs.filter(d=>(!statusFilter||d.status===statusFilter)&&`${d.title} ${recipientOf(d as DocRow,clientName)} ${salespeople.find(s=>s.id===d.salespersonId)?.name||''}`.toLowerCase().includes(search.toLowerCase()));
   return (
     <div className="space-y-4">
       {kind === "contract" && <ContractNotice />}
@@ -907,7 +934,8 @@ function ClientDocList({
         <Button onClick={onNew}><Plus className="h-4 w-4" /> Create for client</Button>
       </div>
 
-      {docs.length === 0 ? (
+      <div className="proposal-fields-two"><Input aria-label="Search proposals" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search proposal, client or salesman…"/><Select aria-label="Proposal status" value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}><option value="">All statuses</option><option value="draft">Draft</option><option value="sent">Shared</option><option value="viewed">Viewed</option><option value="signed">Approved</option><option value="canceled">Canceled</option></Select></div>
+      {visible.length === 0 ? (
         <Card className="py-10">
           <EmptyState
             icon={kind === "contract" ? <FileSignature className="h-6 w-6" /> : <FileText className="h-6 w-6" />}
@@ -924,38 +952,41 @@ function ClientDocList({
                 <TH>Title</TH>
                 {kind !== "contract" && <TH>Type</TH>}
                 <TH>Client</TH>
-                <TH>Amount</TH>
+                <TH>First payment</TH>
+                <TH>Salesman</TH>
                 <TH>Status</TH>
                 <TH>Updated</TH>
                 <TH className="text-right">Actions</TH>
               </TR>
             </THead>
             <TBody>
-              {docs.map((raw) => {
+              {visible.map((raw) => {
                 const d = raw as DocRow;
-                const next = NEXT_STATUS[d.status];
+                const next = kind==='contract'?NEXT_STATUS[d.status]:null;
                 const shareable = !isTerminalStatus(d.status);
                 return (
                   <TR key={d.id}>
                     <TD>
                       <div className="font-medium text-slate-800 dark:text-slate-100">{d.title}</div>
                       {d.sentTo && d.status !== "signed" && <div className="text-xs text-slate-500">Sent to {d.sentTo}{d.viewedAt ? ` · viewed ${formatDate(d.viewedAt)}` : ""}</div>}
+                      <div className="proposal-activity"><span>{d.sentAt?`Shared ${formatDate(d.sentAt)}`:'Not shared yet'}</span>{d.viewedAt&&<span>Viewed {formatDate(d.viewedAt)}</span>}{d.signedAt&&<span>Approved {formatDate(d.signedAt)}</span>}</div>
                       <ApprovalCard doc={d} />
                       <InvoiceState doc={d} />
                     </TD>
                     {kind !== "contract" && <TD><Badge tone="slate">{DOC_TYPE_LABELS[d.kind] ?? d.kind}</Badge></TD>}
                     <TD>{recipientOf(d, clientName)}{!d.clientId && d.prospect && <> <Badge tone="violet">Prospect</Badge></>}</TD>
-                    <TD>{d.amount ? formatCurrency(d.amount) : "—"}</TD>
+                    <TD>{d.amount.toLocaleString("en-US",{style:"currency",currency})}</TD>
+                    <TD>{salespeople.find(s=>s.id===d.salespersonId)?.name||"Unassigned"}</TD>
                     <TD><DocStatusBadge status={d.status} /></TD>
                     <TD className="text-slate-500">{formatDate(d.updatedAt)}</TD>
                     <TD>
                       <div className="flex flex-wrap justify-end gap-1">
                         <Button variant="ghost" size="sm" onClick={() => onPreview(d)} aria-label="Preview"><Eye className="h-4 w-4" /></Button>
-                        {!isTerminalStatus(d.status) && (
+                        {d.status === "draft" && !d.ghlInvoiceId && (
                           <Button variant="ghost" size="sm" onClick={() => onEdit(d)} aria-label="Edit sections"><Pencil className="h-4 w-4" /></Button>
                         )}
-                        {!isTerminalStatus(d.status) && (
-                          <Button variant="ghost" size="sm" onClick={() => onPricing(d)} aria-label="Products & pricing" title="Products, pricing & campaign"><Boxes className="h-4 w-4" /> Pricing</Button>
+                        {d.status === "draft" && !d.ghlInvoiceId && (
+                          <Button variant="ghost" size="sm" onClick={() => d.kind==='proposal'?onEdit(d):onPricing(d)} aria-label="Products & pricing" title="Products, pricing & campaign"><Boxes className="h-4 w-4" /> Pricing</Button>
                         )}
                         {shareable && (
                           <Button variant="subtle" size="sm" onClick={() => onSend(d)} aria-label="Send for approval">

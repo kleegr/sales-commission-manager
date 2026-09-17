@@ -16,7 +16,7 @@ export interface ShareResult{link:string;to:string|null;email:'sent'|'queued'|'u
 export const emptyProspect=():Prospect=>({name:'',email:'',company:'',phone:'',setupFee:0,monthlySubscription:0});
 export const recipientOf=(d:DocRow,clientName:(id:string|null)=>string)=>d.clientId?clientName(d.clientId):d.prospect?(d.prospect.company||d.prospect.name):'—';
 
-async function docPost(payload:Record<string,unknown>):Promise<any>{const r=await fetch('/api/documents',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.error||`http_${r.status}`);return b;}
+async function docPost(payload:Record<string,unknown>):Promise<any>{const r=await fetch('/api/documents',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.message||b.error||`http_${r.status}`);return b;}
 export const shareDocument=(id:string,to:string):Promise<ShareResult>=>docPost({op:'send',id,to});
 export const mintDocumentLink=(id:string):Promise<ShareResult>=>docPost({op:'link',id});
 export async function copyText(s:string){try{await navigator.clipboard.writeText(s);return true;}catch{const el=document.createElement('textarea');el.value=s;document.body.appendChild(el);el.select();const ok=document.execCommand('copy');el.remove();return ok;}}
@@ -24,13 +24,27 @@ export async function copyText(s:string){try{await navigator.clipboard.writeText
 const EMAIL_LABEL:Record<string,string>={sent:'Email sent',queued:'Email queued — delivery is not configured on this server, so copy the link and send it yourself.',unavailable:'Copy the link and send it to the recipient.'};
 const EMAIL_ERRORS:Record<string,string>={email_not_configured:'Email sending is not configured (RESEND_API_KEY / TRACKER_EMAIL_FROM).',email_disabled:'Email sending is switched off in this environment.',delivery_unknown:'Delivery was not confirmed — check the provider log before resending.'};
 
-export function CopyButton({text,label='Copy link'}:{text:string;label?:string}){const [done,setDone]=useState(false);return <Button variant="secondary" size="sm" type="button" onClick={async()=>{if(await copyText(text)){setDone(true);setTimeout(()=>setDone(false),1800);}}}>{done?<Check className="h-4 w-4"/>:<Copy className="h-4 w-4"/>}{done?'Copied':label}</Button>;}
+export function CopyButton({text,label='Copy link'}:{text:string;label?:string}){
+  const [done,setDone]=useState(false),[failed,setFailed]=useState(false);
+  return <><Button variant="secondary" size="sm" type="button" onClick={async()=>{try{const ok=await copyText(text);setDone(ok);setFailed(!ok);setTimeout(()=>setDone(false),1800);}catch{setFailed(true);}}}>{done?<Check className="h-4 w-4"/>:<Copy className="h-4 w-4"/>}{done?'Copied':label}</Button>{failed&&<span role="status" className="text-xs text-amber-700">Select the URL and copy it manually.</span>}</>;
+}
 
-/** Shown once after send/link: the raw link exists only in this response (the server keeps a hash). */
+/** Keep the returned URL visible and selectable even when clipboard access is blocked. */
 export function LinkBanner({result,onClose}:{result:ShareResult;onClose:()=>void}){
-  return <div className="st-share-banner" role="status"><div className="st-share-banner-head"><Link2 className="h-4 w-4"/><strong>Approval link ready</strong>{result.to&&<span>· {EMAIL_LABEL[result.email]}{result.email==='queued'&&result.emailError?` ${EMAIL_ERRORS[result.emailError]||''}`:''}</span>}<button type="button" className="st-share-banner-close" onClick={onClose} aria-label="Dismiss">×</button></div>
-    <div className="st-share-link"><code>{result.link}</code><CopyButton text={result.link}/><a className="st-text-link" href={result.link} target="_blank" rel="noreferrer">Open</a></div>
-    <small>Keep this link private: anyone with it can approve. Sending again or generating a new link replaces it{result.expiresAt?`; it expires ${formatDate(result.expiresAt)}`:''}.</small></div>;
+  const [useApp,setUseApp]=useState(false);
+  const original=new URL(result.link);
+  const appLink=new URL(original.pathname,window.location.origin).href;
+  const link=useApp?appLink:result.link;
+  const alternate=original.origin!==window.location.origin;
+  return <div className="space-y-4">
+    <p className="flex items-center gap-2 font-semibold text-emerald-700"><CheckCircle2 size={18}/>Your proposal link is ready</p>
+    {result.to&&<p className="text-sm">{EMAIL_LABEL[result.email]}{result.email==='queued'&&result.emailError?` ${EMAIL_ERRORS[result.emailError]||''}`:''}</p>}
+    <label className="block text-sm font-medium">Proposal URL<input aria-label="Proposal URL" className="mt-2 block w-full rounded-lg border border-slate-300 bg-slate-50 p-3 text-sm text-slate-800" readOnly value={link} onFocus={e=>e.currentTarget.select()} onClick={e=>e.currentTarget.select()}/></label>
+    <div className="flex flex-wrap items-center gap-3"><CopyButton key={link} text={link}/><a className="st-text-link" href={link} target="_blank" rel="noreferrer">Open proposal ↗</a></div>
+    {alternate&&<div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><p>{useApp?'This address uses the same proposal and tracking.':'If your custom domain is not connected yet, use the current app address to share this proposal.'}</p><button type="button" className="mt-2 font-semibold underline" onClick={()=>setUseApp(!useApp)}>{useApp?'Use custom domain':'Use current app address'}</button></div>}
+    <p className="text-xs text-slate-500">Anyone with this private link can view and approve the proposal.{result.expiresAt?` Expires ${formatDate(result.expiresAt)}.`:''} Copy it before leaving this page. Reopening Get link during this visit keeps the same URL; creating a replacement after reloading invalidates the previous link.</p>
+    <Button variant="secondary" onClick={onClose}>Done</Button>
+  </div>;
 }
 
 /** "Send" dialog: recipient email prefilled from the client / prospect / last send. */

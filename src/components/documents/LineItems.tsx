@@ -49,8 +49,10 @@ export function LineItemsEditor({
 }) {
   const [search,setSearch]=useState('');
   const [category,setCategory]=useState('');
-  const categories=[...new Set(products.map(p=>p.category).filter(Boolean))];
-  const available=products.filter(p=>(!p.currency||p.currency===currency)&&(!category||p.category===category)&&`${p.name} ${p.description||''}`.toLowerCase().includes(search.toLowerCase()));
+  const eligible=products.filter(p=>!p.currency||p.currency.toUpperCase()===currency.toUpperCase());
+  const categories=[...new Set(eligible.map(p=>p.category?.trim()).filter((c):c is string=>!!c))].sort((a,b)=>a.localeCompare(b));
+  const filtering=!!search.trim()||!!category;
+  const available=eligible.filter(p=>(!category||p.category?.trim()===category)&&`${p.name} ${p.description||''} ${p.category||''}`.toLowerCase().includes(search.trim().toLowerCase()));
   const byId = new Map(products.map((p) => [p.id, p]));
   const money = (v: string) => displayMinor(v || "0", currency, digits);
   const set = (i: number, patch: Partial<DocumentLineItem>) => onChange(items.map((it, j) => (j === i ? { ...it, ...patch } : it)));
@@ -60,6 +62,11 @@ export function LineItemsEditor({
     if (!p) { set(i, { productId: "" }); return; }
     // Prefill the floor price + name + billing when a product is chosen.
     set(i, { productId, name: p.name, unitPriceMinor: p.price_minor, billingKind: p.billing_kind, description:p.description, category:p.category, recurringInterval:p.recurring_interval, currency:p.currency });
+  };
+  const addProduct = (p: CatalogProduct) => {
+    const line: DocumentLineItem = {productId:p.id,name:p.name,qty:1,unitPriceMinor:p.price_minor,billingKind:p.billing_kind,description:p.description,category:p.category,recurringInterval:p.recurring_interval,currency:p.currency};
+    const blank=items.findIndex(it=>!it.productId);
+    onChange(blank<0?[...items,line]:items.map((it,i)=>i===blank?line:it));
   };
   const floorOf = (productId: string): bigint => { try { return BigInt(byId.get(productId)?.price_minor || "0"); } catch { return 0n; } };
   const belowFloor = (it: DocumentLineItem): boolean => { try { return !!it.productId && BigInt(it.unitPriceMinor || "0") < floorOf(it.productId); } catch { return false; } };
@@ -81,6 +88,16 @@ export function LineItemsEditor({
       ) : (
         <>
           <div className="proposal-fields-two"><Input aria-label="Search catalog products" placeholder="Search products…" value={search} onChange={e=>setSearch(e.target.value)}/><Select aria-label="Product category" value={category} onChange={e=>setCategory(e.target.value)}><option value="">All categories</option>{categories.map(c=><option key={c} value={c}>{c}</option>)}</Select></div>
+          <div className="flex items-center justify-between gap-2 text-sm text-slate-500">
+            <span role="status">{available.length} matching {available.length===1?'product':'products'}{filtering?'':' — search or choose a category to find a product'}</span>
+            {filtering&&<Button type="button" variant="ghost" size="sm" onClick={()=>{setSearch('');setCategory('');}}>Clear filters</Button>}
+          </div>
+          {filtering&&<div aria-label="Matching catalog products" className="max-h-64 overflow-y-auto rounded-lg border border-slate-200 divide-y divide-slate-200">
+            {available.length===0?<p className="p-3 text-sm text-slate-500">No products match these filters. Try another search or clear the filters.</p>:available.map(p=><div key={p.id} className="flex items-center justify-between gap-3 p-3">
+              <div className="min-w-0"><strong className="block break-words text-sm">{p.name}</strong><span className="text-xs text-slate-500">{p.category||'Uncategorized'} · {money(p.price_minor)} · {billingLabel({billingKind:p.billing_kind,recurringInterval:p.recurring_interval})}</span></div>
+              <Button type="button" variant="secondary" size="sm" disabled={items.some(it=>it.productId===p.id)} aria-label={`Add ${p.name}`} onClick={()=>addProduct(p)}>{items.some(it=>it.productId===p.id)?'Added':<><Plus size={14}/> Add</>}</Button>
+            </div>)}
+          </div>}
           {items.length > 0 && (
             <div className="space-y-2">
               {items.map((it, i) => {

@@ -5,8 +5,8 @@ import type {DocumentLineItem} from '../types';
 // acceptance; the server creates the client / opportunity / pending receipt. The token is read from the
 // URL path (not router params) so this page works wherever it is mounted in the tree.
 import {useEffect,useRef,useState,type FormEvent} from 'react';
-import {CheckCircle2,Loader2,ShieldCheck} from 'lucide-react';
-import {DocumentPreview} from '../components/documents/DocumentPreview';
+import {CheckCircle2,Loader2,ShieldCheck,ArrowDown,Printer,Mail} from 'lucide-react';
+import {SECTION_LABELS} from '../lib/documents';
 import type {DocumentKind,DocumentSection,DocumentStyle} from '../types';
 
 interface PublicProposal{lineItems?:DocumentLineItem[];digits?:number;expiresAt?:string|null;invoice?:{status:string;url:string|null}|null;kind:DocumentKind;title:string;style:DocumentStyle;status:string;sections:DocumentSection[];branding:{businessName:string;logoUrl:string;website:string;companyAddress:string;contactEmail:string;contactPhone:string;brandTone:string};recipient:{name:string;company:string;email:string}|null;salesperson:{name:string;email:string}|null;amount:{total:number;setupFee:number;monthly:number;dueNow:number;currency:string};accepted:{name:string|null;at:string|null}|null;sentAt:string|null}
@@ -21,17 +21,33 @@ export default function ProposalPublic(){
   useEffect(()=>{if(started.current)return;started.current=true;document.title='Review & approve';fetch(`/api/proposal?token=${encodeURIComponent(token)}`).then(async r=>{const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(ERRORS[b.error]||b.message||'This link could not be opened.');setDoc(b);if(b.accepted)setDone(b.accepted);setForm(f=>({...f,name:b.recipient?.name||'',email:b.recipient?.email||''}));document.title=`${b.title} · ${b.branding?.businessName||'Review & approve'}`;}).catch(e=>setError(e.message));},[token]);
   const submit=async(e:FormEvent)=>{e.preventDefault();setBusy(true);setError('');try{const r=await fetch('/api/proposal',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token,...form})});const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(ERRORS[b.error]||b.message||'Your approval could not be saved.');setDone(b.accepted);setDoc(d=>d?{...d,invoice:b.invoice||d.invoice}:d);window.scrollTo({top:0,behavior:'smooth'});}catch(e){setError(e instanceof Error?e.message:'Your approval could not be saved.');}finally{setBusy(false);}};
   const b=doc?.branding,kindLabel=doc?.kind==='contract'?'contract':'proposal';
-  return <main className="st-proposal">
+  const sections=doc?.sections.filter(s=>s.content.trim() && s.type!=='cover')||[];
+  return <main className="st-proposal client-proposal">
     <header className="st-proposal-top"><div className="st-proposal-brand">{b?.logoUrl?<img src={b.logoUrl} alt=""/>:<span className="st-proposal-mark">{(b?.businessName||'P').slice(0,1)}</span>}<div><strong>{b?.businessName||'Review & approve'}</strong>{doc?.recipient&&<small>Prepared for {doc.recipient.name}{doc.recipient.company?` · ${doc.recipient.company}`:''}</small>}</div></div>{doc&&<span className={`st-badge ${done?'st-green':''}`}>{done?'Approved':doc.kind==='contract'?'Contract':'Proposal'}</span>}</header>
     {error&&!doc&&<p role="alert" className="st-proposal-error">{error}</p>}
     {!doc&&!error&&<p role="status" className="st-loading"><Loader2 className="inline h-4 w-4 animate-spin"/> Loading…</p>}
-    {doc&&<div className="st-proposal-layout">
-      <section className="st-proposal-paper"><DocumentPreview kind={doc.kind} title={doc.title} style={doc.style} sections={doc.sections} branding={doc.branding}/>{!!doc.lineItems?.length&&<ProposalPricing items={doc.lineItems} currency={doc.amount.currency} digits={doc.digits}/>}<button className="st-button proposal-print" onClick={()=>window.print()}>Print / Save as PDF</button></section>
-      <aside className="st-proposal-side">
-        {done?<div className="st-proposal-done" role="status"><CheckCircle2 className="h-8 w-8"/><h2>Thank you{done.name?`, ${done.name.split(' ')[0]}`:''}!</h2><p>This {kindLabel} was approved{done.at?` on ${when(done.at)}`:''}. Your approval has been recorded in Sales Tracker. Contact {b?.businessName||'the team'} about next steps{doc.amount.dueNow>0?` and the ${money(doc.amount.dueNow,doc.amount.currency)} due on approval`:''}.</p>{(doc.salesperson?.email||b?.contactEmail)&&<p><small>Questions? Email <a className="st-text-link" href={`mailto:${doc.salesperson?.email||b?.contactEmail}`}>{doc.salesperson?.name||b?.businessName}</a>.</small></p>}</div>
+    {doc&&<>
+      <section className="proposal-hero">
+        <div><span className="proposal-eyebrow">PREPARED EXCLUSIVELY FOR YOU</span><h1>{doc.title}</h1><p>{doc.recipient?.company||doc.recipient?.name||'Your next chapter starts here.'}</p>
+          <div className="proposal-meta">{doc.salesperson?.name&&<span>Prepared by <strong>{doc.salesperson.name}</strong></span>}{doc.sentAt&&<span>Issued {when(doc.sentAt)}</span>}{doc.expiresAt&&!done&&<span>Valid until {when(doc.expiresAt)}</span>}</div>
+        </div>
+        <a className="st-button st-primary" href="#proposal-approval">{done?'View approval':'Review & approve'}<ArrowDown size={16}/></a>
+      </section>
+      <nav className="proposal-page-nav" aria-label="Proposal sections"><a href="#proposal-details">Proposal details</a>{!!doc.lineItems?.length&&<a href="#proposal-investment">Products & pricing</a>}<a href="#proposal-approval">Approval</a><button onClick={()=>window.print()}><Printer size={15}/> Save as PDF</button></nav>
+      <div className="st-proposal-layout">
+      <section className="st-proposal-paper" id="proposal-details" aria-label="Proposal details">
+        {doc.sections.filter(s=>s.type==='cover'&&s.content.trim()).map(s=><p key={s.id} className="proposal-intro">{s.content}</p>)}
+        {sections.map((s,index)=><section className="proposal-content-section" key={s.id}>
+          <div className="proposal-section-heading"><span>{String(index+1).padStart(2,'0')}</span><h2>{s.title||SECTION_LABELS[s.type]}</h2></div>
+          {s.content.split(/\n{2,}/).filter(Boolean).map((paragraph,i)=><p key={i}>{paragraph}</p>)}
+        </section>)}
+        {!!doc.lineItems?.length&&<div id="proposal-investment" className="proposal-investment"><ProposalPricing items={doc.lineItems} currency={doc.amount.currency} digits={doc.digits}/></div>}
+      </section>
+      <aside className="st-proposal-side" id="proposal-approval" aria-label="Proposal approval">
+        {done?<div className="st-proposal-done" role="status"><CheckCircle2 className="h-8 w-8"/><h2>Thank you{done.name?`, ${done.name.split(' ')[0]}`:''}!</h2><p>This {kindLabel} was approved{done.at?` on ${when(done.at)}`:''}. Your signed approval has been saved. Contact {b?.businessName||'the team'} about next steps{doc.amount.dueNow>0?` and the ${money(doc.amount.dueNow,doc.amount.currency)} first payment`:''}.</p>{(doc.salesperson?.email||b?.contactEmail)&&<p><small>Questions? Email <a className="st-text-link" href={`mailto:${doc.salesperson?.email||b?.contactEmail}`}>{doc.salesperson?.name||b?.businessName}</a>.</small></p>}</div>
         :<>
-          {(doc.amount.total>0)&&<div className="st-proposal-summary"><h3>Summary</h3>{doc.amount.setupFee>0&&<div><span>Setup fee</span><b>{money(doc.amount.setupFee,doc.amount.currency)}</b></div>}{doc.amount.monthly>0&&<div><span>Monthly</span><b>{money(doc.amount.monthly,doc.amount.currency)}/mo</b></div>}<div className="is-total"><span>Due on approval</span><b>{money(doc.amount.dueNow,doc.amount.currency)}</b></div></div>}
-          <form className="st-proposal-form" onSubmit={submit}><h3><ShieldCheck className="h-4 w-4"/> Approve & sign</h3><p>Review the {kindLabel}, then sign by typing your name. Your approval is recorded with the date and time.</p>
+          {(doc.amount.total>0)&&<div className="st-proposal-summary"><h3>Your investment</h3>{doc.amount.setupFee>0&&<div><span>Setup fee</span><b>{money(doc.amount.setupFee,doc.amount.currency)}</b></div>}{doc.amount.monthly>0&&<div><span>Monthly</span><b>{money(doc.amount.monthly,doc.amount.currency)}/mo</b></div>}<div className="is-total"><span>First payment</span><b>{money(doc.amount.dueNow,doc.amount.currency)}</b></div><p className="proposal-caption">Approval confirms your agreement. Payment is a separate step.</p></div>}
+          <form className="st-proposal-form" onSubmit={submit}><span className="proposal-eyebrow">THE NEXT STEP</span><h3><ShieldCheck className="h-4 w-4"/> Approve your {kindLabel}</h3><p>Review the {kindLabel}, then sign by typing your name. Your approval is recorded with the date and time.</p>
             <label className="st-field"><span>Full name</span><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} required minLength={2} maxLength={200} autoComplete="name"/></label>
             <label className="st-field"><span>Email</span><input type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} required maxLength={254} autoComplete="email"/></label>
             <label className="st-field"><span>Signature (type your full name)</span><input className="st-proposal-signature" value={form.signature} onChange={e=>setForm({...form,signature:e.target.value})} required minLength={2} maxLength={200} placeholder={form.name||'Your name'} autoComplete="off"/></label>
@@ -41,8 +57,8 @@ export default function ProposalPublic(){
           </form></>}
         {done&&doc.invoice?.url&&/^https:\/\//.test(doc.invoice.url)&&<a className="st-button st-primary" href={doc.invoice.url} target="_blank" rel="noreferrer">{doc.invoice.status==='paid'?'View paid invoice':'View invoice & pay'}</a>}
         {doc.expiresAt&&!done&&<p className="proposal-caption">Approval link expires {when(doc.expiresAt)}.</p>}
-        {b&&(b.contactEmail||b.contactPhone||b.website)&&<p className="st-proposal-contact">{b.businessName}{b.contactEmail?` · ${b.contactEmail}`:''}{b.contactPhone?` · ${b.contactPhone}`:''}{b.website?` · ${b.website.replace(/^https?:\/\//,'')}`:''}</p>}
+        {(doc.salesperson?.email||b?.contactEmail)&&<a className="proposal-question" href={`mailto:${doc.salesperson?.email||b?.contactEmail}`}><Mail size={18}/><span><strong>Have a question?</strong><small>Contact {doc.salesperson?.name||b?.businessName||'your representative'}</small></span></a>}{b&&(b.contactEmail||b.contactPhone||b.website)&&<p className="st-proposal-contact">{b.businessName}{b.contactEmail?` · ${b.contactEmail}`:''}{b.contactPhone?` · ${b.contactPhone}`:''}{b.website?` · ${b.website.replace(/^https?:\/\//,'')}`:''}</p>}
       </aside>
-    </div>}
+    </div><footer className="proposal-footer">{b?.businessName||'Your proposal'}{b?.companyAddress&&<span>{b.companyAddress}</span>}</footer></>}
   </main>;
 }

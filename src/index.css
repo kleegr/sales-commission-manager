@@ -685,3 +685,39 @@ input[type="number"] {
 .proposal-product-catalog{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;max-height:580px;overflow-y:auto;padding:2px;overscroll-behavior:contain}.proposal-catalog-card{display:flex;flex-direction:column;justify-content:space-between;align-items:flex-start;gap:16px;padding:20px;border:1px solid #e2e8f0;border-radius:14px;background:linear-gradient(155deg,#fff,#f8faff)}.proposal-catalog-card:has(button:disabled){border-color:#a5b4fc;background:#f5f7ff}.proposal-catalog-category{display:block;font-size:10px;font-weight:650;text-transform:uppercase;letter-spacing:.06em;color:#6366f1;margin-bottom:10px}.proposal-catalog-description{font-size:12px;line-height:1.65;color:#64748b;margin:9px 0;white-space:pre-line;overflow-wrap:anywhere}.proposal-catalog-card strong{font-size:16px;color:#1e293b}.proposal-catalog-card>button{width:100%;justify-content:center}
 .dark .proposal-select-trigger,.dark .proposal-select-panel,.dark .proposal-catalog-card{background:#0f172a;border-color:#334155;color:#e2e8f0}.dark .proposal-catalog-card strong,.dark .proposal-select-options button{color:#e2e8f0}.dark .proposal-select-options button:hover,.dark .proposal-select-options button[aria-pressed=true]{background:#312e81}
 @media(max-width:600px){.proposal-product-catalog{grid-template-columns:1fr}.proposal-catalog-card{padding:16px}}
+
+/* Keep the guided builder inside the available app viewport, including embeds. */
+.st-shell:has(.proposal-builder){height:100dvh;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.st-shell:has(.proposal-builder) .st-topbar{flex-shrink:0}
+.st-main:has(.proposal-builder){flex:1;min-height:0;overflow:hidden;padding:16px 24px;margin:0 auto;display:flex;flex-direction:column}
+.st-main .proposal-builder{flex:1;min-height:0;width:100%;display:flex;flex-direction:column;overflow:hidden;padding:0;margin:0 auto}
+.proposal-builder .proposal-builder-header{flex-shrink:0;margin-bottom:12px;gap:12px}
+.proposal-builder .proposal-builder-header h1{font-size:24px;margin:6px 0 4px}
+.proposal-builder .proposal-steps{flex-shrink:0;padding:8px;margin-bottom:14px}
+.proposal-builder>.proposal-error{flex-shrink:0;max-height:64px;overflow:auto;margin:0 0 10px}
+.proposal-builder .proposal-builder-grid{flex:1;min-height:0;align-items:stretch;overflow:hidden;gap:20px}
+.proposal-builder .proposal-editor{display:flex;flex-direction:column;min-height:0;overflow:hidden;padding:20px}
+.proposal-builder .proposal-editor>h2{flex-shrink:0;margin-bottom:14px}
+.proposal-editor-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:3px 6px 8px 3px;scrollbar-gutter:stable;scrollbar-width:thin}
+.proposal-builder .proposal-builder-footer{flex-shrink:0;margin-top:10px;padding-top:12px}
+.proposal-builder .proposal-builder-summary{position:static;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;padding:20px}
+.proposal-builder .proposal-product-catalog{max-height:clamp(180px,32dvh,380px);scrollbar-width:thin;scrollbar-gutter:stable}
+.proposal-builder .proposal-catalog-card{padding:14px;gap:10px}
+@media(max-width:760px){
+ .st-main:has(.proposal-builder){padding:10px}
+ .proposal-builder .proposal-builder-header p{display:none}
+ .proposal-builder .proposal-builder-grid{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) minmax(0,110px);gap:10px}
+ .proposal-builder .proposal-builder-summary{order:initial;padding:12px}
+ .proposal-builder .proposal-editor{padding:14px}
+ .proposal-builder .proposal-steps{margin-bottom:10px;padding:4px;gap:2px}
+ .proposal-builder .proposal-steps button{padding:4px;font-size:11px}
+ .proposal-builder .proposal-builder-summary>h2{font-size:15px}
+}
+@media(max-height:650px){
+ .proposal-builder .proposal-builder-header p{display:none}
+ .proposal-builder .proposal-builder-header{margin-bottom:6px}
+ .proposal-builder .proposal-builder-header h1{font-size:20px;margin:2px 0}
+ .proposal-builder .proposal-steps{margin-bottom:8px;padding:4px}
+ .proposal-builder .proposal-editor{padding:12px}
+ .proposal-builder .proposal-editor>h2{margin-bottom:8px;font-size:16px}
+}

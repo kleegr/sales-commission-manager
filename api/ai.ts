@@ -27,6 +27,7 @@ import {
   type GenerateInput,
 } from "./_lib/documents-core.js";
 import type { AiTarget, DocumentKind, SectionType } from "../src/types/index.js";
+import { resolveBusinessName } from "../src/lib/proposal-business-name.js";
 
 const uid = (p: string) => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 const asKind = (v: unknown): DocumentKind => (v === "contract" ? "contract" : "proposal");
@@ -149,6 +150,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Current business profile for grounding the prompt.
       const bp = await query<any>(`SELECT * FROM business_profiles WHERE tenant_id = $1`, [user.tenantId]);
       const business = bp.rows[0] ? rowToBusinessProfile(bp.rows[0]) : null;
+      if (!business?.businessName?.trim()) return res.status(409).json({error:"business_name_required", message:"Add your business name in Proposals → Business Setup before using AI drafting."});
 
       const genInput: GenerateInput = {
         kind,
@@ -171,6 +173,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       const { title, sections } = parseAiSections(raw, kind);
+      for (const section of sections) section.content = resolveBusinessName(section.content, business.businessName);
 
       // Append to history (best-effort; a logging failure must not lose output).
       try {

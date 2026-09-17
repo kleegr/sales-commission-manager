@@ -513,6 +513,7 @@ export function buildGenerationMessages(input: GenerateInput): { system: string;
     `"type" must be one of: ${allowed}. Keep "content" as readable plain text (short paragraphs; use line breaks, ` +
     `not markdown headings). Where a real value is unknown, use a merge token such as {{client_company}}, ` +
     `{{client_name}}, {{business_name}}, {{setup_fee}}, {{monthly_fee}}, {{start_date}} or {{payment_terms}} instead of inventing specifics. ` +
+    `Always use the exact business name supplied in BUSINESS PROFILE. Never write [Business name], [Company name], or other square-bracket placeholders. ` +
     (input.kind === "contract"
       ? `This is a template only; do not claim it is legal advice.`
       : `Make it persuasive but honest.`);

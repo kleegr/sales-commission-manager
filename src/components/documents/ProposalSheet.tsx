@@ -4,6 +4,7 @@ import type { PreviewBranding } from './DocumentPreview';
 import { SECTION_LABELS } from '../../lib/documents';
 import { proposalTotals } from '../../lib/proposal-pricing';
 import { displayMinor } from '../../lib/exact-commission';
+import { resolveBusinessName } from '../../lib/proposal-business-name';
 
 interface Props {
   title: string;
@@ -25,7 +26,7 @@ const paragraphs = (text: string) => text.split(/\n{2,}/).filter(Boolean).map((p
 export function ProposalSheet({ title, sections, branding, items = [], currency, digits = 2, recipient, preparedBy, sentAt, expiresAt }: Props) {
   const totals = proposalTotals(items);
   const money = (value: bigint) => displayMinor(value.toString(), currency, digits);
-  const content = sections.filter(section => section.content.trim());
+  const content = sections.map(section => ({...section, content:resolveBusinessName(section.content, branding.businessName)})).filter(section => section.content.trim());
   const summary = content.find(section => /summary/i.test(section.title)) || content.find(section => section.type === 'solution');
   const terms = content.filter(section => ['terms', 'payment_terms', 'cancellation', 'refund', 'term_length', 'disclaimers'].includes(section.type));
   const remaining = content.filter(section => section !== summary && !terms.includes(section));

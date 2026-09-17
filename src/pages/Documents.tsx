@@ -553,7 +553,7 @@ export default function Documents() {
     </div>
   );
 
-  if(guided) return <ProposalBuilder key={guided.existing?.id||'new'} existing={guided.existing} clients={clients} salespeople={data.salespeople} salespersonId={user?.salespersonId} self={isSelf} products={catalog} campaigns={campaignOptions} currency={currency} digits={digits} loading={catalogLoading} loadError={catalogError} branding={brandingFromProfile(profile,companyName)} aiReady={aiOn&&ai.configured} defaultTerms={profile?.paymentTerms} onClose={()=>setGuided(null)} onSaved={async()=>{await refreshLists();setGuided(null);setTab('proposalDocs');setSavedNotice('Proposal saved as a draft. Preview it, then share a client approval link.');}}/>;
+  if(guided) return <ProposalBuilder key={guided.existing?.id||'new'} existing={guided.existing} clients={clients} salespeople={data.salespeople} salespersonId={user?.salespersonId} self={isSelf} products={catalog} campaigns={campaignOptions} currency={currency} digits={digits} loading={catalogLoading} loadError={catalogError} branding={brandingFromProfile(profile,companyName)} aiReady={aiOn&&ai.configured} businessName={profile?.businessName} defaultTerms={profile?.paymentTerms} onClose={()=>setGuided(null)} onSaved={async()=>{await refreshLists();setGuided(null);setTab('proposalDocs');setSavedNotice('Proposal saved as a draft. Preview it, then share a client approval link.');}}/>;
 
   return (
     <div className="space-y-6 proposal-center">

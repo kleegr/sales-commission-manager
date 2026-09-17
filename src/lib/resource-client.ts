@@ -492,6 +492,10 @@ export async function aiGenerate(input: AiGenerateInput): Promise<AiGenerateResu
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ op: "generate", ...input }),
   });
+  if (res.status === 409) {
+    const body = await res.json();
+    throw new Error(body?.message || body?.error || 'AI drafting is unavailable.');
+  }
   return asJson(res);
 }
 

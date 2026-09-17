@@ -1,9 +1,10 @@
 import {useRef,useState} from 'react';
 import {ArrowLeft, ArrowRight, Check, FileText, Loader2, Sparkles} from 'lucide-react';
 import {Link} from 'react-router-dom';
-import {Button, Field, Input, Select} from '../ui';
+import {Button, Field, Input} from '../ui';
 import {LineItemsEditor, type CatalogProduct} from './LineItems';
 import {ProposalPricing} from './ProposalPricing';
+import {SearchSelect} from './SearchSelect';
 import type {PreviewBranding} from './DocumentPreview';
 import {ProposalSheet} from './ProposalSheet';
 import {aiGenerate, createClientDocument, updateClientDocument} from '../../lib/resource-client';
@@ -14,7 +15,7 @@ import {proposalTotals} from '../../lib/proposal-pricing';
 interface Props {
   existing?: DocRow | null;
   clients: Client[];
-  salespeople: {id:string; name:string}[];
+  salespeople: {id:string; name:string; email?:string}[];
   salespersonId?: string | null;
   self: boolean;
   products: CatalogProduct[];
@@ -61,6 +62,7 @@ export function ProposalBuilder(p: Props) {
       if(mode==='client'&&!clientId)return 'Choose a client.';
       if(mode==='prospect'&&(!prospect.name.trim()||!/^\S+@\S+\.\S+$/.test(prospect.email.trim())))return 'Enter the contact name and a valid email.';
       if(!seller)return 'Choose the salesman who owns this proposal.';
+      if(!p.existing&&!p.salespeople.some(s=>s.id===seller))return 'This client’s salesman is not active or enrolled. Ask an administrator to review their assignment on the Salesman page.';
     }
     if(index===1){
       if(p.loading)return 'Wait for your catalog to finish loading.';
@@ -95,10 +97,10 @@ export function ProposalBuilder(p: Props) {
       {step===0&&<div className="proposal-fields">
         <Field label="Proposal title"><Input value={title} onChange={e=>setTitle(e.target.value)} placeholder={resolvedTitle}/></Field>
         {!p.existing&&<div className="st-mode-toggle"><button type="button" className={mode==='client'?'is-active':''} onClick={()=>setMode('client')}>Existing client</button><button type="button" className={mode==='prospect'?'is-active':''} onClick={()=>setMode('prospect')}>New client</button></div>}
-        {p.existing?<p>Prepared for <strong>{recipient}</strong>. Client and ownership remain attached to this draft.</p>:mode==='client'?<Field label="Client"><Select value={clientId} onChange={e=>{setClientId(e.target.value);const c=p.clients.find(c=>c.id===e.target.value);if(c?.salespersonId)setSeller(c.salespersonId);}}><option value="">Choose a client…</option>{p.clients.map(c=><option key={c.id} value={c.id}>{c.companyName||c.contactName}</option>)}</Select></Field>:<div className="proposal-fields-two">{(['name','email','company','phone'] as const).map(key=><Field key={key} label={{name:'Contact name *',email:'Email *',company:'Company',phone:'Phone'}[key]}><Input type={key==='email'?'email':'text'} value={prospect[key]} onChange={e=>setProspect({...prospect,[key]:e.target.value})}/></Field>)}</div>}
-        <Field label="Responsible salesman" hint="The proposal, client approval and resulting sales stay connected to this person."><Select disabled={p.self||!!p.existing||(mode==='client'&&!!client?.salespersonId)} value={seller} onChange={e=>setSeller(e.target.value)}><option value="">Choose a salesman…</option>{p.salespeople.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</Select></Field>
+        {p.existing?<p>Prepared for <strong>{recipient}</strong>. Client and ownership remain attached to this draft.</p>:mode==='client'?<Field label="Client"><SearchSelect label="Client" value={clientId} placeholder="Choose a client…" options={p.clients.map(c=>({value:c.id,label:c.companyName||c.contactName,detail:[c.companyName?c.contactName:'',c.email].filter(Boolean).join(' · ')}))} onChange={value=>{setClientId(value);const c=p.clients.find(c=>c.id===value);setSeller(c?.salespersonId||p.salespersonId||'');}}/></Field>:<div className="proposal-fields-two">{(['name','email','company','phone'] as const).map(key=><Field key={key} label={{name:'Contact name *',email:'Email *',company:'Company',phone:'Phone'}[key]}><Input type={key==='email'?'email':'text'} value={prospect[key]} onChange={e=>setProspect({...prospect,[key]:e.target.value})}/></Field>)}</div>}
+        <Field label="Responsible salesman" hint="The proposal, client approval and resulting sales stay connected to this person."><SearchSelect label="Responsible salesman" disabled={p.self||!!p.existing||(mode==='client'&&!!client?.salespersonId)} value={seller} placeholder={seller?'Assigned salesman (unavailable for new assignments)':'Choose a salesman…'} options={p.salespeople.map(s=>({value:s.id,label:s.name,detail:s.email}))} onChange={setSeller}/><p className="proposal-caption">Only active, enrolled salesmen appear here. Add or import salesmen from the Salesman page.</p></Field>
       </div>}
-      {step===1&&<><p className="proposal-caption">Names, descriptions and billing details come from Products. Edit the quantity and selling price here.</p><LineItemsEditor items={items} onChange={setItems} products={p.products} currency={p.currency} digits={p.digits} loading={p.loading} showSummary={false}/><Link className="proposal-catalog-link" to="/products">Manage your product catalog →</Link><details className="proposal-advanced"><summary>Commission campaign (optional)</summary><Field label="Campaign" hint="Use a campaign when it defines the commission plan for these products."><Select value={campaign} onChange={e=>setCampaign(e.target.value)}><option value="">Salesman’s default commission plan</option>{p.campaigns.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select></Field></details></>}
+      {step===1&&<><p className="proposal-caption">Names, descriptions and billing details come from Products. Edit the quantity and selling price here.</p><LineItemsEditor items={items} onChange={setItems} products={p.products} currency={p.currency} digits={p.digits} loading={p.loading} showSummary={false}/><Link className="proposal-catalog-link" to="/products">Manage your product catalog →</Link><details className="proposal-advanced"><summary>Commission campaign (optional)</summary><Field label="Campaign" hint="Use a campaign when it defines the commission plan for these products."><SearchSelect label="Campaign" value={campaign} onChange={setCampaign} options={[{value:'',label:'Salesman’s default commission plan'},...p.campaigns.map(c=>({value:c.id,label:c.name}))]}/></Field></details></>}
       {step===2&&<div className="proposal-fields"><Field label="What does this client need?"><textarea value={requirements} onChange={e=>setRequirements(e.target.value)} rows={3} placeholder="Describe their goals and what you will deliver."/></Field><div className="proposal-inline"><h3>Proposal summary</h3><Button variant="secondary" disabled={!p.aiReady||!p.businessName?.trim()||aiBusy} onClick={()=>void writeSummary()}>{aiBusy?<Loader2 size={16} className="animate-spin"/>:<Sparkles size={16}/>} Draft with AI</Button></div>{!p.aiReady&&<p className="proposal-caption">AI drafting becomes available once OpenAI is configured. You can write and save your proposal now.</p>}<textarea aria-label="Proposal summary" rows={6} value={summary||defaultSummary} onChange={e=>setSummary(e.target.value)}/><Field label="Terms & next steps"><textarea rows={5} value={terms} onChange={e=>setTerms(e.target.value)}/></Field></div>}
       {step===3&&<div className="proposal-review"><p className="proposal-caption">Prepared for <strong>{recipient}</strong> · {p.salespeople.find(s=>s.id===seller)?.name}</p><ProposalSheet title={resolvedTitle} sections={sections} branding={p.branding} items={items} currency={p.currency} digits={p.digits} recipient={{name:recipient,company:''}} preparedBy={p.salespeople.find(s=>s.id===seller)?.name}/></div>}
       <footer className="proposal-builder-footer"><Button variant="secondary" disabled={busy} onClick={()=>step?setStep(step-1):p.onClose()}>{step?'Back':'Cancel'}</Button>{step<3?<Button onClick={next}>Continue <ArrowRight size={16}/></Button>:<Button disabled={busy||aiBusy} onClick={()=>void save()}>{busy?<Loader2 size={16} className="animate-spin"/>:<FileText size={16}/>}Save proposal</Button>}</footer>

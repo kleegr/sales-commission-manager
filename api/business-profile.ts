@@ -17,6 +17,7 @@ import { normalizeBusinessProfile, businessProfileColumns, rowToBusinessProfile,
 const uid = (p: string) => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  res.setHeader("Cache-Control", "private, no-store");
   if (!hasDb()) return res.status(503).json({ error: "database_not_configured" });
   try {
     await ensureSchema();

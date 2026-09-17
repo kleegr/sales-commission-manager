@@ -57,7 +57,7 @@ export function sectionKind(kind: DocKind): DocumentKind {
 // Document line items (pure). Shape only — catalog existence / assignment /
 // price-floor validation (which needs the database) lives in _lib/products.ts.
 // ---------------------------------------------------------------------------
-export interface DocumentLineItem { productId: string; name: string; qty: number; unitPriceMinor: string; billingKind: string }
+export interface DocumentLineItem { productId: string; name: string; qty: number; unitPriceMinor: string; billingKind: string; description?: string; category?: string; recurringInterval?: string; currency?: string }
 const LINE_BILLING_KINDS = ["one_time", "recurring", "setup"];
 /** Coerce a stored/incoming line-item array into clean shapes (no DB checks). */
 export function normalizeLineItems(raw: unknown): DocumentLineItem[] {
@@ -71,7 +71,7 @@ export function normalizeLineItems(raw: unknown): DocumentLineItem[] {
     const qty = Number.isInteger(qtyN) && qtyN > 0 ? qtyN : 1;
     const unitPriceMinor = /^\d{1,28}$/.test(String(o.unitPriceMinor)) ? String(o.unitPriceMinor) : "0";
     const billingKind = LINE_BILLING_KINDS.includes(String(o.billingKind)) ? String(o.billingKind) : "one_time";
-    out.push({ productId, name: str(o.name), qty, unitPriceMinor, billingKind });
+    out.push({ productId, name: str(o.name), qty, unitPriceMinor, billingKind, ...(o.description != null ? {description:str(o.description)} : {}), ...(o.category != null ? {category:str(o.category)} : {}), ...(o.recurringInterval != null ? {recurringInterval:str(o.recurringInterval)} : {}), ...(o.currency != null ? {currency:str(o.currency)} : {}) });
   }
   return out;
 }
@@ -311,6 +311,7 @@ export function rowToDocument(r: any): ClientDocumentRow {
       Array.isArray(r.line_items) ? r.line_items : typeof r.line_items === "string" ? safeJson(r.line_items) : r.line_items,
     ),
     campaignId: r.campaign_id ?? null,
+    ghlInvoiceId: r.ghl_invoice_id ?? null, ghlInvoiceStatus: r.ghl_invoice_status ?? null, ghlInvoiceUrl: r.ghl_invoice_url ?? null,
     title: r.title ?? "",
     clientId: r.client_id ?? null,
     salespersonId: r.salesperson_id ?? null,

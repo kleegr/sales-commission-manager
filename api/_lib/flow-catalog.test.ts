@@ -81,6 +81,18 @@ try{
     const items=normalizeLineItems([{productId:prodA,qty:3,unitPriceMinor:'12000'},{productId:prodB,qty:2,unitPriceMinor:'5000'}]);
     assert.equal(lineItemsAmountMinor(items),'46000');
   });
+  await check('proposal snapshots use catalog facts and reject inactive, cross-currency or malformed rows',async()=>{
+    await db.query("UPDATE products SET description='Managed WhatsApp accounts',category='Messaging',recurring_interval='year' WHERE id=$1",[prodB]);
+    const r=await validateDocumentLineItems(db,'a',{salespersonId:null,enforceAssignment:false},[{productId:prodB,qty:3,unitPriceMinor:'5000',name:'Tampered',billingKind:'one_time',description:'Invented'}]);
+    assert.equal(r.items[0].name,'Beta');assert.equal(r.items[0].description,'Managed WhatsApp accounts');assert.equal(r.items[0].billingKind,'recurring');assert.equal(r.items[0].recurringInterval,'year');
+    const stored=normalizeLineItems(JSON.parse(JSON.stringify(r.items)));assert.equal(stored[0].description,r.items[0].description);
+    await db.query("UPDATE products SET status='inactive' WHERE id=$1",[prodB]);
+    await assert.rejects(validateDocumentLineItems(db,'a',{salespersonId:null,enforceAssignment:false},[{productId:prodB,qty:1,unitPriceMinor:'5000'}]),{code:'inactive_product'});
+    await db.query("UPDATE products SET status='active',currency='EUR' WHERE id=$1",[prodB]);
+    await assert.rejects(validateDocumentLineItems(db,'a',{salespersonId:null,enforceAssignment:false},[{productId:prodB,qty:1,unitPriceMinor:'5000'}]),{code:'currency_mismatch'});
+    await db.query("UPDATE products SET currency='USD' WHERE id=$1",[prodB]);
+    await assert.rejects(validateDocumentLineItems(db,'a',{salespersonId:null,enforceAssignment:false},[{productId:prodB,qty:1.5,unitPriceMinor:'5000'}]),{code:'invalid_quantity'});
+  });
   await check('campaign_product_structures set + resolver: product-specific vs campaign-default',async()=>{
     assert.equal(await resolveProductStructure(db,'a','camp1',prodA),'v1'); // no structure yet → campaign default
     await tx(c=>setCampaignStructures(c,u,{campaignId:'camp1',map:[{productId:prodA,planVersionId:'v2'}]}));

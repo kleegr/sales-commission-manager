@@ -721,3 +721,37 @@ input[type="number"] {
  .proposal-builder .proposal-editor{padding:12px}
  .proposal-builder .proposal-editor>h2{margin-bottom:8px;font-size:16px}
 }
+
+/* Dashboard: guided setup first, then a compact operational overview. */
+.st-dashboard-page>.st-heading{padding:24px 28px;border:1px solid #dce5fb;border-radius:18px;background:linear-gradient(120deg,#eef3ff 0%,#fafbff 65%,#f0fdfa 100%);margin-bottom:20px}
+.st-dashboard-page>.st-heading h1{color:#172b4d}
+.st-dashboard-page>.st-guide{margin-bottom:22px;overflow:hidden;border-color:#dce5fb;background:#fff}
+.st-dashboard-page .st-guide-head{padding:18px 20px}
+.st-dashboard-page .st-guide-title strong{font-size:16px;color:#172b4d}
+.st-dashboard-page .st-guide-bar{margin:0 20px 16px;height:5px;background:#edf2ff}
+.st-dashboard-page .st-guide-list{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;padding:0 20px 20px;border:0}
+.st-dashboard-page .st-guide-list li{display:flex;flex-direction:column;align-items:flex-start;gap:12px;margin:0;padding:16px;background:#f8faff;border:1px solid #e3eaf7;border-radius:12px;min-width:0}
+.st-dashboard-page .st-guide-list li.is-done{background:#f5fbf8;border-color:#dbefe5}
+.st-dashboard-page .st-guide-body{flex:1;display:flex;flex-direction:column;gap:7px}
+.st-dashboard-page .st-guide-label{font-weight:650;font-size:13px;color:#253858;text-decoration:none}
+.st-dashboard-page .st-guide-list .st-help{font-size:12px;line-height:1.6;color:#64748b}
+.st-dashboard-page .st-guide-cta{font-size:12px;white-space:normal;text-align:left;min-height:32px}
+.st-dashboard-page>.st-filter-bar{box-shadow:none;background:#f8fafc;padding:14px 18px;margin-bottom:24px}
+.dashboard-proposals>.st-panel-heading{padding:0 2px}
+.dashboard-proposals>.st-panel-heading h2,.st-dashboard-activity>.st-panel-heading h2{font-size:20px;font-weight:700;letter-spacing:-.3px;color:#172b4d}
+.dashboard-proposal-workspace{display:grid;grid-template-columns:minmax(0,.85fr) minmax(0,1.15fr);gap:18px;align-items:stretch}
+.dashboard-proposal-workspace .dashboard-proposal-stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.dashboard-proposal-workspace .dashboard-proposal-stats .st-panel{justify-content:center;border-top:0;box-shadow:none;position:relative;overflow:hidden;min-height:120px}
+.dashboard-proposal-stats .st-panel:before{content:'';position:absolute;left:0;top:22px;bottom:22px;width:4px;background:#6366f1;border-radius:0 4px 4px 0}
+.dashboard-proposal-stats .st-panel:nth-child(2):before{background:#94a3b8}.dashboard-proposal-stats .st-panel:nth-child(3):before{background:#f59e0b}.dashboard-proposal-stats .st-panel:nth-child(4):before{background:#10b981}
+.dashboard-proposal-workspace .dashboard-proposal-recent{box-shadow:none;padding:18px 22px}
+.dashboard-proposal-recent .st-panel-heading{padding:0 0 12px}.dashboard-proposal-recent h3{font-weight:650;font-size:14px}
+.dashboard-proposal-workspace .dashboard-proposal-recent li{padding:10px 0}
+.st-dashboard-page>.st-finance-strip{border-color:#dce5fb;background:#f8faff;box-shadow:none}
+.dark .st-dashboard-page>.st-heading,.dark .st-dashboard-page>.st-guide,.dark .st-dashboard-page>.st-filter-bar,.dark .st-dashboard-page>.st-finance-strip{background:#162033;border-color:#334155}
+.dark .st-dashboard-page .st-guide-list li{background:#111827;border-color:#334155}
+.dark .st-dashboard-page .st-guide-label,.dark .st-dashboard-page .st-guide-title strong,.dark .st-dashboard-page>.st-heading h1,.dark .dashboard-proposals>.st-panel-heading h2{color:#e2e8f0}
+@media(max-width:1100px){.st-dashboard-page .st-guide-list{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:760px){.dashboard-proposal-workspace{grid-template-columns:minmax(0,1fr)}.st-dashboard-page .st-guide-list{grid-template-columns:repeat(2,minmax(0,1fr));padding:0 12px 12px}.st-dashboard-page>.st-heading{padding:20px}.st-dashboard-page .st-guide-head{padding:16px 12px}}
+@media(max-width:420px){.st-dashboard-page .st-guide-list{grid-template-columns:minmax(0,1fr)}.st-dashboard-page .st-guide-list li{gap:8px;padding:12px}}
+.st-dashboard-page .st-guide-list li.is-done .st-guide-label{color:#276749;text-decoration:none}

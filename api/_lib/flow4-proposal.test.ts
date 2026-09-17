@@ -102,6 +102,17 @@ try{
     const row=(await db.query('SELECT * FROM documents WHERE id=$1',[docId])).rows[0];assert.equal(row.public_token,hashToken(token));assert.notEqual(row.public_token,token);assert.equal(row.status,'sent');assert.equal(row.sent_to,'pat@example.test');assert.ok(row.sent_at&&row.token_expires_at);
     const mail=(await db.query('SELECT * FROM tracker_email_outbox WHERE tenant_id=$1',['a'])).rows;assert.equal(mail.length,1);assert.equal(mail[0].recipient,'pat@example.test');assert.equal(mail[0].status,'pending');assert.ok(mail[0].body.includes(r.body.link));
   });
+  await check('invalid proposal domain leaves the existing approval link usable',async()=>{
+    const before=(await db.query('SELECT public_token,token_expires_at,status FROM documents WHERE id=$1',[docId])).rows[0];
+    const previous=process.env.PROPOSAL_PUBLIC_URL;
+    try {
+      process.env.PROPOSAL_PUBLIC_URL='https://sales.example.test/proposal';
+      const r=await call(documentsHandler,asRep({op:'link',id:docId}));
+      assert.equal(r.status,400);assert.equal(r.body.error,'proposal_domain_invalid');
+      const after=(await db.query('SELECT public_token,token_expires_at,status FROM documents WHERE id=$1',[docId])).rows[0];
+      assert.deepEqual(after,before);
+    } finally { if(previous===undefined)delete process.env.PROPOSAL_PUBLIC_URL;else process.env.PROPOSAL_PUBLIC_URL=previous; }
+  });
   await check('public GET renders the merged document, branding and amount summary, and marks it viewed exactly once',async()=>{
     const r=await pub({method:'GET',query:{token}});assert.equal(r.status,200,JSON.stringify(r.body));
     assert.equal(r.body.status,'viewed');assert.equal(r.body.title,'Growth plan');assert.equal(r.body.branding.businessName,'Acme Studio');assert.deepEqual(r.body.amount,{total:750,setupFee:500,monthly:250,dueNow:500,currency:'USD'});assert.equal(r.body.recipient.company,'Prospect Co');assert.equal(r.body.salesperson.name,'Alice Rep');assert.equal(r.body.accepted,null);assert.ok(Array.isArray(r.body.sections)&&r.body.sections.length>3);assert.equal('id' in r.body,false);

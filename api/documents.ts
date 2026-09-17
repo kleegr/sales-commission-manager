@@ -559,6 +559,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (gate) return res.status(403).json({ error: gate });
         const origin = requestOrigin(req);
         if (!origin) return res.status(400).json({ error: "origin_unavailable" });
+        // Validate the configured domain before rotating a usable token.
+        try { proposalLink(origin, 'validate'); }
+        catch { return res.status(400).json({ error: "proposal_domain_invalid", message: "The proposal domain setting is invalid. Use an HTTPS domain without a path, or remove PROPOSAL_PUBLIC_URL to use the app address. Your existing link was not changed." }); }
         const client = d.clientId ? (await query<any>(`SELECT * FROM clients WHERE tenant_id = $1 AND id = $2`, [user.tenantId, d.clientId])).rows[0] ?? null : null;
         let to: string | null = null;
         if (op === "send") {

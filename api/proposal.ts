@@ -25,7 +25,15 @@ export const PROPOSAL_LINK_TTL_DAYS=60;
 const TOKEN_RE=/^[A-Za-z0-9_-]{43}$/;
 export const hashToken=(t:string)=>createHash('sha256').update(t).digest('hex');
 export const mintToken=()=>randomBytes(32).toString('base64url');
-export const proposalLink=(origin:string,token:string)=>`${origin.replace(/\/+$/,'')}/p/${token}`;
+export const proposalLink=(origin:string,token:string)=>{
+  const configured=process.env.PROPOSAL_PUBLIC_URL?.trim();
+  if(configured){
+    const url=new URL(configured);
+    if(url.protocol!=='https:'||url.username||url.password||url.search||url.hash||url.pathname!=='/')throw new Error('PROPOSAL_PUBLIC_URL must be an HTTPS origin without a path');
+    origin=url.origin;
+  }
+  return `${origin.replace(/\/+$/,'')}/p/${token}`;
+};
 const iso=(v:any)=>v?new Date(v).toISOString():null;
 const ACCEPT_MESSAGES:Record<string,string>={name_required:'Enter your full name.',email_invalid:'Enter a valid email address.',signature_required:'Type your name as your signature.',agreement_required:'Tick the box to confirm you agree.'};
 

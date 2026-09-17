@@ -13,10 +13,26 @@ import {installTestDatabase} from './db.js';
 import {publishPlan,assignPlan} from './tracker-people.js';
 import {mutations} from '../tracker.js';
 import documentsHandler from '../documents.js';
-import proposalHandler,{hashToken,proposalEmail,calendarDate,issueProposalLink} from '../proposal.js';
+import proposalHandler,{hashToken,proposalEmail,calendarDate,issueProposalLink,proposalLink} from '../proposal.js';
 import {normalizeProspect,normalizeAcceptance,receiptAmount,toMinor,proposalOverLimit,rowToDocument} from './documents-core.js';
 import type {ExactPlan} from '../../src/lib/exact-commission.js';
 import type {SessionUser} from './auth.js';
+
+// A canonical proposal domain must never inherit a checkout path or credentials.
+const previousProposalOrigin=process.env.PROPOSAL_PUBLIC_URL;
+try {
+  delete process.env.PROPOSAL_PUBLIC_URL;
+  assert.equal(proposalLink('https://app.test','abc'), 'https://app.test/p/abc');
+  process.env.PROPOSAL_PUBLIC_URL='https://sales.example.test/';
+  assert.equal(proposalLink('https://old.test','abc'), 'https://sales.example.test/p/abc');
+  for (const invalid of ['http://sales.example.test','https://sales.example.test/checkout','https://user:pass@sales.example.test','https://sales.example.test/?redirect=bad']) {
+    process.env.PROPOSAL_PUBLIC_URL=invalid;
+    assert.throws(()=>proposalLink('https://app.test','abc'));
+  }
+} finally {
+  if(previousProposalOrigin===undefined) delete process.env.PROPOSAL_PUBLIC_URL;
+  else process.env.PROPOSAL_PUBLIC_URL=previousProposalOrigin;
+}
 
 const {PGlite}=await import(process.env.PGLITE_TEST_MODULE||'@electric-sql/pglite');const pg=new PGlite();
 // ensureSchema() sends multi-statement SQL through query(); PGlite needs exec() for that, so route param-less calls there.

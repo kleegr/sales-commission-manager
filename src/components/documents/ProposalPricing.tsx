@@ -1,3 +1,4 @@
+import {billableQty} from '../../lib/proposal-suite';
 import type { DocumentLineItem } from '../../types';
 import { displayMinor } from '../../lib/exact-commission';
 import { billingLabel, proposalTotals } from '../../lib/proposal-pricing';
@@ -7,7 +8,7 @@ export function ProposalPricing({items, currency, digits = 2, detailed = true}: 
   return <section className="proposal-pricing" aria-label="Proposal pricing">
     <h3>Your investment</h3>
     {detailed && <div className="proposal-items">{items.map((item, index) => <div key={`${item.productId}-${index}`} className="proposal-item">
-      <div><strong>{item.name}</strong>{item.description && <p>{item.description}</p>}<small>{item.qty} × {displayMinor(item.unitPriceMinor, currency, digits)} · {billingLabel(item)}</small></div>
+      <div><strong>{item.name}</strong>{item.description && <p>{item.description}</p>}<small>{billableQty(item)} × {displayMinor(item.unitPriceMinor, currency, digits)} · {billingLabel(item)}{item.includedQty?` · ${item.includedQty} included`:''}</small></div>
       <b>{money(proposalTotals([item]).firstPayment)}</b>
     </div>)}</div>}
     <dl><div><dt>One-time & setup</dt><dd>{money(totals.oneTime)}</dd></div>

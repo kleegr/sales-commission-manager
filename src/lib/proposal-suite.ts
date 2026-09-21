@@ -58,7 +58,7 @@ export function reviewProposal(input:{title:string;sections:DocumentSection[];it
   if(!input.sections.some(s=>s.type==='scope'&&s.content.trim().length>20))add('Clarify the scope','Describe the deliverables and what is outside the agreed scope.');
   if(!input.sections.some(s=>s.type==='terms'&&s.content.trim().length>20))add('Payment terms are missing','Explain when payment is due and how changes are handled.');
   const text=input.sections.map(s=>s.content).join('\n');
-  if(/\[(?:business|client|company|insert)[^\]]*\]|\{\{/.test(text))add('Unfilled placeholders','Replace placeholders before sharing.');
+  if(/\[(?:business|client|company|insert)[^\]]*\]|\{\{/i.test(text))add('Unfilled placeholders','Replace placeholders before sharing.');
   if(/\b(guarantee[ds]?|risk.free|100% success|unlimited)\b/i.test(text))add('Check strong promises','Confirm that guarantees and unlimited services match your actual offer.');
   const o=input.options;
   if(o?.effectiveDate&&o.deliveryDate&&o.deliveryDate<o.effectiveDate)add('Delivery date conflict','Delivery is earlier than the agreement’s effective date.');

@@ -42,7 +42,7 @@ export function LinkBanner({result,onClose}:{result:ShareResult;onClose:()=>void
     <label className="block text-sm font-medium">Proposal URL<input aria-label="Proposal URL" className="mt-2 block w-full rounded-lg border border-slate-300 bg-slate-50 p-3 text-sm text-slate-800" readOnly value={link} onFocus={e=>e.currentTarget.select()} onClick={e=>e.currentTarget.select()}/></label>
     <div className="flex flex-wrap items-center gap-3"><CopyButton key={link} text={link}/><a className="st-text-link" href={link} target="_blank" rel="noreferrer">Open proposal ↗</a></div>
     {alternate&&<div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><p>{useApp?'This address uses the same proposal and tracking.':'If your custom domain is not connected yet, use the current app address to share this proposal.'}</p><button type="button" className="mt-2 font-semibold underline" onClick={()=>setUseApp(!useApp)}>{useApp?'Use custom domain':'Use current app address'}</button></div>}
-    <p className="text-xs text-slate-500">Anyone with this private link can view and approve the proposal.{result.expiresAt?` Expires ${formatDate(result.expiresAt)}.`:''} Copy it before leaving this page. Reopening Get link during this visit keeps the same URL; creating a replacement after reloading invalidates the previous link.</p>
+    <p className="text-xs text-slate-500">Anyone with this private link can view and approve the proposal.{result.expiresAt?` Expires ${formatDate(result.expiresAt)}.`:''} Copy it before leaving this page. Previously shared links remain valid until they expire or you cancel the proposal. Revisions have their own approval links.</p>
     <Button variant="secondary" onClick={onClose}>Done</Button>
   </div>;
 }

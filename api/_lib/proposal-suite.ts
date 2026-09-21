@@ -17,7 +17,7 @@ export const canSeeCosts=(u:SessionUser)=>['owner','admin'].includes(u.role);
 export async function scopedProposal(db:SQL,u:SessionUser,documentId:string,forUpdate=false) {
   const row=(await db.query('SELECT * FROM documents WHERE tenant_id=$1 AND id=$2'+(forUpdate?' FOR UPDATE':''),[u.tenantId,documentId])).rows[0];
   if(!row)throw new TrackerError('not_found','Proposal not found.',404);
-  if(isSelfRole(u.role)&&row.salesperson_id!==u.salespersonId)throw new TrackerError('not_found','Proposal not found.',404);
+  if(isSelfRole(u.role)&&(!u.salespersonId||row.salesperson_id!==u.salespersonId))throw new TrackerError('not_found','Proposal not found.',404);
   if(u.role==='sales_manager'&&!(await db.query('SELECT 1 FROM salespeople WHERE tenant_id=$1 AND id=$2 AND manager_user_id=$3',[u.tenantId,row.salesperson_id,u.id])).rows.length)throw new TrackerError('not_found','Proposal not found.',404);
   return row;
 }
@@ -55,7 +55,8 @@ export async function approvalState(db:SQL,row:any,ws:any) {
   if(policy.thresholdMinor&&amounts.some(a=>a>=BigInt(policy.thresholdMinor)))reasons.push('Proposal or package exceeds the approval threshold');
   if(ws.options?.approvalNote)reasons.push('An exception was requested');
   if(policy.customTerms){const standard=(await db.query("SELECT profile->>'paymentTerms' AS payment_terms FROM business_profiles WHERE tenant_id=$1",[row.tenant_id])).rows[0]?.payment_terms||'';const terms=rowToDocument(row).sections.filter(s=>s.type==='terms').map(s=>s.content.trim()).join('\n');if(terms!==standard.trim())reasons.push('Custom terms need review');}
-  const current=ws.approval_hash===documentFingerprint(row,ws.options);
+  const reviewedFingerprint=row.status==='signed'&&ws.shared_snapshot?.approvalFingerprint||documentFingerprint(row,ws.options);
+  const current=ws.approval_hash===reviewedFingerprint;
   return {required:reasons.length>0,reasons,status:current?ws.approval_status:'not_requested',note:ws.review_note||'',reviewedAt:ws.reviewed_at||null};
 }
 export async function assertShareApproved(db:SQL,row:any) {
@@ -77,7 +78,7 @@ export async function proposalFinance(db:SQL,u:SessionUser,row:any) {
 /** Verified receipt state is the trigger. Repeated callbacks cannot duplicate tasks. */
 export async function syncProposalHandover(db:SQL,row:any) {
   if(row.status!=='signed')return;
-  const paid=row.ghl_invoice_status==='paid'||(await db.query("SELECT 1 FROM payments WHERE tenant_id=$1 AND event_key=$2 AND receipt_status='confirmed' AND amount_minor>0 LIMIT 1",[row.tenant_id,`proposal:${row.id}`])).rows.length>0;
+  const paid=row.ghl_invoice_status==='paid'||(await db.query("SELECT 1 FROM payments WHERE tenant_id=$1 AND (event_key=$2 OR left(event_key,length($3))=$3) AND receipt_status='confirmed' AND amount_minor>0 LIMIT 1",[row.tenant_id,`proposal:${row.id}`,`proposal:${row.id}:`])).rows.length>0;
   if(!paid)return;
   const ws=await workspaceFor(db,row);
   const policies=ws.shared_snapshot?.onboardingPolicies||(await db.query('SELECT product_id,policy FROM proposal_product_policies WHERE tenant_id=$1',[row.tenant_id])).rows;

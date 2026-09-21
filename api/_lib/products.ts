@@ -1,3 +1,4 @@
+import {productQuote,defaultProductPolicy} from '../../src/lib/proposal-suite.js';
 // ============================================================================
 // PRODUCT CATALOG  —  tenant-scoped product data logic (Sales Commission Manager)
 //
@@ -20,7 +21,7 @@ import {gatewayPage,readGatewayEnabled} from './kleegr-read.js';
 import {safeDestination} from './tracker-attribution.js';
 import {reconcileProductLinks} from './product-links.js';
 
-export interface ProductLineItem {productId:string;name:string;qty:number;unitPriceMinor:string;billingKind:string;description?:string;category?:string;recurringInterval?:string;currency?:string}
+export interface ProductLineItem {productId:string;name:string;qty:number;includedQty?:number;unitPriceMinor:string;billingKind:string;description?:string;category?:string;recurringInterval?:string;currency?:string}
 const BILLING_KINDS=['one_time','recurring','setup'];
 const str=(v:unknown)=>typeof v==='string'?v.trim():'';
 const cur=(v:unknown,fallback:string):string=>{const s=String(v??'').trim().toUpperCase();if(!s)return fallback;if(!/^[A-Z]{3}$/.test(s))throw new TrackerError('invalid_currency','Currency must be a 3-letter ISO code.');return s;};
@@ -51,6 +52,8 @@ export async function listProducts(db:SQL,u:SessionUser,f:any={}){
   const base=`FROM products WHERE ${where.join(' AND ')}`,page=Math.max(1,Math.min(100000,Number(f.page)||1)),limit=Math.max(1,Math.min(100,Number(f.limit)||50));
   const total=Number((await db.query(`SELECT count(*)::text AS n ${base}`,values)).rows[0].n);
   const rows=(await db.query(`SELECT * ${base} ORDER BY name, id LIMIT $${values.length+1} OFFSET $${values.length+2}`,[...values,limit,(page-1)*limit])).rows;
+  const policies=(await db.query('SELECT product_id,policy FROM proposal_product_policies WHERE tenant_id=$1',[u.tenantId])).rows;
+  for(const row of rows){const policy=policies.find(p=>p.product_id===row.id)?.policy;if(policy){const {costMinor,...safe}=policy;row.proposal_policy={...defaultProductPolicy,...safe};}}
   return{rows,total,page,limit};
 }
 export async function listAssignments(db:SQL,u:SessionUser,f:any={}){
@@ -141,6 +144,8 @@ export async function validateDocumentLineItems(db:SQL,tenantId:string,opts:{sal
   if(raw.length>200)throw new TrackerError('too_many_products','A proposal can contain up to 200 products.');
   const currency=await workspaceCurrency(db,tenantId);
   const items:ProductLineItem[]=[];let total=0n;
+  const policies=(await db.query('SELECT product_id,policy FROM proposal_product_policies WHERE tenant_id=$1',[tenantId])).rows;
+  if(new Set(raw.map((r:any)=>r?.productId)).size!==raw.length)throw new TrackerError('duplicate_product','Combine duplicate products into one quantity.');
   for(const entry of raw.slice(0,200)){
     const o=(entry&&typeof entry==='object'?entry:{}) as Record<string,unknown>;
     const productId=str(o.productId);if(!productId)throw new TrackerError('unknown_product','Each line item must reference a product.');
@@ -151,10 +156,13 @@ export async function validateDocumentLineItems(db:SQL,tenantId:string,opts:{sal
     if(opts.enforceAssignment){const assigned=(await db.query('SELECT 1 FROM product_assignments WHERE tenant_id=$1 AND product_id=$2 AND salesperson_id=$3',[tenantId,productId,opts.salespersonId||'__none__'])).rows.length;if(!assigned)throw new TrackerError('product_not_assigned','This product is not assigned to you.',403);}
     const qty=Number(o.qty);if(!Number.isInteger(qty)||qty<=0||qty>1000000)throw new TrackerError('invalid_quantity','Line item quantity must be a positive whole number.');
     const unitPriceMinor=minor(String(o.unitPriceMinor??'0'));if(unitPriceMinor<0n)throw new TrackerError('invalid_price','Line item price must not be negative.');
-    if(unitPriceMinor<minor(String(product.price_minor)))throw new TrackerError('price_below_floor','Line item price is below the product floor.');
+    const policy=policies.find(p=>p.product_id===productId)?.policy;
+    const quote=productQuote({...product,proposal_policy:policy?{...defaultProductPolicy,...policy}:undefined},qty,raw as any);
+    if(quote.error)throw new TrackerError('product_rule',quote.error);
+    if(unitPriceMinor<minor(quote.floorMinor))throw new TrackerError('price_below_floor','Line item price is below the configured product floor.');
     // Snapshot catalog details; the browser cannot override product identity or billing.
-    items.push({productId,name:product.name,description:product.description||'',category:product.category||'',recurringInterval:product.recurring_interval||'',currency:product.currency,qty,unitPriceMinor:unitPriceMinor.toString(),billingKind:product.billing_kind});
-    total+=BigInt(qty)*unitPriceMinor;
+    items.push({productId,name:product.name,description:product.description||'',category:product.category||'',recurringInterval:product.recurring_interval||'',currency:product.currency,qty,includedQty:quote.includedQty,unitPriceMinor:unitPriceMinor.toString(),billingKind:product.billing_kind});
+    total+=BigInt(qty-quote.includedQty)*unitPriceMinor;
   }
   return{items,amountMinor:total.toString()};
 }

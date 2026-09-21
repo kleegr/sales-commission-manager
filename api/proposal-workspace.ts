@@ -1,3 +1,4 @@
+import {isNewProposalDraftKey} from '../src/lib/proposal-draft-key.js';
 import type {VercelRequest,VercelResponse} from '@vercel/node';
 import {ensureSchema} from './_lib/repository.js';
 import {getSessionUser} from './_lib/auth.js';
@@ -22,9 +23,14 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
       if(!canCreateClientDoc(user.role))return res.status(403).json({error:'forbidden'});
     }
     const result=await database.transaction(async db=>{
+      if(op==='latest_draft'){
+        if(req.method!=='GET')throw new TrackerError('method_not_allowed','Use GET to read saved drafts.',405);
+        const saved=(await db.query("SELECT draft_key AS key FROM proposal_autosaves WHERE tenant_id=$1 AND user_id=$2 AND (draft_key='new' OR draft_key LIKE 'new:%') ORDER BY updated_at DESC,draft_key DESC LIMIT 1",[user.tenantId,user.id])).rows[0];
+        return saved||{key:null};
+      }
       if(op==='autosave'){
         const key=String(b.key||'new').slice(0,220);
-        if(key!=='new')await scopedProposal(db,user,key);
+        if(!isNewProposalDraftKey(key))await scopedProposal(db,user,key);
         if(req.method==='GET')return (await db.query('SELECT payload,version,updated_at FROM proposal_autosaves WHERE tenant_id=$1 AND user_id=$2 AND draft_key=$3',[user.tenantId,user.id,key])).rows[0]||{payload:null,version:0};
         if(b.clear){
           const saved=(await db.query('SELECT version FROM proposal_autosaves WHERE tenant_id=$1 AND user_id=$2 AND draft_key=$3 FOR UPDATE',[user.tenantId,user.id,key])).rows[0];

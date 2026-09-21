@@ -1,14 +1,13 @@
+import {validateDocumentLineItems} from './_lib/products.js';
+import {addProposalMessage,assertShareApproved,publicWorkspace,suiteEvent,workspaceFor} from './_lib/proposal-suite.js';
 import {proposalTotals} from '../src/lib/proposal-pricing.js';
 // /api/proposal — FLOW 4: the UNAUTHENTICATED public approval endpoint.
 //   GET  ?token=<raw>                              -> rendered document (marks 'viewed' on first open)
 //   POST {token,name,email,signature,agree:true}   -> approve & sign; ONE transaction that also creates the
 //                                                     client (prospect mode), a won opportunity and a PENDING
 //                                                     receipt for the document's salesperson (idempotent).
-// TOKEN DESIGN: 32 random bytes, base64url (43 chars) — returned ONCE by the authenticated send/link ops in
-// /api/documents; only sha256(token) is stored in documents.public_token (same rule as sessions + Kleegr launch
-// tokens). Re-sending or "new link" ROTATES the token (the previously shared link stops working). Links expire
-// PROPOSAL_LINK_TTL_DAYS after issue. Tenant, client and salesperson are derived from the token's row — nothing
-// in the request body is trusted for ids. Rate limited per IP (DB sliding window, fail-open like rate-limit.ts).
+// Private links use 32 random bytes; only token hashes are stored. New links preserve existing
+// unexpired links. Canceling a document revokes all its links. Client approvals lock the agreed version.
 import {createHash,randomBytes} from 'node:crypto';
 import type {VercelRequest,VercelResponse} from '@vercel/node';
 import {hasDb} from './_lib/db.js';
@@ -40,12 +39,19 @@ const ACCEPT_MESSAGES:Record<string,string>={name_required:'Enter your full name
 /** Calendar date in the workspace timezone (receipt dates are calendar dates, see reviewEvent). */
 export function calendarDate(timeZone:string,now=new Date()){try{const parts=new Intl.DateTimeFormat('en-CA',{timeZone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now);const p=(k:string)=>parts.find(v=>v.type===k)?.value;return `${p('year')}-${p('month')}-${p('day')}`;}catch{return now.toISOString().slice(0,10);}}
 
-/** Mint a fresh token for a tenant-scoped document (rotating any previous one) and move it to 'sent'. Returns the raw token ONCE. */
+/** Mint a private link while preserving existing unexpired links; move the document to sent. */
 export async function issueProposalLink(db:SQL,tenantId:string,docId:string,opts:{to?:string|null;resend?:boolean}={}){
   const row=(await db.query('SELECT * FROM documents WHERE tenant_id=$1 AND id=$2 FOR UPDATE',[tenantId,docId])).rows[0];if(!row)throw new TrackerError('not_found','Document not found.',404);
   const from=String(row.status||'draft');if(!canTransitionStatus(from as any,'sent'))throw new TrackerError('invalid_transition','Only draft, sent or viewed documents can be shared.',409);
+  if(from==='draft'&&row.line_items?.length){const checked=await validateDocumentLineItems(db,tenantId,{salespersonId:row.salesperson_id,enforceAssignment:false},row.line_items);if(JSON.stringify(checked.items.map(i=>i.includedQty||0))!==JSON.stringify(row.line_items.map((i:any)=>i.includedQty||0)))throw new TrackerError('pricing_changed','Product inclusion rules changed. Reopen and save the draft before sharing.',409);}
+  await assertShareApproved(db,row);
+  const ws=await workspaceFor(db,row);
+  if(!ws.shared_snapshot){const preview=await render(db,row);const onboardingPolicies=(await db.query('SELECT product_id,policy FROM proposal_product_policies WHERE tenant_id=$1',[tenantId])).rows.map(p=>({product_id:p.product_id,policy:{onboarding:p.policy.onboarding||[]}}));await db.query('UPDATE proposal_workspaces SET shared_snapshot=$3::jsonb WHERE tenant_id=$1 AND document_id=$2',[tenantId,docId,JSON.stringify({onboardingPolicies,branding:preview.branding,sections:preview.sections,recipient:preview.recipient,salesperson:preview.salesperson})]);}
+  if(row.public_token)await db.query('INSERT INTO proposal_share_tokens(token_hash,tenant_id,document_id,expires_at) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[row.public_token,tenantId,docId,row.token_expires_at||new Date(Date.now()+60*86400000)]);
   const token=mintToken(),hash=hashToken(token),status=from==='viewed'?'viewed':'sent';
   const r=await db.query(`UPDATE documents SET public_token=$3,token_expires_at=now()+make_interval(days=>$4),status=$5,sent_at=CASE WHEN $6::boolean THEN now() ELSE COALESCE(sent_at,now()) END,sent_to=COALESCE($7,sent_to),updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING token_expires_at`,[tenantId,docId,hash,PROPOSAL_LINK_TTL_DAYS,status,opts.resend===true,opts.to||null]);
+  await db.query('INSERT INTO proposal_share_tokens(token_hash,tenant_id,document_id,expires_at) VALUES($1,$2,$3,$4)',[hash,tenantId,docId,r.rows[0].token_expires_at]);
+  await suiteEvent(db,row,opts.resend?'proposal_sent':'link_created','Sales team','Existing unexpired links remain valid.');
   return{token,hash,status,expiresAt:iso(r.rows[0]?.token_expires_at)};
 }
 /** Plain-text email carrying the approval link. */
@@ -55,15 +61,16 @@ export function proposalEmail(i:{title:string;businessName:string;recipientName:
   return{subject,body};
 }
 
-async function loadByToken(db:SQL,token:string,forUpdate=false){
+export async function loadByToken(db:SQL,token:string,forUpdate=false){
   if(!TOKEN_RE.test(token))throw new TrackerError('invalid_token','This link is not valid.',404);
-  const row=(await db.query(`SELECT * FROM documents WHERE public_token=$1${forUpdate?' FOR UPDATE':''}`,[hashToken(token)])).rows[0];if(!row)throw new TrackerError('invalid_token','This link is not valid.',404);
+  const row=(await db.query(`SELECT d.*,CASE WHEN d.public_token=$1 THEN d.token_expires_at ELSE (SELECT expires_at FROM proposal_share_tokens t WHERE t.token_hash=$1 AND t.document_id=d.id) END AS token_expires_at FROM documents d WHERE d.public_token=$1 OR d.id IN(SELECT document_id FROM proposal_share_tokens WHERE token_hash=$1)${forUpdate?' FOR UPDATE OF d':''}`,[hashToken(token)])).rows[0];if(!row)throw new TrackerError('invalid_token','This link is not valid.',404);
   if(row.token_expires_at&&new Date(row.token_expires_at).getTime()<Date.now())throw new TrackerError('link_expired','This link has expired. Ask your contact for a new one.',410);
   if(row.status==='canceled'||row.status==='draft')throw new TrackerError('unavailable','This document is no longer available.',410);
   return row;
 }
 async function render(db:SQL,row:any){
   const d:ClientDocumentRow=rowToDocument(row),tenantId=row.tenant_id;
+  const ws=await workspaceFor(db,row),snapshot=ws.shared_snapshot||{};
   const bp=(await db.query('SELECT * FROM business_profiles WHERE tenant_id=$1',[tenantId])).rows[0],business=bp?rowToBusinessProfile(bp):null;
   const tenant=(await db.query('SELECT name FROM tenants WHERE id=$1',[tenantId])).rows[0];
   const client=d.clientId?(await db.query('SELECT * FROM clients WHERE tenant_id=$1 AND id=$2',[tenantId,d.clientId])).rows[0]:null;
@@ -74,16 +81,16 @@ async function render(db:SQL,row:any){
   const workspace=(await db.query('SELECT payout_terms FROM tracker_workspaces WHERE tenant_id=$1',[tenantId])).rows[0];
   const digits=Number(workspace?.payout_terms?.minorDigits??2),totals=proposalTotals(d.lineItems);
   const setupFee=hasLines?Number(totals.oneTime)/10**digits:merge?.setupFee||0,monthly=hasLines?Number(totals.recurring.month||0n)/10**digits:merge?.monthlySubscription||0,total=hasLines?Number(totals.firstPayment)/10**digits:(merge?setupFee+monthly:d.amount);
-  return{kind:d.kind,title:d.title,style:d.style,status:d.status,sections:applySectionsMerge(d.sections,buildMergeContext({business,client:merge,salespersonName:sp?.name||''})),
-    branding:{businessName:business?.businessName||tenant?.name||'',logoUrl:business?.logoUrl||'',website:business?.website||'',companyAddress:business?.companyAddress||'',contactEmail:business?.contactEmail||'',contactPhone:business?.contactPhone||'',brandTone:business?.brandTone||'professional'},
-    recipient:merge?{name:merge.contactName,company:merge.companyName,email:merge.email}:null,salesperson:sp?{name:sp.name,email:sp.email}:null,
+  return{kind:d.kind,title:d.title,style:d.style,status:d.status,workspace:await publicWorkspace(db,row),sections:snapshot.sections||applySectionsMerge(d.sections,buildMergeContext({business,client:merge,salespersonName:sp?.name||''})),
+    branding:snapshot.branding||{businessName:business?.businessName||tenant?.name||'',logoUrl:business?.logoUrl||'',website:business?.website||'',companyAddress:business?.companyAddress||'',contactEmail:business?.contactEmail||'',contactPhone:business?.contactPhone||'',brandTone:business?.brandTone||'professional'},
+    recipient:snapshot.recipient||(merge?{name:merge.contactName,company:merge.companyName,email:merge.email}:null),salesperson:snapshot.salesperson||(sp?{name:sp.name,email:sp.email}:null),
     lineItems:d.lineItems,digits,expiresAt:iso(row.token_expires_at),invoice:row.ghl_invoice_id?{status:row.ghl_invoice_status,url:row.ghl_invoice_url}:null,
     amount:{total,setupFee,monthly,dueNow:hasLines?total:receiptAmount(setupFee,total),currency},accepted:d.status==='signed'?{name:d.acceptedByName,at:d.acceptedAt||d.signedAt}:null,sentAt:d.sentAt};
 }
 /** GET: render for the recipient; the first open of a 'sent' document marks it 'viewed'. */
 export async function viewProposal(db:SQL,token:string){
   const row=await loadByToken(db,token);
-  if(row.status==='sent'){await db.query("UPDATE documents SET status='viewed',viewed_at=now(),updated_at=now() WHERE id=$1 AND status='sent'",[row.id]);row.status='viewed';}
+  if(row.status==='sent'){await db.query("UPDATE documents SET status='viewed',viewed_at=now(),updated_at=now() WHERE id=$1 AND status='sent'",[row.id]);row.status='viewed';await suiteEvent(db,row,'proposal_viewed','Client link','The proposal was opened.');}
   return render(db,row);
 }
 /** POST: approve & sign. Idempotent — a second call on a signed document is a read-only no-op. Must run inside ONE transaction. */
@@ -91,6 +98,10 @@ export async function acceptProposal(db:SQL,token:string,b:any,ip:string){
   const form=normalizeAcceptance(b);if(!form.ok)throw new TrackerError(form.error,ACCEPT_MESSAGES[form.error]||'Check the form and try again.');
   const row=await loadByToken(db,token,true),tenantId:string=row.tenant_id;
   if(row.status==='signed')return{ok:true,alreadyAccepted:true,accepted:{name:row.accepted_by_name,at:iso(row.accepted_at||row.signed_at)},clientId:row.client_id||row.created_client_id,clientCreated:false,opportunityId:row.created_opportunity_id,receipt:row.receipt_event_key?'recorded':'skipped',receiptError:null,invoice:row.ghl_invoice_id?{id:row.ghl_invoice_id,url:row.ghl_invoice_url,status:row.ghl_invoice_status}:null,invoiceError:null};
+  await assertShareApproved(db,row);
+  const ws=await workspaceFor(db,row);
+  const packages=ws.options?.packages||[];
+  if(packages.length){const selected=packages.find((p:any)=>p.id===b.packageId);if(!selected)throw new TrackerError('package_required','Choose a package before approving.');const digits=Number((await db.query('SELECT payout_terms FROM tracker_workspaces WHERE tenant_id=$1',[tenantId])).rows[0]?.payout_terms?.minorDigits??2);row.line_items=selected.items;const selectedMinor=proposalTotals(selected.items).firstPayment,scale=10n**BigInt(digits);row.amount=`${selectedMinor/scale}${digits?'.'+(selectedMinor%scale).toString().padStart(digits,'0'):''}`;await db.query('UPDATE documents SET line_items=$3::jsonb,amount=$4 WHERE tenant_id=$1 AND id=$2',[tenantId,row.id,JSON.stringify(selected.items),row.amount]);await db.query('UPDATE proposal_workspaces SET options=options||$3::jsonb WHERE tenant_id=$1 AND document_id=$2',[tenantId,row.id,JSON.stringify({selectedPackageId:selected.id})]);}
   const d=rowToDocument(row),{name,email,signature}=form.value,now=new Date();await lock(db,tenantId);
   await db.query(`UPDATE documents SET status='signed',signed_at=now(),accepted_at=now(),accepted_by_name=$2,accepted_email=$3,accepted_ip=$4,signature_data=$5,updated_at=now() WHERE id=$1`,[row.id,name,email,ip.slice(0,64),signature]);
   const tracker=await trackerInstalled(db);
@@ -115,7 +126,7 @@ export async function acceptProposal(db:SQL,token:string,b:any,ip:string){
       // Line-item proposals value the deal + due amount from the line items (whole
       // invoice is due); fee-model proposals keep the setup-fee-due-now behaviour.
       const lineMinor=proposalTotals(d.lineItems||[]).firstPayment;
-      const hasLines=(d.lineItems||[]).length>0&&lineMinor>0n;
+      const hasLines=(d.lineItems||[]).length>0;
       const valueMinor=hasLines?lineMinor.toString():toMinor(feeTotal,digits);
       const dueMinor=hasLines?lineMinor.toString():toMinor(receiptAmount(setupFee,feeTotal),digits);
       opportunityId=id('opp');await db.query(`INSERT INTO opportunities(id,tenant_id,client_id,name,owner_id,value_minor,currency,status,source,won_at) VALUES($1,$2,$3,$4,$5,$6,$7,'won','manual',now())`,[opportunityId,tenantId,clientId,d.title,spId,valueMinor,w.currency]);
@@ -131,7 +142,7 @@ export async function acceptProposal(db:SQL,token:string,b:any,ip:string){
     // rolls back the approval, and the pending receipt above remains the fallback record. Payment of this
     // invoice later posts commission per line item via the webhook (see ghl-invoicing.ts).
     const ghlLocation=(await db.query("SELECT ghl_location_id FROM tenants WHERE id=$1 AND status='active' AND kleegr_connection_status='connected'",[tenantId])).rows[0]?.ghl_location_id;
-    const hasAmount=d.lineItems.length>0||Number(client.setup_fee_amount||0)+Number(client.monthly_subscription_amount||0)>0;
+    const hasAmount=d.lineItems.length>0?proposalTotals(d.lineItems).firstPayment>0n:Number(client.setup_fee_amount||0)+Number(client.monthly_subscription_amount||0)>0;
     if(ghlLocation&&hasAmount){
       await db.query('SAVEPOINT flow_ghl_invoice');
       try{const inv=await createInvoiceForDocument(db,system,d.id,{clientId});invoice={id:inv.invoiceId,url:inv.url,status:inv.status};await db.query('RELEASE SAVEPOINT flow_ghl_invoice');}
@@ -139,6 +150,7 @@ export async function acceptProposal(db:SQL,token:string,b:any,ip:string){
     }
   }
   await db.query('UPDATE documents SET created_client_id=$2,created_opportunity_id=$3,receipt_event_key=$4 WHERE id=$1',[row.id,clientCreated?clientId:null,opportunityId,receiptEventKey]);
+  await suiteEvent(db,row,'proposal_approved',name,packages.length?`Package selected: ${packages.find((p:any)=>p.id===b.packageId)?.name}`:'Client approved this version.');
   await audit(db,system,'document',d.id,'proposal_accepted',{acceptedBy:name,acceptedEmail:email,clientId,clientCreated,opportunityId,receipt,receiptError,invoice:invoice?.id||null,invoiceError});
   return{ok:true,alreadyAccepted:false,accepted:{name,at:now.toISOString()},clientId,clientCreated,opportunityId,receipt,receiptError,invoice,invoiceError};
 }
@@ -158,7 +170,8 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
     if(req.method==='GET')return res.json(await run(()=>database.transaction(db=>viewProposal(db,String(req.query.token||'')))));
     if(req.method!=='POST'){res.setHeader('Allow','GET, POST');return res.status(405).json({error:'method_not_allowed'});}
     if(!csrfOk(req))return res.status(403).json({error:'csrf_check_failed'});
-    const b=typeof req.body==='string'?JSON.parse(req.body||'{}'):req.body??{};if(JSON.stringify(b).length>4000)return res.status(413).json({error:'too_large'});
+    const b=typeof req.body==='string'?JSON.parse(req.body||'{}'):req.body??{};if(JSON.stringify(b).length>10000)return res.status(413).json({error:'too_large'});
+    if(b.op==='message')return res.json(await run(()=>database.transaction(async db=>addProposalMessage(db,await loadByToken(db,String(b.token||''),true),b,String(b.name||'Client'),'client'))));
     const out=await run(()=>database.transaction(db=>acceptProposal(db,String(b.token||''),b,ip)));
     return res.json({ok:true,accepted:out.accepted,alreadyAccepted:out.alreadyAccepted,invoice:out.invoice??null});
   }catch(e){

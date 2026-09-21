@@ -1,3 +1,4 @@
+import {PROPOSAL_SUITE_SCHEMA_SQL} from './proposal-suite-schema.js';
 // ============================================================================
 // INCREMENTAL MIGRATIONS  (idempotent ALTERs + new tables)
 //
@@ -475,4 +476,5 @@ $product_commission_links$;
 INSERT INTO schema_migrations (id) VALUES ('0021_product_commission_links')
 ON CONFLICT (id) DO NOTHING;
 
+${PROPOSAL_SUITE_SCHEMA_SQL}
 `;

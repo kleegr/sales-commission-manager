@@ -156,13 +156,13 @@ try{
     const ip={'x-forwarded-for':'203.0.113.9'};for(let i=0;i<15;i++)await pub({method:'GET',query:{token:'B'.repeat(43)},headers:{host:'app.test',...ip}});
     assert.equal((await pub({method:'GET',query:{token},headers:{host:'app.test',...ip}})).status,429);assert.equal((await pub({method:'GET',query:{token},headers:{host:'app.test','x-forwarded-for':'198.51.100.7'}})).status,200);
   });
-  await check('tenant isolation: another tenant cannot send, list or see the created client; the link op rotates the token',async()=>{
+  await check('tenant isolation: another tenant cannot send, list or see the created client; new links preserve existing unexpired links',async()=>{
     assert.equal((await call(documentsHandler,asOwnerB({op:'send',id:docId}))).status,404);assert.equal((await call(documentsHandler,asOwnerB({op:'link',id:docId}))).status,404);
     const list=await call(documentsHandler,{method:'GET',url:'/api/documents',headers:{authorization:'Bearer owner-b-session'},query:{}});assert.equal(list.body.documents.length,0);assert.equal(await count("clients WHERE tenant_id='b'"),0);
     const mine=await call(documentsHandler,{method:'GET',url:'/api/documents',headers:{authorization:'Bearer rep-session'},query:{}});const row=mine.body.documents.find((x:any)=>x.id===docId);assert.equal(row.acceptedByName,'Pat Prospect');assert.equal(row.hasLink,true);assert.ok(row.createdClientId&&row.receiptEventKey);assert.equal(row.prospect.email,'pat@example.test');
     const c=await call(documentsHandler,asRep({op:'create',kind:'proposal',clientId:'cl-existing'}));const id2=c.body.id;const l1=await call(documentsHandler,asRep({op:'link',id:id2}));assert.equal(l1.status,200);assert.equal(l1.body.email,'unavailable');const t1=l1.body.link.split('/p/')[1];
     assert.equal((await db.query('SELECT status FROM documents WHERE id=$1',[id2])).rows[0].status,'sent');const l2=await call(documentsHandler,asRep({op:'link',id:id2}));const t2=l2.body.link.split('/p/')[1];assert.notEqual(t1,t2);
-    assert.equal((await pub({method:'GET',query:{token:t1}})).status,404,'rotated token is dead');assert.equal((await pub({method:'GET',query:{token:t2}})).status,200);
+    assert.equal((await pub({method:'GET',query:{token:t1}})).status,200,'previously shared token remains usable');assert.equal((await pub({method:'GET',query:{token:t2}})).status,200);
     await assert.rejects(tx((c:any)=>issueProposalLink(c,'b',id2)),{code:'not_found'});
     const a=await pub({method:'POST',body:{token:t2,name:'Eve Existing',email:'eve@example.test',signature:'Eve Existing',agree:true}});assert.equal(a.status,200,JSON.stringify(a.body));
     const d=(await db.query('SELECT * FROM documents WHERE id=$1',[id2])).rows[0];assert.equal(d.created_client_id,null,'existing client is reused, not duplicated');assert.ok(d.created_opportunity_id);assert.equal(await count("clients WHERE tenant_id='a'"),2);

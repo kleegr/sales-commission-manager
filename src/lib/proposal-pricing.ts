@@ -1,3 +1,4 @@
+import {billableQty} from './proposal-suite.js';
 import type { DocumentLineItem } from '../types/index.js';
 /** Integer money throughout; never combine different billing periods into MRR. */
 export function proposalTotals(items: DocumentLineItem[]) {
@@ -5,7 +6,7 @@ export function proposalTotals(items: DocumentLineItem[]) {
   const recurring: Record<string, bigint> = {};
   for (const item of items) {
     if (!Number.isSafeInteger(item.qty) || item.qty < 1 || !/^\d+$/.test(item.unitPriceMinor)) continue;
-    const amount = BigInt(item.qty) * BigInt(item.unitPriceMinor);
+    const amount = BigInt(billableQty(item)) * BigInt(item.unitPriceMinor);
     if (item.billingKind === 'recurring') {
       const period = item.recurringInterval || 'month';
       recurring[period] = (recurring[period] || 0n) + amount;

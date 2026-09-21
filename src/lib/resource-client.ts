@@ -413,6 +413,7 @@ export const createClientDocument = (input: CreateClientDocInput): Promise<{ id:
 export const updateClientDocument = (
   id: string,
   patch: {
+    expectedUpdatedAt?: string;
     title?: string;
     style?: DocumentStyle;
     sections?: DocumentSection[];

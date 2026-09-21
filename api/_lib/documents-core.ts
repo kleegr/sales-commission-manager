@@ -1,3 +1,4 @@
+import {billableQty} from '../../src/lib/proposal-suite.js';
 // ============================================================================
 // DOCUMENTS CORE  (server-side, pure)
 //
@@ -57,7 +58,7 @@ export function sectionKind(kind: DocKind): DocumentKind {
 // Document line items (pure). Shape only — catalog existence / assignment /
 // price-floor validation (which needs the database) lives in _lib/products.ts.
 // ---------------------------------------------------------------------------
-export interface DocumentLineItem { productId: string; name: string; qty: number; unitPriceMinor: string; billingKind: string; description?: string; category?: string; recurringInterval?: string; currency?: string }
+export interface DocumentLineItem { productId: string; name: string; qty: number; includedQty?: number; unitPriceMinor: string; billingKind: string; description?: string; category?: string; recurringInterval?: string; currency?: string }
 const LINE_BILLING_KINDS = ["one_time", "recurring", "setup"];
 /** Coerce a stored/incoming line-item array into clean shapes (no DB checks). */
 export function normalizeLineItems(raw: unknown): DocumentLineItem[] {
@@ -71,13 +72,13 @@ export function normalizeLineItems(raw: unknown): DocumentLineItem[] {
     const qty = Number.isInteger(qtyN) && qtyN > 0 ? qtyN : 1;
     const unitPriceMinor = /^\d{1,28}$/.test(String(o.unitPriceMinor)) ? String(o.unitPriceMinor) : "0";
     const billingKind = LINE_BILLING_KINDS.includes(String(o.billingKind)) ? String(o.billingKind) : "one_time";
-    out.push({ productId, name: str(o.name), qty, unitPriceMinor, billingKind, ...(o.description != null ? {description:str(o.description)} : {}), ...(o.category != null ? {category:str(o.category)} : {}), ...(o.recurringInterval != null ? {recurringInterval:str(o.recurringInterval)} : {}), ...(o.currency != null ? {currency:str(o.currency)} : {}) });
+    out.push({ productId, name: str(o.name), qty, includedQty: Math.min(qty,Math.max(0,Math.floor(Number(o.includedQty)||0))), unitPriceMinor, billingKind, ...(o.description != null ? {description:str(o.description)} : {}), ...(o.category != null ? {category:str(o.category)} : {}), ...(o.recurringInterval != null ? {recurringInterval:str(o.recurringInterval)} : {}), ...(o.currency != null ? {currency:str(o.currency)} : {}) });
   }
   return out;
 }
 /** Sum qty * unitPriceMinor across line items → total in minor units (string). */
 export function lineItemsAmountMinor(items: DocumentLineItem[]): string {
-  return items.reduce((total, i) => total + BigInt(i.qty) * BigInt(i.unitPriceMinor), 0n).toString();
+  return items.reduce((total, i) => total + BigInt(billableQty(i)) * BigInt(i.unitPriceMinor), 0n).toString();
 }
 
 // ---------------------------------------------------------------------------

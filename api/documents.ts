@@ -1,3 +1,4 @@
+import {suiteEvent} from './_lib/proposal-suite.js';
 // /api/documents — proposal/contract TEMPLATES + per-client DOCUMENTS, built
 // from structured, reorderable SECTIONS (not one text blob).
 //
@@ -14,8 +15,8 @@
 //   POST { op:'update_document', id, title?, style?, sections? }
 //   POST { op:'set_status', id, status }     draft|sent|viewed|signed|canceled
 //   POST { op:'preview', scope, id, clientId? } -> merge-resolved sections + branding
-//   POST { op:'send', id, to? }   FLOW 4: mint a public approval link (rotates any previous
-//                                 one), set 'sent', queue + attempt the email via
+//   POST { op:'send', id, to? }   FLOW 4: mint a public approval link (preserves existing
+//                                 unexpired links), set 'sent', queue + attempt the email via
 //                                 tracker_email_outbox -> { link, email:'sent'|'queued'|'unavailable' }
 //   POST { op:'link', id }        FLOW 4: (re)generate the public link without emailing
 //   create also accepts { prospect:{name,email,company,phone,setupFee?,monthlySubscription?} }
@@ -384,7 +385,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const row = await loadDocumentRow(user, String(body.id ?? ""));
         if (!row) return res.status(404).json({ error: "document_not_found" });
         const d = rowToDocument(row);
-        if(row.status!=='draft'||row.ghl_invoice_id)return res.status(409).json({error:'document_locked',message:'Shared proposals are locked. Cancel and reopen as a draft before editing; previous links will stop working.'});
+        if(row.status!=='draft'||row.ghl_invoice_id)return res.status(409).json({error:'document_locked',message:'Shared proposals are locked. Create a revision in the proposal workspace to preserve the original agreement.'});
         const gate = ensureKind(d.kind);
         if (gate) return res.status(403).json({ error: gate });
         let next: DocumentSection[] = d.sections;
@@ -485,6 +486,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,'draft',$11,$12,$13::jsonb,$14::jsonb,$15)`,
           [id, user.tenantId, kind, title, client?.id ?? null, spId, templateId, sectionsToBody(baked), JSON.stringify(baked), style, amount, user.id, prospect ? JSON.stringify(prospect) : null, lineItems.length ? JSON.stringify(lineItems) : null, campaignId],
         );
+        await suiteEvent(database,{id,tenant_id:user.tenantId},'draft_created',user.name);
         return res.status(201).json({ ok: true, id });
       }
 
@@ -493,7 +495,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const row = await loadDocumentRow(user, String(body.id ?? ""));
         if (!row) return res.status(404).json({ error: "document_not_found" });
         const d = rowToDocument(row);
-        if(row.status!=='draft'||row.ghl_invoice_id)return res.status(409).json({error:'document_locked',message:'Shared proposals are locked. Cancel and reopen as a draft before editing; previous links will stop working.'});
+        if(row.status!=='draft'||row.ghl_invoice_id)return res.status(409).json({error:'document_locked',message:'Shared proposals are locked. Create a revision in the proposal workspace to preserve the original agreement.'});
         const gate = ensureKind(d.kind);
         if (gate) return res.status(403).json({ error: gate });
         const title = body.title != null ? String(body.title).trim() || d.title : d.title;
@@ -525,10 +527,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         const amountClause = body.lineItems !== undefined && amountOverride != null ? `, amount=${minorToMajor(amountOverride, await docMinorDigits(user.tenantId))}` : "";
         const saved = await query(
-          `UPDATE documents SET title=$1, style=$2, sections=$3::jsonb, body=$4, line_items=$5::jsonb, campaign_id=$6${amountClause}, updated_at=now() WHERE tenant_id=$7 AND id=$8 AND status='draft' AND ghl_invoice_id IS NULL RETURNING id`,
-          [title, style, JSON.stringify(sections), sectionsToBody(sections), lineItems.length ? JSON.stringify(lineItems) : null, campaignId, user.tenantId, row.id],
+          `UPDATE documents SET title=$1, style=$2, sections=$3::jsonb, body=$4, line_items=$5::jsonb, campaign_id=$6${amountClause}, updated_at=now() WHERE tenant_id=$7 AND id=$8 AND status='draft' AND ghl_invoice_id IS NULL AND ($9::timestamptz IS NULL OR updated_at=$9::timestamptz) RETURNING id`,
+          [title, style, JSON.stringify(sections), sectionsToBody(sections), lineItems.length ? JSON.stringify(lineItems) : null, campaignId, user.tenantId, row.id, body.expectedUpdatedAt||null],
         );
-        if(!saved.rows.length)return res.status(409).json({error:'document_locked'});
+        if(!saved.rows.length)return res.status(409).json({error:'document_conflict',message:'The proposal changed in another tab. Reopen it before saving.'});
+        await suiteEvent(database,row,'draft_updated',user.name);
         return res.status(200).json({ ok: true, id: row.id });
       }
 
@@ -543,10 +546,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (!canTransitionStatus(from, to)) return res.status(400).json({ error: "invalid_transition" });
         const stampCol =
           to === "sent" ? "sent_at" : to === "viewed" ? "viewed_at" : to === "signed" ? "signed_at" : to === "canceled" ? "canceled_at" : null;
-        await query(
-          `UPDATE documents SET status=$1, public_token=NULL, token_expires_at=NULL, updated_at=now()${stampCol ? `, ${stampCol}=now()` : ""} WHERE tenant_id=$2 AND id=$3 AND status=$4`,
+        const changed = await query(
+          `UPDATE documents SET status=$1, public_token=NULL, token_expires_at=NULL, updated_at=now()${stampCol ? `, ${stampCol}=now()` : ""} WHERE tenant_id=$2 AND id=$3 AND status=$4 RETURNING id`,
           [to, user.tenantId, row.id, from],
         );
+        if(!changed.rows.length)return res.status(409).json({error:'document_changed',message:'The proposal changed. Reload before changing its status.'});
+        await query('DELETE FROM proposal_share_tokens WHERE tenant_id=$1 AND document_id=$2',[user.tenantId,row.id]);
+        await query('UPDATE proposal_workspaces SET shared_snapshot=NULL WHERE tenant_id=$1 AND document_id=$2',[user.tenantId,row.id]);
         return res.status(200).json({ ok: true });
       }
 

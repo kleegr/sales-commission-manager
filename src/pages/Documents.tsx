@@ -1,3 +1,4 @@
+import {newProposalDraftKey} from '../lib/proposal-draft-key';
 import {proposalRequest} from '../lib/proposal-workspace-client';
 import {ProposalWorkspace} from '../components/documents/ProposalWorkspace';
 import {ProposalBuilder} from '../components/documents/ProposalBuilder';
@@ -157,8 +158,7 @@ export default function Documents() {
   const digits = workspace?.payout_terms?.minorDigits ?? 2;
 
   // Product catalog + campaigns for the line-item builder and campaign link.
-  const [hasResumableDraft,setHasResumableDraft]=useState(false);
-  useEffect(()=>{let live=true;proposalRequest({op:'autosave',key:'new'},true).then(r=>{if(live)setHasResumableDraft(!!r.payload);}).catch(()=>{});return()=>{live=false;};},[]);
+  const [resumableDraftKey,setResumableDraftKey]=useState<string|null>(null);
   const [workspaceDoc,setWorkspaceDoc]=useState<DocRow|null>(null);
   const [catalog, setCatalog] = useState<CatalogProduct[]>([]);
   const [proposalSalespeople,setProposalSalespeople]=useState<{id:string;name:string;email?:string}[]>([]);
@@ -170,7 +170,13 @@ export default function Documents() {
   const contractsOn = isEnabled("contracts");
   const aiOn = isEnabled("ai");
 
-  const [guided, setGuided] = useState<{existing?:DocRow}|null>(null);
+  const [guided, setGuided] = useState<{draftKey:string;existing?:DocRow}|null>(null);
+  useEffect(()=>{
+    if(guided)return;
+    let active=true;setResumableDraftKey(null);
+    proposalRequest({op:'latest_draft'},true).then(r=>{if(active)setResumableDraftKey(r.key||null);}).catch(()=>{});
+    return()=>{active=false;};
+  },[guided,user?.id,user?.tenantSlug]);
   const [savedNotice,setSavedNotice]=useState('');
   const [view, setView] = useState<View>({ mode: "home" });
   const [tab, setTab] = useState<Tab>(
@@ -354,7 +360,7 @@ export default function Documents() {
   // ---- client document actions ---------------------------------------------
 
   function openCreateModal(kind: DocumentKind) {
-    if(kind==='proposal'){setGuided({});return;}
+    if(kind==='proposal'){setGuided({draftKey:newProposalDraftKey()});return;}
     setCreateKind(kind);
     setCDocType(kind === "contract" ? "contract" : "proposal");
     const first = contractTemplates[0];
@@ -368,7 +374,7 @@ export default function Documents() {
   }
 
   function openDocumentBuilder(d: ClientDocument) {
-    if(d.kind==='proposal'){setGuided({existing:d as DocRow});return;}
+    if(d.kind==='proposal'){setGuided({draftKey:d.id,existing:d as DocRow});return;}
     setView({
       mode: "builder",
       ctx: {
@@ -563,7 +569,7 @@ export default function Documents() {
     </div>
   );
 
-  if(guided) return <ProposalBuilder key={guided.existing?.id||'new'} existing={guided.existing} clients={clients} salespeople={proposalSalespeople} salespersonId={user?.salespersonId} self={isSelf} products={catalog} campaigns={campaignOptions} currency={currency} digits={digits} loading={catalogLoading} loadError={catalogError} branding={brandingFromProfile(profile,companyName)} aiReady={aiOn&&ai.configured} businessName={profile?.businessName} defaultTerms={profile?.paymentTerms} onClose={()=>setGuided(null)} onSaved={async(id)=>{setHasResumableDraft(false);await refreshLists();setGuided(null);setTab('proposalDocs');const result=await listDocuments();const saved=result.documents.find(d=>d.id===id);if(saved)setWorkspaceDoc(saved);setSavedNotice('Proposal saved as a draft. Preview it, then share a client approval link.');}}/>;
+  if(guided) return <ProposalBuilder key={guided.draftKey} draftKey={guided.draftKey} existing={guided.existing} clients={clients} salespeople={proposalSalespeople} salespersonId={user?.salespersonId} self={isSelf} products={catalog} campaigns={campaignOptions} currency={currency} digits={digits} loading={catalogLoading} loadError={catalogError} branding={brandingFromProfile(profile,companyName)} aiReady={aiOn&&ai.configured} businessName={profile?.businessName} defaultTerms={profile?.paymentTerms} onClose={()=>setGuided(null)} onSaved={async(id)=>{await refreshLists();setGuided(null);setTab('proposalDocs');const result=await listDocuments();const saved=result.documents.find(d=>d.id===id);if(saved)setWorkspaceDoc(saved);setSavedNotice('Proposal saved as a draft. Preview it, then share a client approval link.');}}/>;
 
   return (
     <div className="space-y-6 proposal-center">
@@ -578,9 +584,9 @@ export default function Documents() {
           {error}
         </Card>
       )}
-      {workspaceDoc&&<ProposalWorkspace doc={workspaceDoc} products={catalog} currency={currency} digits={digits} onClose={()=>setWorkspaceDoc(null)} onChanged={refreshLists} onRevision={async id=>{await refreshLists();const result=await listDocuments();const revised=result.documents.find(d=>d.id===id);setWorkspaceDoc(null);if(revised)setGuided({existing:revised});}}/>}
+      {workspaceDoc&&<ProposalWorkspace doc={workspaceDoc} products={catalog} currency={currency} digits={digits} onClose={()=>setWorkspaceDoc(null)} onChanged={refreshLists} onRevision={async id=>{await refreshLists();const result=await listDocuments();const revised=result.documents.find(d=>d.id===id);setWorkspaceDoc(null);if(revised)setGuided({draftKey:revised.id,existing:revised});}}/>}
       {savedNotice&&<p role="status" className="proposal-success">{savedNotice}</p>}
-      {activeTab==='proposalDocs'&&hasResumableDraft&&<div className="proposal-success">You have an unfinished proposal. <button className="st-text-link" onClick={()=>setGuided({})}>Continue your saved draft →</button></div>}
+      {activeTab==='proposalDocs'&&resumableDraftKey&&<div className="proposal-success">You have an unfinished proposal. <button className="st-text-link" onClick={()=>setGuided({draftKey:resumableDraftKey})}>Continue your saved draft →</button></div>}
       {activeTab==='proposalDocs'&&<div className="proposal-metrics">{[{label:'Drafts',value:proposalDocs.filter(d=>d.status==='draft').length},{label:'Awaiting client',value:proposalDocs.filter(d=>d.status==='sent'||d.status==='viewed').length},{label:'Approved',value:proposalDocs.filter(d=>d.status==='signed').length},{label:'Payment confirmed',value:proposalDocs.filter(d=>d.paymentConfirmed||d.ghlInvoiceStatus==='paid').length}].map(m=><div key={m.label}><span>{m.label}</span><strong>{m.value}</strong></div>)}</div>}
       <Modal open={linkOpen} title={linkBusy ? 'Creating your proposal link' : 'Share proposal'} onClose={() => { if (!linkBusy) setLinkOpen(false); }} size="lg">
         {linkBusy && !shareResult && <p role="status" className="flex items-center gap-2 py-6"><Loader2 className="h-5 w-5 animate-spin"/>Creating your private approval link…</p>}

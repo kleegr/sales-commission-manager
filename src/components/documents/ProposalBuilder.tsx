@@ -17,6 +17,7 @@ import {proposalTotals} from '../../lib/proposal-pricing';
 import {displayMinor} from '../../lib/exact-commission';
 
 interface Props {
+  draftKey: string;
   existing?: DocRow | null;
   clients: Client[];
   salespeople: {id:string; name:string; email?:string}[];
@@ -52,7 +53,7 @@ export function ProposalBuilder(p: Props) {
   const [requirements,setRequirements]=useState(p.existing?.sections.find(s=>s.id==='proposal-requirements')?.content||'');
   const [baseUpdatedAt,setBaseUpdatedAt]=useState(p.existing?.updatedAt);
   const savedId=useRef<string|null>(null);
-  const draft=useProposalAutosave(p.existing?.id||'new',{step,mode,clientId,prospect,seller,title,items,campaign,summary,terms,requirements,baseUpdatedAt},v=>{setStep(Math.min(3,Math.max(0,Number(v.step)||0)));setMode(v.mode||'client');setClientId(v.clientId||'');setProspect(v.prospect||emptyProspect());setSeller(v.seller||'');setTitle(v.title||'');setItems(v.items||[]);setCampaign(v.campaign||'');setSummary(v.summary||'');setTerms(v.terms||'');setRequirements(v.requirements||'');setBaseUpdatedAt(v.baseUpdatedAt);});
+  const draft=useProposalAutosave(p.draftKey,{step,mode,clientId,prospect,seller,title,items,campaign,summary,terms,requirements,baseUpdatedAt},v=>{setStep(Math.min(3,Math.max(0,Number(v.step)||0)));setMode(v.mode||'client');setClientId(v.clientId||'');setProspect(v.prospect||emptyProspect());setSeller(v.seller||'');setTitle(v.title||'');setItems(v.items||[]);setCampaign(v.campaign||'');setSummary(v.summary||'');setTerms(v.terms||'');setRequirements(v.requirements||'');setBaseUpdatedAt(v.baseUpdatedAt);});
   async function close(){try{await draft.flush();p.onClose();}catch(e){setError((e as Error).message);}}
   const client=p.clients.find(c=>c.id===clientId);
   const recipient=mode==='prospect'?(prospect.company||prospect.name):(client?.companyName||client?.contactName||'');

@@ -141,8 +141,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ]);
         const c = rows[0];
         if (!c) return res.status(400).json({ error: "invalid_client" });
-        if (isSelfRole(user.role) && c.salesperson_id !== user.salespersonId) {
+        if (isSelfRole(user.role) && (!user.salespersonId || c.salesperson_id !== user.salespersonId)) {
           return res.status(403).json({ error: "client_not_yours" });
+        }
+        if (user.role === 'sales_manager' && !(await query('SELECT 1 FROM salespeople WHERE tenant_id=$1 AND id=$2 AND manager_user_id=$3',[user.tenantId,c.salesperson_id,user.id])).rows.length) {
+          return res.status(403).json({ error: 'client_not_in_team' });
         }
         client = { companyName: c.company_name, contactName: c.contact_name };
         clientId = c.id;
@@ -173,6 +176,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(502).json({ error: "ai_request_failed", detail: e?.detail ?? String(e?.message ?? e) });
       }
 
+      if(!raw.trim())return res.status(502).json({error:'ai_empty_response',message:'AI returned an empty response. Your proposal was not changed. Please try again.'});
       const { title, sections } = parseAiSections(raw, kind);
       for (const section of sections) section.content = resolveBusinessName(section.content, business.businessName);
 

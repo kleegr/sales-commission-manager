@@ -17,6 +17,6 @@ export function useProposalAutosave(key:string,payload:Record<string,unknown>,re
   const serialized=JSON.stringify(payload);
   useEffect(()=>{if(!ready)return;const timer=setTimeout(()=>{void flush().catch(()=>{});},900);return()=>clearTimeout(timer);},[serialized,ready]);
   useEffect(()=>{const warn=(e:BeforeUnloadEvent)=>{if(ready&&!stopped.current&&JSON.stringify(current.current)!==saved.current){e.preventDefault();e.returnValue='';}};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn);},[ready]);
-  async function clear(){await flush();stopped.current=true;await proposalRequest({op:'autosave',key,version:version.current,clear:true});}
+  async function clear(){await flush();await proposalRequest({op:'autosave',key,version:version.current,clear:true});stopped.current=true;}
   return {ready,status,error,flush,clear};
 }

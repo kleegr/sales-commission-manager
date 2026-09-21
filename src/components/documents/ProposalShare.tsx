@@ -77,6 +77,6 @@ export function ApprovalCard({doc}:{doc:DocRow}){
   return <div className="st-approval"><CheckCircle2 className="h-4 w-4 text-emerald-600"/><span>Approved by <strong>{doc.acceptedByName||doc.acceptedEmail||'recipient'}</strong> on {formatDate(doc.acceptedAt)}</span>
     {item(<UserPlus className="h-3.5 w-3.5"/>,clientId?<Link className="st-text-link" to={`/clients/${clientId}`}>{doc.createdClientId?'Client created':'Client'}</Link>:'No client')}
     {doc.createdOpportunityId&&item(<Briefcase className="h-3.5 w-3.5"/>,<Link className="st-text-link" to="/opportunities">Won opportunity</Link>)}
-    {item(<Receipt className="h-3.5 w-3.5"/>,doc.receiptEventKey?<Link className="st-text-link" to="/payments">Receipt pending — confirm when paid</Link>:'No receipt to confirm')}
+    {item(<Receipt className="h-3.5 w-3.5"/>,doc.receiptEventKey?<Link className="st-text-link" to="/payments">{doc.paymentConfirmed||doc.ghlInvoiceStatus==='paid'?'Payment confirmed — view receipts':'Receipt pending — confirm when paid'}</Link>:'No receipt to confirm')}
     {doc.amount>0&&<span className="st-approval-amount">{formatCurrency(doc.amount)}</span>}</div>;
 }

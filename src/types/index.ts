@@ -435,6 +435,7 @@ export interface ClientDocument {
   campaignId?: string | null;
   ghlInvoiceId?: string | null;
   ghlInvoiceStatus?: string | null;
+  paymentConfirmed?: boolean;
   ghlInvoiceUrl?: string | null;
 }
 

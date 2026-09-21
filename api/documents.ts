@@ -242,7 +242,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       tsql += ` ORDER BY kind, name`;
       const templatesRes = await query<any>(tsql, tparams);
 
-      let docsSql = `SELECT * FROM documents WHERE tenant_id = $1`;
+      let docsSql = `SELECT documents.*,
+        EXISTS(SELECT 1 FROM payments p WHERE p.tenant_id=documents.tenant_id AND p.event_key='proposal:'||documents.id AND p.receipt_status='confirmed' AND p.amount_minor>0) AS aggregate_paid,
+        (SELECT COALESCE(sum(p.amount_minor),0)::text FROM payments p WHERE p.tenant_id=documents.tenant_id AND p.receipt_status='confirmed' AND p.currency=COALESCE(documents.line_items->0->>'currency',(SELECT w.currency FROM tracker_workspaces w WHERE w.tenant_id=documents.tenant_id),'USD') AND left(p.event_key,length('proposal:'||documents.id||':'))='proposal:'||documents.id||':') AS collected_line_minor
+        FROM documents WHERE tenant_id = $1`;
       const params: any[] = [user.tenantId];
       if (user.role === "sales_manager") {
         docsSql += ` AND salesperson_id IN (SELECT id FROM salespeople WHERE tenant_id = $1 AND manager_user_id = $${params.length + 1})`;
@@ -274,6 +277,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           ...rowToDocument(r),
           ghlInvoiceId: r.ghl_invoice_id ?? null,
           ghlInvoiceStatus: r.ghl_invoice_status ?? null,
+          paymentConfirmed: r.ghl_invoice_status === 'paid' || r.aggregate_paid || (BigInt(r.collected_line_minor || '0') > 0n && BigInt(r.collected_line_minor || '0') >= BigInt(lineItemsAmountMinor(rowToDocument(r).lineItems || []))),
           ghlInvoiceUrl: r.ghl_invoice_url ?? null,
         })),
         features: { proposals: flags.proposals !== false, contracts: flags.contracts !== false, ai: flags.ai !== false },
@@ -527,7 +531,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         const amountClause = body.lineItems !== undefined && amountOverride != null ? `, amount=${minorToMajor(amountOverride, await docMinorDigits(user.tenantId))}` : "";
         const saved = await query(
-          `UPDATE documents SET title=$1, style=$2, sections=$3::jsonb, body=$4, line_items=$5::jsonb, campaign_id=$6${amountClause}, updated_at=now() WHERE tenant_id=$7 AND id=$8 AND status='draft' AND ghl_invoice_id IS NULL AND ($9::timestamptz IS NULL OR updated_at=$9::timestamptz) RETURNING id`,
+          // JSON dates retain milliseconds, while Postgres stores microseconds. Advance
+          // by at least one millisecond so concurrent edits still get distinct versions.
+          `UPDATE documents SET title=$1, style=$2, sections=$3::jsonb, body=$4, line_items=$5::jsonb, campaign_id=$6${amountClause}, updated_at=GREATEST(now(),date_trunc('milliseconds',updated_at)+interval '1 millisecond') WHERE tenant_id=$7 AND id=$8 AND status='draft' AND ghl_invoice_id IS NULL AND ($9::timestamptz IS NULL OR date_trunc('milliseconds',updated_at)=$9::timestamptz) RETURNING id`,
           [title, style, JSON.stringify(sections), sectionsToBody(sections), lineItems.length ? JSON.stringify(lineItems) : null, campaignId, user.tenantId, row.id, body.expectedUpdatedAt||null],
         );
         if(!saved.rows.length)return res.status(409).json({error:'document_conflict',message:'The proposal changed in another tab. Reopen it before saving.'});

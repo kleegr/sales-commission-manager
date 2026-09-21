@@ -1,3 +1,4 @@
+import {nextPaymentCharge} from './payment-charge.js';
 import type {SQL} from './tracker-common.js';
 import {resolveProductStructure} from './products.js';
 import {calculateExact,type EarningsInput} from '../../src/lib/exact-commission.js';
@@ -22,7 +23,8 @@ export async function proposalCommissionPreview(db:SQL,row:any){
     cursor=people.find(p=>p.id===cursor)?.parent_salesperson_id;
   }
   const date=new Intl.DateTimeFormat('en-CA',{timeZone:workspace.timezone||'UTC',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
-  let charge=clientId?Number((await db.query("SELECT count(*)::int n FROM payments WHERE tenant_id=$1 AND client_id=$2 AND receipt_status='confirmed' AND parent_payment_id IS NULL",[tenant,clientId])).rows[0].n)+1:1;
+  const charge=clientId?await nextPaymentCharge(db,tenant,clientId,row.id):1;
+  let firstLine=true;
   let sellerTotal=0n,total=0n;
   for(const item of doc.lineItems){
     const amount=BigInt(billableQty(item))*BigInt(item.unitPriceMinor);if(!amount)continue;
@@ -30,8 +32,8 @@ export async function proposalCommissionPreview(db:SQL,row:any){
     const versions=override?(await db.query('SELECT config FROM plan_versions WHERE tenant_id=$1 AND id=$2',[tenant,override])).rows:(await db.query(`SELECT v.config FROM plan_assignments a JOIN plan_versions v ON v.tenant_id=a.tenant_id AND v.id=a.plan_version_id WHERE a.tenant_id=$1 AND a.salesperson_id=$2 AND a.effective_from<=$3::date AND (a.effective_to IS NULL OR a.effective_to>=$3::date) AND (a.product_id IS NULL OR a.product_id=$4) AND (a.campaign_id IS NULL OR a.campaign_id=$5)`,[tenant,seller,date,item.productId,row.campaign_id||null])).rows;
     if(versions.length!==1)return {sellerMinor:null,totalMinor:null,reason:'Assign one effective commission plan for each product and campaign to see an estimate.'};
     const input:EarningsInput={event:'payment',amountMinor:amount.toString(),taxMinor:'0',feeMinor:'0',discountMinor:'0',currency:workspace.currency,productId:item.productId,chargeNumber:charge,date,beneficiaries};
-    try{const earnings=calculateExact(versions[0].config,input);if(charge===1)earnings.push(...calculateExact(versions[0].config,{...input,event:'sale'}));for(const earning of earnings){total+=BigInt(earning.amountMinor);if(earning.beneficiaryId===seller)sellerTotal+=BigInt(earning.amountMinor);}}catch{return {sellerMinor:null,totalMinor:null,reason:'The effective plan needs review before commission can be estimated.'};}
-    charge++;
+    try{const earnings=calculateExact(versions[0].config,input);if(charge===1&&firstLine)earnings.push(...calculateExact(versions[0].config,{...input,event:'sale'}));for(const earning of earnings){total+=BigInt(earning.amountMinor);if(earning.beneficiaryId===seller)sellerTotal+=BigInt(earning.amountMinor);}}catch{return {sellerMinor:null,totalMinor:null,reason:'The effective plan needs review before commission can be estimated.'};}
+    firstLine=false;
   }
   return {sellerMinor:sellerTotal.toString(),totalMinor:total.toString(),reason:'Estimate from today’s effective plans, assuming full payment with no tax or fees. Final earnings follow verified receipts.'};
 }

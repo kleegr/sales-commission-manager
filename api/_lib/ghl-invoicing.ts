@@ -9,7 +9,7 @@ import {syncProposalHandover} from './proposal-suite.js';
 // resolveDirectoryTokens), never a new auth path. Every read/write is
 // TENANT-SCOPED and IDEMPOTENT:
 //   - createInvoiceForDocument stores the returned invoice id/status/url on the
-//     document; re-running simply overwrites those columns.
+//     document; re-running reuses that invoice instead of issuing another.
 //   - applyInvoicePaidEvent posts commission through recordPayment with a stable
 //     per-line event key (`proposal:<docId>:<lineIndex>`), so a webhook redelivery
 //     never double-posts, and forces the product/campaign structure that
@@ -19,7 +19,7 @@ import {syncProposalHandover} from './proposal-suite.js';
 // (and the proposal approval flow under test) never touch the network.
 // ============================================================================
 import type {SessionUser} from './auth.js';
-import {TrackerError,type SQL} from './tracker-common.js';
+import {lock,TrackerError,type SQL} from './tracker-common.js';
 import {resolveProductStructure} from './products.js';
 import {resolveDirectoryTokens} from './ghl-directory.js';
 import {readGatewayEnabled} from './kleegr-read.js';
@@ -103,8 +103,9 @@ export interface DocumentInvoiceResult{invoiceId:string;status:string;url:string
  * tenant has no connected GHL location.
  */
 export async function createInvoiceForDocument(db:SQL,u:SessionUser,documentId:string,opts:{clientId?:string|null;client?:GhlInvoiceClient}={}):Promise<DocumentInvoiceResult>{
-  const row=(await db.query('SELECT * FROM documents WHERE tenant_id=$1 AND id=$2',[u.tenantId,documentId])).rows[0];
+  const row=(await db.query('SELECT * FROM documents WHERE tenant_id=$1 AND id=$2 FOR UPDATE',[u.tenantId,documentId])).rows[0];
   if(!row)throw new TrackerError('not_found','Document not found.',404);
+  if(row.ghl_invoice_id)return {invoiceId:row.ghl_invoice_id,status:row.ghl_invoice_status,url:row.ghl_invoice_url,contactId:null,documentId};
   const location=(await db.query("SELECT ghl_location_id FROM tenants WHERE id=$1 AND status='active' AND kleegr_connection_status='connected'",[u.tenantId])).rows[0]?.ghl_location_id;
   if(!location)throw new TrackerError('ghl_not_connected','Open this workspace from the connected GoHighLevel sub-account before invoicing.',409);
   const w=(await db.query('SELECT currency,payout_terms FROM tracker_workspaces WHERE tenant_id=$1',[u.tenantId])).rows[0];
@@ -121,7 +122,7 @@ export async function createInvoiceForDocument(db:SQL,u:SessionUser,documentId:s
 
   // One invoice item per line item; fall back to a single item from the document amount.
   const items:InvoiceItem[]=d.lineItems.length
-    ?d.lineItems.filter(li=>billableQty(li)>0).map(li=>({name:li.name||'Line item',quantity:billableQty(li),price:minorToMajor(li.unitPriceMinor,digits),currency}))
+    ?d.lineItems.filter(li=>billableQty(li)>0&&BigInt(li.unitPriceMinor)>0n).map(li=>({name:li.name||'Line item',quantity:billableQty(li),price:minorToMajor(li.unitPriceMinor,digits),currency}))
     :d.amount>0?[{name:d.title||'Amount due',quantity:1,price:d.amount,currency}]:[];
   if(!items.length)throw new TrackerError('no_invoiceable_amount','The document has no line items or amount to invoice.',409);
 
@@ -169,44 +170,65 @@ export interface InvoiceApplyResult{applied:boolean;action:string;tenantId:strin
  * product/campaign commission structure via resolveProductStructure. Idempotent:
  * recordPayment dedupes on the per-line event key, so a redelivery posts nothing new.
  */
-export async function applyInvoicePaidEvent(db:SQL,event:InvoicePaidEvent):Promise<InvoiceApplyResult>{
-  const row=(await db.query('SELECT * FROM documents WHERE ghl_invoice_id=$1',[event.ghlInvoiceId])).rows[0];
-  if(!row)return{applied:false,action:'no_document',tenantId:null};
-  const tenantId:string=row.tenant_id;
-  // Mark the document paid (idempotent).
-  await db.query('UPDATE documents SET ghl_invoice_status=$3,updated_at=now() WHERE tenant_id=$1 AND id=$2',[tenantId,row.id,'paid']);
-
-  const w=(await db.query('SELECT currency,timezone,payout_terms FROM tracker_workspaces WHERE tenant_id=$1',[tenantId])).rows[0];
-  const clientId=row.client_id||row.created_client_id||null;
-  if(!w||!clientId)return{applied:true,action:'invoice_paid_no_commission',tenantId,documentId:row.id,lineCount:0,earnings:0};
-  const currency=w.currency||'USD',digits=Number(w.payout_terms?.minorDigits??2);
-  const d=rowToDocument(row),campaignId=d.campaignId||row.campaign_id||null;
-  const date=new Date().toISOString().slice(0,10);
-  const system:SessionUser={id:`ghl-invoice:${row.id}`,tenantId,tenantSlug:'',tenantName:'',name:'GHL Invoice',email:'',role:'owner',salespersonId:null};
-
-  // Post one confirmed receipt per line item; each carries the product-specific
-  // structure so per-product rates pay out. Lines with no product/campaign
-  // structure fall back to the participant's ordinary effective assignment.
+/** Both collection paths use the same immutable document-line event keys. */
+async function postProposalLines(db:SQL,u:SessionUser,row:any,receipt:{date:string;source:'manual'|'ghl';externalId?:string}) {
+  const tenantId=row.tenant_id,d=rowToDocument(row),clientId=row.client_id||row.created_client_id;
+  const w=(await db.query('SELECT currency,payout_terms FROM tracker_workspaces WHERE tenant_id=$1',[tenantId])).rows[0];
+  if(!w||!clientId)return {posted:0,lineCount:0};
+  // Preserve older confirmed aggregate receipts; never add a second collection.
+  const root=(await db.query('SELECT receipt_status FROM payments WHERE tenant_id=$1 AND event_key=$2',[tenantId,`proposal:${row.id}`])).rows[0];
+  if(root?.receipt_status==='confirmed')return {posted:0,lineCount:0};
+  const digits=Number(w.payout_terms?.minorDigits??2);
   const lines=d.lineItems.length?d.lineItems:(d.amount>0?[{productId:'',name:d.title,qty:1,unitPriceMinor:String(BigInt(Math.round(d.amount*10**digits))),billingKind:'one_time'}]:[]);
   let posted=0;
-  for(const [index,li] of lines.entries()){
-    const amountMinor=(BigInt(billableQty(li))*BigInt(li.unitPriceMinor)).toString();
+  for(const [index,line] of lines.entries()){
+    const amountMinor=(BigInt(billableQty(line))*BigInt(line.unitPriceMinor)).toString();
     if(BigInt(amountMinor)<=0n)continue;
-    const planVersionOverride=campaignId&&li.productId?await resolveProductStructure(db,tenantId,campaignId,li.productId):null;
-    await recordPayment(db,system,{
-      eventKey:`proposal:${row.id}:${index}`,clientId,date,amountMinor,currency,status:'confirmed',source:'ghl',
-      externalId:event.ghlInvoiceId,productId:li.productId||'',campaignId:campaignId||undefined,
-      planVersionOverride:planVersionOverride||undefined,
-      notes:`GHL invoice ${event.ghlInvoiceId} paid — "${d.title}" line ${index+1} (${li.name||li.productId||'item'}).`,
-    },undefined,d.salespersonId?d.id:undefined);
+    const eventKey=`proposal:${row.id}:${index}`;
+    const existing=(await db.query('SELECT receipt_status,amount_minor,currency FROM payments WHERE tenant_id=$1 AND event_key=$2',[tenantId,eventKey])).rows[0];
+    if(existing){
+      if(existing.receipt_status!=='confirmed'||String(existing.amount_minor)!==amountMinor||existing.currency!==w.currency)throw new TrackerError('receipt_mismatch','Existing proposal collection needs reconciliation.',409);
+      continue;
+    }
+    const override=d.campaignId&&line.productId?await resolveProductStructure(db,tenantId,d.campaignId,line.productId):null;
+    await recordPayment(db,u,{eventKey,clientId,date:receipt.date,amountMinor,currency:w.currency,status:'confirmed',source:receipt.source,externalId:receipt.externalId,productId:line.productId||'',campaignId:d.campaignId||undefined,opportunityId:row.created_opportunity_id||undefined,planVersionOverride:override||undefined,notes:`Verified proposal collection — "${d.title}" line ${index+1} (${line.name||'item'}).`},undefined,d.salespersonId?d.id:undefined);
     posted++;
   }
-  // Supersede the manual pending fallback receipt (`proposal:<docId>`): the GHL
-  // invoice is now the real cash, so leaving it pending would risk a double count.
   await db.query("UPDATE payments SET receipt_status='cancelled',updated_at=now() WHERE tenant_id=$1 AND event_key=$2 AND receipt_status='pending'",[tenantId,`proposal:${row.id}`]);
+  return {posted,lineCount:lines.length};
+}
 
+/** Preview uses a savepoint so the exact per-line engine runs without retaining writes. */
+export async function confirmProposalReceipt(db:SQL,u:SessionUser,row:any,original:any,preview=false){
+  const total=rowToDocument(row).lineItems.reduce((sum,line)=>sum+BigInt(billableQty(line))*BigInt(line.unitPriceMinor),0n);
+  if(total!==BigInt(original.amount_minor))throw new TrackerError('receipt_mismatch','The proposal total differs from its pending collection.',409);
+  if(original.receipt_status==='cancelled'){
+    const collected=(await db.query("SELECT COALESCE(sum(amount_minor),0)::text total FROM payments WHERE tenant_id=$1 AND left(event_key,length($2))=$2 AND receipt_status='confirmed'",[u.tenantId,`proposal:${row.id}:`])).rows[0];
+    if(BigInt(collected.total)!==total)throw new TrackerError('invalid_status','This receipt was cancelled and cannot be confirmed.',409);
+  }
+  if(preview)await db.query('SAVEPOINT proposal_collection_preview');
+  try{
+    const result=await postProposalLines(db,u,row,{date:original.payment_date,source:'manual'});
+    const entries=(await db.query("SELECT l.amount_minor,l.explanation,l.due_date,l.plan_version_id,p.payment_number FROM commission_ledger l JOIN payments p ON p.id=l.payment_id AND p.tenant_id=l.tenant_id WHERE l.tenant_id=$1 AND left(p.event_key,length($2))=$2 ORDER BY p.event_key,l.id",[u.tenantId,`proposal:${row.id}:`])).rows;
+    const response=preview?{preview:true,persisted:false,amountMinor:String(original.amount_minor),currency:original.currency,chargeNumber:entries[0]?.payment_number||1,earnings:entries.map(e=>({amountMinor:String(e.amount_minor),explanation:e.explanation,dueDate:e.due_date,planVersionId:e.plan_version_id})),totalCommissionMinor:entries.reduce((sum,e)=>sum+BigInt(e.amount_minor),0n).toString()}:{id:original.id,duplicate:result.posted===0};
+    if(!preview)await syncProposalHandover(db,row);
+    return response;
+  }finally{if(preview){await db.query('ROLLBACK TO SAVEPOINT proposal_collection_preview');await db.query('RELEASE SAVEPOINT proposal_collection_preview');}}
+}
+
+export async function applyInvoicePaidEvent(db:SQL,event:InvoicePaidEvent):Promise<InvoiceApplyResult>{
+  const row=(await db.query('SELECT d.*,t.ghl_location_id FROM documents d JOIN tenants t ON t.id=d.tenant_id WHERE d.ghl_invoice_id=$1',[event.ghlInvoiceId])).rows[0];
+  if(!row)return{applied:false,action:'no_document',tenantId:null};
+  if(event.status!=='paid'||event.locationId&&event.locationId!==row.ghl_location_id)return{applied:false,action:'invoice_location_mismatch',tenantId:null};
+  const tenantId:string=row.tenant_id;
+  await lock(db,tenantId);
+  await db.query('UPDATE documents SET ghl_invoice_status=$3,updated_at=now() WHERE tenant_id=$1 AND id=$2',[tenantId,row.id,'paid']);
+  const system:SessionUser={id:`ghl-invoice:${row.id}`,tenantId,tenantSlug:'',tenantName:'',name:'GHL Invoice',email:'',role:'owner',salespersonId:null};
+  const timezone=(await db.query('SELECT timezone FROM tracker_workspaces WHERE tenant_id=$1',[tenantId])).rows[0]?.timezone||'UTC';
+  const date=new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  const result=await postProposalLines(db,system,row,{date,source:'ghl',externalId:event.ghlInvoiceId});
   await syncProposalHandover(db,{...row,ghl_invoice_status:'paid'});
-  return{applied:true,action:'invoice_paid',tenantId,documentId:row.id,lineCount:lines.length,earnings:posted};
+  return{applied:true,action:'invoice_paid',tenantId,documentId:row.id,lineCount:result.lineCount,earnings:result.posted};
 }
 
 // ===========================================================================

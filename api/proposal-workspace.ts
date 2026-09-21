@@ -26,7 +26,11 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
         const key=String(b.key||'new').slice(0,220);
         if(key!=='new')await scopedProposal(db,user,key);
         if(req.method==='GET')return (await db.query('SELECT payload,version,updated_at FROM proposal_autosaves WHERE tenant_id=$1 AND user_id=$2 AND draft_key=$3',[user.tenantId,user.id,key])).rows[0]||{payload:null,version:0};
-        if(b.clear){await db.query('DELETE FROM proposal_autosaves WHERE tenant_id=$1 AND user_id=$2 AND draft_key=$3 AND version=$4',[user.tenantId,user.id,key,Number(b.version)]);return {ok:true};}
+        if(b.clear){
+          const saved=(await db.query('SELECT version FROM proposal_autosaves WHERE tenant_id=$1 AND user_id=$2 AND draft_key=$3 FOR UPDATE',[user.tenantId,user.id,key])).rows[0];
+          if(saved&&saved.version!==Number(b.version))throw new TrackerError('draft_conflict','This draft changed in another tab. Your newer draft has been preserved.',409);
+          await db.query('DELETE FROM proposal_autosaves WHERE tenant_id=$1 AND user_id=$2 AND draft_key=$3',[user.tenantId,user.id,key]);return {ok:true};
+        }
         const r=await db.query(`INSERT INTO proposal_autosaves(tenant_id,user_id,draft_key,payload,version) SELECT $1,$2,$3,$4::jsonb,1 WHERE $5::integer=0 ON CONFLICT DO NOTHING RETURNING version`,[user.tenantId,user.id,key,JSON.stringify(b.payload||{}),Number(b.version)||0]);
         if(r.rows.length)return r.rows[0];
         const updated=await db.query('UPDATE proposal_autosaves SET payload=$4::jsonb,version=version+1,updated_at=now() WHERE tenant_id=$1 AND user_id=$2 AND draft_key=$3 AND version=$5 RETURNING version',[user.tenantId,user.id,key,JSON.stringify(b.payload||{}),Number(b.version)||0]);

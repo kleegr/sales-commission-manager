@@ -1,5 +1,5 @@
 import {validateDocumentLineItems} from './_lib/products.js';
-import {addProposalMessage,assertShareApproved,publicWorkspace,suiteEvent,workspaceFor} from './_lib/proposal-suite.js';
+import {addProposalMessage,assertShareApproved,documentFingerprint,publicWorkspace,suiteEvent,workspaceFor} from './_lib/proposal-suite.js';
 import {proposalTotals} from '../src/lib/proposal-pricing.js';
 // /api/proposal — FLOW 4: the UNAUTHENTICATED public approval endpoint.
 //   GET  ?token=<raw>                              -> rendered document (marks 'viewed' on first open)
@@ -43,10 +43,14 @@ export function calendarDate(timeZone:string,now=new Date()){try{const parts=new
 export async function issueProposalLink(db:SQL,tenantId:string,docId:string,opts:{to?:string|null;resend?:boolean}={}){
   const row=(await db.query('SELECT * FROM documents WHERE tenant_id=$1 AND id=$2 FOR UPDATE',[tenantId,docId])).rows[0];if(!row)throw new TrackerError('not_found','Document not found.',404);
   const from=String(row.status||'draft');if(!canTransitionStatus(from as any,'sent'))throw new TrackerError('invalid_transition','Only draft, sent or viewed documents can be shared.',409);
-  if(from==='draft'&&row.line_items?.length){const checked=await validateDocumentLineItems(db,tenantId,{salespersonId:row.salesperson_id,enforceAssignment:false},row.line_items);if(JSON.stringify(checked.items.map(i=>i.includedQty||0))!==JSON.stringify(row.line_items.map((i:any)=>i.includedQty||0)))throw new TrackerError('pricing_changed','Product inclusion rules changed. Reopen and save the draft before sharing.',409);}
-  await assertShareApproved(db,row);
   const ws=await workspaceFor(db,row);
-  if(!ws.shared_snapshot){const preview=await render(db,row);const onboardingPolicies=(await db.query('SELECT product_id,policy FROM proposal_product_policies WHERE tenant_id=$1',[tenantId])).rows.map(p=>({product_id:p.product_id,policy:{onboarding:p.policy.onboarding||[]}}));await db.query('UPDATE proposal_workspaces SET shared_snapshot=$3::jsonb WHERE tenant_id=$1 AND document_id=$2',[tenantId,docId,JSON.stringify({onboardingPolicies,branding:preview.branding,sections:preview.sections,recipient:preview.recipient,salesperson:preview.salesperson})]);}
+  if(from==='draft')for(const items of [row.line_items||[],...(ws.options?.packages||[]).map((p:any)=>p.items)]){
+    if(!items.length)continue;
+    const checked=await validateDocumentLineItems(db,tenantId,{salespersonId:row.salesperson_id,enforceAssignment:false},items);
+    if(JSON.stringify(checked.items.map(i=>i.includedQty||0))!==JSON.stringify(items.map((i:any)=>i.includedQty||0)))throw new TrackerError('pricing_changed','Product inclusion rules changed. Reopen and save the draft and its packages before sharing.',409);
+  }
+  await assertShareApproved(db,row);
+  if(!ws.shared_snapshot){const preview=await render(db,row);const onboardingPolicies=(await db.query('SELECT product_id,policy FROM proposal_product_policies WHERE tenant_id=$1',[tenantId])).rows.map(p=>({product_id:p.product_id,policy:{onboarding:p.policy.onboarding||[]}}));await db.query('UPDATE proposal_workspaces SET shared_snapshot=$3::jsonb WHERE tenant_id=$1 AND document_id=$2',[tenantId,docId,JSON.stringify({approvalFingerprint:documentFingerprint(row,ws.options),onboardingPolicies,branding:preview.branding,sections:preview.sections,recipient:preview.recipient,salesperson:preview.salesperson})]);}
   if(row.public_token)await db.query('INSERT INTO proposal_share_tokens(token_hash,tenant_id,document_id,expires_at) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[row.public_token,tenantId,docId,row.token_expires_at||new Date(Date.now()+60*86400000)]);
   const token=mintToken(),hash=hashToken(token),status=from==='viewed'?'viewed':'sent';
   const r=await db.query(`UPDATE documents SET public_token=$3,token_expires_at=now()+make_interval(days=>$4),status=$5,sent_at=CASE WHEN $6::boolean THEN now() ELSE COALESCE(sent_at,now()) END,sent_to=COALESCE($7,sent_to),updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING token_expires_at`,[tenantId,docId,hash,PROPOSAL_LINK_TTL_DAYS,status,opts.resend===true,opts.to||null]);

@@ -23,6 +23,8 @@ await mutate('setup',{currency:'USD',minorDigits:2,timezone:'Asia/Karachi'});
 await mutate('salesman',{firstName:'Jordan',lastName:'Test',email:'jordan@example.test'});
 await mutate('lead',{name:'Contact Example',email:'contact@example.test',source:'isolated verification',date:'2026-09-09'});
 const fixtureSalesman=(await pg.query("SELECT id FROM salespeople WHERE tenant_id='test' LIMIT 1")).rows[0] as any;
+const proposalPlan=await mutate('plan',{name:'Isolated 10% proposal plan',effectiveFrom:'2020-01-01',config:{currency:'USD',minorDigits:2,rules:[{id:'rate',name:'Proposal payment',event:'payment',kind:'percent',value:'1000',beneficiary:'referrer',base:'gross',chargeFrom:1,holdDays:0,group:'standard',stacking:'exclusive',priority:1}]}});
+await mutate('assignment',{salespersonId:fixtureSalesman.id,versionId:proposalPlan.id,effectiveFrom:'2020-01-01'});
 const {recordAdjustment}=await import('../api/_lib/tracker-finance.js');
 for(const [key,amount]of [['local-positive','125000'],['local-offset','-25000']])await pg.transaction((c:any)=>recordAdjustment(wrap(c),testUser as any,{salespersonId:fixtureSalesman.id,amountMinor:amount,currency:'USD',date:'2026-01-01',eventKey:key,reason:'Isolated browser payout verification only'}));
 
@@ -31,6 +33,8 @@ for(const [key,amount]of [['local-positive','125000'],['local-offset','-25000']]
 await mutate('saveProduct',{name:'WhatsApp account',description:'A managed WhatsApp account with messaging setup and support.',category:'Messaging',priceMinor:'1900',billingKind:'recurring',recurringInterval:'month'});
 await mutate('saveProduct',{name:'Business setup',description:'Configure the workspace, contacts and core automations.',category:'Services',priceMinor:'24900',billingKind:'setup'});
 await pg.query("INSERT INTO business_profiles(tenant_id,business_name,contact_email) VALUES('test','Kleegr Preview','hello@example.test') ON CONFLICT DO NOTHING");
+const {setGhlInvoiceClient}=await import('../api/_lib/ghl-invoicing.js');
+let previewInvoice=0;setGhlInvoiceClient({async createAndSend(){return {invoiceId:`isolated-invoice-${++previewInvoice}`,status:'sent',url:null,contactId:'isolated-contact'};}});
 
 // Fake catalog for testing the source wizard; it cannot reach a provider.
 process.env.KLEEGR_READ_GATEWAY_ENABLED='1';process.env.KLEEGR_TOKEN_SERVICE_KEY='isolated-catalog-signing-key';

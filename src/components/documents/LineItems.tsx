@@ -1,3 +1,4 @@
+import {configuredItems,productQuote,billableQty,type ProductPolicy} from '../../lib/proposal-suite';
 // ============================================================================
 // LineItemsEditor — product line items for a client document (Wave 3)
 //
@@ -17,6 +18,7 @@ import { displayMinor } from "../../lib/exact-commission";
 import type { DocumentLineItem } from "../../types";
 
 export interface CatalogProduct {
+  proposal_policy?: ProductPolicy;
   id: string;
   name: string;
   price_minor: string;
@@ -33,12 +35,12 @@ const BILLING: Record<string, string> = { one_time: "One-time", recurring: "Recu
 /** Sum of qty*unitPrice across valid rows, as a minor-unit bigint string. */
 export function lineItemsTotalMinor(items: DocumentLineItem[]): bigint {
   return items.reduce((n, it) => {
-    try { return n + BigInt(it.qty) * BigInt(it.unitPriceMinor || "0"); } catch { return n; }
+    try { return n + BigInt(billableQty(it)) * BigInt(it.unitPriceMinor || "0"); } catch { return n; }
   }, 0n);
 }
 
 export function LineItemsEditor({
-  items, onChange, products, currency, digits, loading, showSummary = true,
+  items, onChange: commit, products, currency, digits, loading, showSummary = true,
 }: {
   items: DocumentLineItem[];
   onChange: (items: DocumentLineItem[]) => void;
@@ -48,6 +50,7 @@ export function LineItemsEditor({
   loading?: boolean;
   showSummary?: boolean;
 }) {
+  const onChange=(next:DocumentLineItem[])=>commit(configuredItems(next,products,items));
   const [search,setSearch]=useState('');
   const [category,setCategory]=useState('');
   const eligible=products.filter(p=>!p.currency||p.currency.toUpperCase()===currency.toUpperCase());
@@ -65,11 +68,11 @@ export function LineItemsEditor({
     set(i, { productId, name: p.name, unitPriceMinor: p.price_minor, billingKind: p.billing_kind, description:p.description, category:p.category, recurringInterval:p.recurring_interval, currency:p.currency });
   };
   const addProduct = (p: CatalogProduct) => {
-    const line: DocumentLineItem = {productId:p.id,name:p.name,qty:1,unitPriceMinor:p.price_minor,billingKind:p.billing_kind,description:p.description,category:p.category,recurringInterval:p.recurring_interval,currency:p.currency};
+    const line: DocumentLineItem = {productId:p.id,name:p.name,qty:p.proposal_policy?.minQty||1,unitPriceMinor:p.price_minor,billingKind:p.billing_kind,description:p.description,category:p.category,recurringInterval:p.recurring_interval,currency:p.currency};
     const blank=items.findIndex(it=>!it.productId);
     onChange(blank<0?[...items,line]:items.map((it,i)=>i===blank?line:it));
   };
-  const floorOf = (productId: string): bigint => { try { return BigInt(byId.get(productId)?.price_minor || "0"); } catch { return 0n; } };
+  const floorOf = (productId: string): bigint => { try { return BigInt(byId.get(productId)?productQuote(byId.get(productId)!,items.find(i=>i.productId===productId)?.qty||1,items).floorMinor:"0"); } catch { return 0n; } };
   const belowFloor = (it: DocumentLineItem): boolean => { try { return !!it.productId && BigInt(it.unitPriceMinor || "0") < floorOf(it.productId); } catch { return false; } };
 
 
@@ -77,7 +80,7 @@ export function LineItemsEditor({
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Products & pricing</span>
-        <span className="text-xs text-slate-500">Price is prefilled from the product and can only go up.</span>
+        <span className="text-xs text-slate-500">Configured volume prices and included units apply automatically.</span>
       </div>
 
       {loading ? (
@@ -128,10 +131,11 @@ export function LineItemsEditor({
                       </div>
                     </div>
                     {it.productId&&<div className="proposal-product-description"><strong>{it.category||'Product'} · {billingLabel(it)}</strong><p>{it.description||'No description provided in the product catalog.'}</p></div>}
+                    {it.includedQty? <p className="proposal-caption">{it.includedQty} included · {billableQty(it)} charged units</p>:null}{byId.get(it.productId)&&productQuote(byId.get(it.productId)!,it.qty,items).error&&<p role="alert" className="proposal-error">{productQuote(byId.get(it.productId)!,it.qty,items).error}</p>}
                     <div className="mt-1 flex items-center justify-between text-xs">
                       {bad ? (
                         <span className="flex items-center gap-1 text-rose-600 dark:text-rose-400">
-                          <AlertTriangle className="h-3.5 w-3.5" /> Below the product floor — minimum {money(byId.get(it.productId)?.price_minor || "0")}.
+                          <AlertTriangle className="h-3.5 w-3.5" /> Below the product floor — minimum {money(floorOf(it.productId).toString())}.
                         </span>
                       ) : <span className="text-slate-400">Line total {money(lineItemsTotalMinor([it]).toString())}</span>}
                     </div>

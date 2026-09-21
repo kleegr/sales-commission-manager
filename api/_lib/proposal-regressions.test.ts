@@ -98,6 +98,28 @@ try{
   await post({op:'autosave',key:'new',version:0,payload:{title:'One'}});await post({op:'autosave',key:'new',version:1,payload:{title:'Two'}});
   assert.equal((await post({op:'autosave',key:'new',version:1,clear:true})).status,409);assert.equal((await get({op:'autosave',key:'new'})).body.payload.title,'Two');
  });
+ await check('new proposals use separate recovery slots and never restore an edited document',async()=>{
+  const first='new:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',second='new:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  assert.equal((await get({op:'autosave',key:first})).body.payload,null);
+  assert.equal((await post({op:'autosave',key:first,version:0,payload:{title:'Unfinished first proposal'}})).status,200);
+  const edited=await make();await post({op:'autosave',key:edited,version:0,payload:{title:'Edited existing proposal'}});
+  assert.equal((await get({op:'autosave',key:second})).body.payload,null);
+  assert.equal((await get({op:'latest_draft'})).body.key,first);
+  await post({op:'autosave',key:second,version:0,payload:{title:'A fresh second proposal'}});
+  assert.equal((await get({op:'autosave',key:first})).body.payload.title,'Unfinished first proposal');
+  assert.equal((await get({op:'autosave',key:edited})).body.payload.title,'Edited existing proposal');
+  assert.equal((await get({op:'latest_draft'})).body.key,second);
+  await post({op:'autosave',key:second,version:1,clear:true});assert.equal((await get({op:'latest_draft'})).body.key,first);
+  await post({op:'autosave',key:first,version:1,clear:true});assert.equal((await get({op:'latest_draft'})).body.key,'new');
+ });
+ await check('new draft recovery is user-scoped and rejects invalid document keys',async()=>{
+  const key='new:cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  await post({op:'autosave',key,version:0,payload:{title:'Owner private draft'}});
+  assert.equal((await get({op:'autosave',key},'rep')).body.payload,null);assert.equal((await get({op:'latest_draft'},'rep')).body.key,null);
+  assert.equal((await post({op:'autosave',key:'new:not-a-valid-id',version:0,payload:{}})).status,404);
+  assert.equal((await post({op:'latest_draft'})).status,405);
+  assert.equal((await post({op:'autosave',key,version:0,clear:true})).status,409);
+ });
  await check('valid internal approval remains visible after a client chooses an approved package',async()=>{
   const id=await make();await post({op:'options',id,version:0,options:{approvalNote:'Approve alternate packages',packages:[{id:'small',name:'Setup only',items:[lines[0]]}]}});
   await post({op:'request_approval',id});await post({op:'review',id,approved:true,note:'Reviewed'},'reviewer');

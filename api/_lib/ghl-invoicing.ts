@@ -1,3 +1,5 @@
+import {billableQty} from '../../src/lib/proposal-suite.js';
+import {syncProposalHandover} from './proposal-suite.js';
 // ============================================================================
 // GHL-NATIVE INVOICING  —  create+send a GoHighLevel invoice for a document,
 // and turn a paid-invoice webhook into automatic per-line-item commission.
@@ -119,7 +121,7 @@ export async function createInvoiceForDocument(db:SQL,u:SessionUser,documentId:s
 
   // One invoice item per line item; fall back to a single item from the document amount.
   const items:InvoiceItem[]=d.lineItems.length
-    ?d.lineItems.map(li=>({name:li.name||'Line item',quantity:li.qty,price:minorToMajor(li.unitPriceMinor,digits),currency}))
+    ?d.lineItems.filter(li=>billableQty(li)>0).map(li=>({name:li.name||'Line item',quantity:billableQty(li),price:minorToMajor(li.unitPriceMinor,digits),currency}))
     :d.amount>0?[{name:d.title||'Amount due',quantity:1,price:d.amount,currency}]:[];
   if(!items.length)throw new TrackerError('no_invoiceable_amount','The document has no line items or amount to invoice.',409);
 
@@ -188,7 +190,7 @@ export async function applyInvoicePaidEvent(db:SQL,event:InvoicePaidEvent):Promi
   const lines=d.lineItems.length?d.lineItems:(d.amount>0?[{productId:'',name:d.title,qty:1,unitPriceMinor:String(BigInt(Math.round(d.amount*10**digits))),billingKind:'one_time'}]:[]);
   let posted=0;
   for(const [index,li] of lines.entries()){
-    const amountMinor=(BigInt(li.qty)*BigInt(li.unitPriceMinor)).toString();
+    const amountMinor=(BigInt(billableQty(li))*BigInt(li.unitPriceMinor)).toString();
     if(BigInt(amountMinor)<=0n)continue;
     const planVersionOverride=campaignId&&li.productId?await resolveProductStructure(db,tenantId,campaignId,li.productId):null;
     await recordPayment(db,system,{
@@ -203,6 +205,7 @@ export async function applyInvoicePaidEvent(db:SQL,event:InvoicePaidEvent):Promi
   // invoice is now the real cash, so leaving it pending would risk a double count.
   await db.query("UPDATE payments SET receipt_status='cancelled',updated_at=now() WHERE tenant_id=$1 AND event_key=$2 AND receipt_status='pending'",[tenantId,`proposal:${row.id}`]);
 
+  await syncProposalHandover(db,{...row,ghl_invoice_status:'paid'});
   return{applied:true,action:'invoice_paid',tenantId,documentId:row.id,lineCount:lines.length,earnings:posted};
 }
 

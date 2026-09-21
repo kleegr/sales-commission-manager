@@ -88,7 +88,7 @@ export function LineItemsEditor({
         </p>
       ) : (
         <>
-          <div className="proposal-fields-two"><Input aria-label="Search catalog products" placeholder="Search products…" value={search} onChange={e=>setSearch(e.target.value)}/><SearchSelect label="Product category" value={category} onChange={setCategory} options={[{value:'',label:'All categories'},...categories.map(c=>({value:c,label:c}))]}/></div>
+          <div className={`proposal-catalog-filters ${categories.length?"has-categories":""}`}><Input aria-label="Search catalog products" placeholder="Search products…" value={search} onChange={e=>setSearch(e.target.value)}/>{categories.length>0&&<SearchSelect label="Product category" value={category} onChange={setCategory} options={[{value:'',label:'All categories'},...categories.map(c=>({value:c,label:c}))]}/>}</div>
           <div className="flex items-center justify-between gap-2 text-sm text-slate-500">
             <span role="status">{available.length} matching {available.length===1?'product':'products'}{filtering?'':' available to add'}</span>
             {filtering&&<Button type="button" variant="ghost" size="sm" onClick={()=>{setSearch('');setCategory('');}}>Clear filters</Button>}

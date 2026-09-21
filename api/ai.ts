@@ -75,6 +75,7 @@ async function callOpenAI(apiKey: string, model: string, system: string, userMsg
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  res.setHeader("Cache-Control", "private, no-store");
   if (!hasDb()) return res.status(503).json({ error: "database_not_configured" });
   try {
     await ensureSchema();

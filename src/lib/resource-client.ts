@@ -458,7 +458,7 @@ export interface AiStatus {
 }
 
 export async function aiStatus(): Promise<AiStatus> {
-  const res = await fetch("/api/ai", { headers: { accept: "application/json" } });
+  const res = await fetch("/api/ai", { cache: "no-store", headers: { accept: "application/json" } });
   return asJson(res);
 }
 
@@ -492,9 +492,16 @@ export async function aiGenerate(input: AiGenerateInput): Promise<AiGenerateResu
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ op: "generate", ...input }),
   });
-  if (res.status === 409) {
-    const body = await res.json();
-    throw new Error(body?.message || body?.error || 'AI drafting is unavailable.');
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const messages: Record<string,string> = {
+      ai_disabled: "AI drafting is disabled for this workspace. Ask your administrator to enable AI in workspace settings.",
+      ai_not_configured: "AI drafting is not configured on the server. Ask an administrator to check the Production OpenAI key.",
+      openai_401: "The AI provider rejected the API key. Ask an administrator to check it.",
+      openai_429: "The AI provider is temporarily rate limited or out of credits. Check billing or try again later.",
+      unauthorized: "Your session has expired. Reopen the app and try again.",
+    };
+    throw new Error(body?.message || messages[body?.error] || "AI drafting failed. Please try again; your proposal has not been changed.");
   }
   return asJson(res);
 }

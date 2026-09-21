@@ -769,3 +769,10 @@ input[type="number"] {
 .proposal-catalog-card:has(.proposal-card-quantity){border-color:#c4b5fd;background:#faf7ff}
 .dark .proposal-builder .proposal-builder-summary{background:#162033;border-color:#475569}.dark .proposal-builder-summary .proposal-item{background:#111827;border-color:#334155}.dark .proposal-builder-summary .proposal-item b{color:#c4b5fd}
 @media(min-width:1001px){.proposal-builder .proposal-builder-grid{grid-template-columns:minmax(0,1fr) 350px}}
+
+.st-main:has(.proposal-builder){max-width:none;padding:14px 20px}
+.st-main .proposal-builder{max-width:none}
+.proposal-catalog-filters{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;align-items:start}
+.proposal-catalog-filters.has-categories{grid-template-columns:minmax(0,1fr) minmax(180px,.65fr)}
+.proposal-catalog-filters>input{height:40px;align-self:start}
+@media(max-width:640px){.proposal-catalog-filters.has-categories{grid-template-columns:minmax(0,1fr)}.st-main:has(.proposal-builder){padding:10px}}

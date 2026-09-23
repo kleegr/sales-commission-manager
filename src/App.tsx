@@ -11,6 +11,7 @@ import { canAccess, homePath, type Role } from "./lib/roles";
 import { EmptyState } from "./components/ui";
 import { Lock } from "lucide-react";
 const Dashboard = lazy(()=>import('./pages/Dashboard'));
+const CompanyUsers = lazy(()=>import('./pages/tracker/CompanyUsers'));
 const People = lazy(()=>import('./pages/People'));
 const SalespersonDetail = lazy(()=>import('./pages/SalespersonDetail'));
 const Plans = lazy(()=>import('./pages/Plans'));
@@ -80,6 +81,7 @@ export default function App() {
         <Route path="/" element={<Guard><TrackerGate resource="dashboard"><Dashboard /></TrackerGate></Guard>} />
         <Route path="/products" element={<Guard><TrackerGate resource="products" /></Guard>} />
         <Route path="/agency" element={<Guard><TrackerGate resource="agency"><Agency /></TrackerGate></Guard>} />
+        <Route path="/users" element={<Guard><CompanyUsers /></Guard>} />
         <Route path="/people" element={<Guard><TrackerGate resource="people"><People /></TrackerGate></Guard>} />
         <Route path="/people/:id" element={<Guard><TrackerGate resource="people"><SalespersonDetail /></TrackerGate></Guard>} />
         <Route path="/plans" element={<Guard><TrackerGate resource="plans"><Plans /></TrackerGate></Guard>} />

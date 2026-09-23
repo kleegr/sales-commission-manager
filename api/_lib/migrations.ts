@@ -476,5 +476,9 @@ $product_commission_links$;
 INSERT INTO schema_migrations (id) VALUES ('0021_product_commission_links')
 ON CONFLICT (id) DO NOTHING;
 
+-- App-managed roles survive subsequent SSO launches.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role_managed_locally boolean NOT NULL DEFAULT false;
+INSERT INTO schema_migrations(id) VALUES ('0022_managed_user_roles') ON CONFLICT(id) DO NOTHING;
+
 ${PROPOSAL_SUITE_SCHEMA_SQL}
 `;

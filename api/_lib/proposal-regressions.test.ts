@@ -75,6 +75,31 @@ try{
   const few=configuredItems([many[0],{...many[1],qty:3}],[p],many);assert.equal(few[1].unitPriceMinor,'2000');assert.equal(proposalTotals(few).firstPayment,12000n);
   assert.ok(productQuote(p,11,many).error);assert.throws(()=>normalizeProductPolicy({minQty:5,maxQty:2}));assert.throws(()=>normalizeProductPolicy({tiers:[{from:2,unitPriceMinor:'1'},{from:2,unitPriceMinor:'2'}]}));
  });
+ await check('saved rule changes refresh automatic prices and inclusions without discarding custom selling prices',async()=>{
+  const oldProduct={id:'seat',name:'Seat',price_minor:'2000',proposal_policy:normalizeProductPolicy({tiers:[{from:5,unitPriceMinor:'1500'}],includedFromProductId:'setup',includedPerParent:1})};
+  const before=configuredItems(lines as any,[oldProduct]);
+  const saved=await post({op:'product_policy',productId:'seat',policy:{minQty:2,maxQty:50,tiers:[{from:5,unitPriceMinor:'1200'}],includedFromProductId:'setup',includedPerParent:2,onboarding:['Schedule kickoff']}});
+  assert.equal(saved.status,200);assert.equal(saved.body.policy.minQty,2);assert.deepEqual(saved.body.policy.onboarding,['Schedule kickoff']);
+  const updated={...oldProduct,proposal_policy:saved.body.policy};
+  const after=configuredItems(before,[updated],before,[oldProduct]);
+  assert.equal(after[1].unitPriceMinor,'1200');assert.equal(after[1].includedQty,2);assert.equal(proposalTotals(after).firstPayment,13600n);
+  const custom=before.map(line=>line.productId==='seat'?{...line,unitPriceMinor:'1700'}:line);
+  assert.equal(configuredItems(custom,[updated],custom,[oldProduct])[1].unitPriceMinor,'1700');
+  const withoutParent=configuredItems([after[1]],[updated],after,[updated]);assert.equal(withoutParent[0].includedQty,0);
+  assert.match(productQuote(updated,51,after).error,/2–50/);
+  await db.query("DELETE FROM proposal_product_policies WHERE tenant_id='a' AND product_id='seat'");
+ });
+ await check('prerequisite guidance names the missing product, clears on add and returns on removal',()=>{
+  const required={id:'setup',name:'Business setup',price_minor:'10000'};
+  const product={id:'seat',name:'WhatsApp account',price_minor:'2000',proposal_policy:normalizeProductPolicy({requiresProductId:'setup'})};
+  const catalog=[product,required];
+  assert.equal(productQuote(product,1,[],catalog).error,'WhatsApp account requires Business setup. Add Business setup to continue.');
+  assert.equal(productQuote(product,1,lines as any,catalog).error,'');
+  assert.match(productQuote(product,1,[lines[1]] as any,catalog).error,/Business setup/);
+  const unavailable=productQuote(product,1,[],[product]).error;
+  assert.match(unavailable,/not available in your catalog/);assert.match(unavailable,/administrator/);
+  assert.doesNotMatch(unavailable,/requires setup\./);
+ });
  await check('value estimates and quality checks flag dates, placeholders and unbounded promises',()=>{
   assert.equal(valueEstimate({hoursPerMonth:10,hourlyValueMinor:'2599',adoptionPercent:80},'10000').monthlyBenefitMinor,'20792');
   const found=reviewProposal({title:'Review',items:[],sections:[{id:'s',type:'scope',title:'Scope',content:'[Business name] guarantees unlimited results.'}],options:{effectiveDate:'2026-10-20',deliveryDate:'2026-10-01',renewalDate:'',followUpDate:'',handoverNotes:'',approvalNote:'',packages:[],value:null}});

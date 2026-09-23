@@ -1,5 +1,5 @@
 import CampaignSource from './tracker/CampaignSource';
-import {useEffect,useState} from 'react';
+import {useEffect,useRef,useState} from 'react';
 import {trackerGet,trackerPost} from '../lib/tracker-client';
 import {decimalToMinor,displayMinor,BENEFICIARIES,compileLayers,layerPresets,overlapHints,renumberPriorities,type ExactPlan,type ExactRule} from '../lib/exact-commission';
 import {Button,Modal} from './ui';
@@ -50,5 +50,8 @@ export function TrackerForm({spec,onClose,onSave,currency,digits}:{spec:FormSpec
 export function DecimalInput({value,digits,onChange,label,className=control,placeholder}:{value:string;digits:number;onChange:(v:string)=>void;label?:string;className?:string;placeholder?:string}){
  const formatted=()=>{try{return displayMinor(value,'',digits).trim();}catch{return '';}};
  const [text,setText]=useState(formatted),[error,setError]=useState('');
- return <span><input aria-label={label} className={className} placeholder={placeholder} inputMode="decimal" required value={text} onChange={e=>{setText(e.target.value);try{const n=decimalToMinor(e.target.value,digits);onChange(n);setError('');e.target.setCustomValidity('');}catch(err){const message=(err as Error).message;setError(message);e.target.setCustomValidity(message);}}}/>{error&&<small role="alert">{error}</small>}</span>;
+ const input=useRef<HTMLInputElement>(null),emitted=useRef<string|null>(null);
+ // Reflect computed prices without reformatting the user's in-progress typing.
+ useEffect(()=>{if(value!==emitted.current){setText(formatted());setError('');input.current?.setCustomValidity('');}emitted.current=null;},[value,digits]);
+ return <span><input ref={input} aria-label={label} className={className} placeholder={placeholder} inputMode="decimal" required value={text} onChange={e=>{setText(e.target.value);try{const n=decimalToMinor(e.target.value,digits);emitted.current=n;onChange(n);setError('');e.target.setCustomValidity('');}catch(err){const message=(err as Error).message;setError(message);e.target.setCustomValidity(message);}}}/>{error&&<small role="alert">{error}</small>}</span>;
 }

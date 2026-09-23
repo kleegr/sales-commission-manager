@@ -777,3 +777,38 @@ input[type="number"] {
 .proposal-catalog-filters.has-categories{grid-template-columns:minmax(0,1fr) minmax(180px,.65fr)}
 .proposal-catalog-filters>input{height:40px;align-self:start}
 @media(max-width:640px){.proposal-catalog-filters.has-categories{grid-template-columns:minmax(0,1fr)}.st-main:has(.proposal-builder){padding:10px}}
+
+/* Keep missing product requirements visible independently of catalog filters. */
+.proposal-prerequisites{border:1px solid #f5cf7d;border-radius:12px;background:#fffbeb;padding:14px;color:#78350f}
+.proposal-prerequisites-heading{display:flex;align-items:flex-start;gap:9px}
+.proposal-prerequisites-heading>svg{flex-shrink:0;margin-top:2px}
+.proposal-prerequisites-heading strong{font-size:13px}
+.proposal-prerequisites p{font-size:12px;line-height:1.5;margin:4px 0 0;overflow-wrap:anywhere}
+.proposal-prerequisites-list{max-height:220px;overflow-y:auto;scrollbar-width:thin;overscroll-behavior:contain;margin-top:10px}
+.proposal-prerequisite{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px;background:#fff;border:1px solid #fde6b4;border-radius:9px}
+.proposal-prerequisite+.proposal-prerequisite{margin-top:8px}
+.proposal-prerequisite>div{min-width:0}
+.proposal-prerequisite strong{font-size:13px;overflow-wrap:anywhere}
+.proposal-prerequisite span{display:block;font-size:11px;color:#64748b;margin-top:5px}
+.proposal-prerequisite>button{flex-shrink:0;max-width:48%;height:auto;min-height:32px;white-space:normal;text-align:left}
+.proposal-catalog-card.is-required{border-color:#e9b44d;background:#fffdf5;box-shadow:inset 3px 0 0 #e9b44d}
+.proposal-required-badge{display:block;font-size:11px;font-weight:600;line-height:1.5;color:#92400e;background:#fef3c7;border-radius:6px;padding:5px 8px;margin-bottom:10px;overflow-wrap:anywhere}
+.dark .proposal-prerequisites{background:#292013;border-color:#856328;color:#fde68a}
+.dark .proposal-prerequisite{background:#1e293b;border-color:#856328}
+.dark .proposal-prerequisite span{color:#cbd5e1}
+.dark .proposal-catalog-card.is-required{background:#292013;border-color:#b88831}
+.dark .proposal-required-badge{background:#49351b;color:#fde68a}
+@media(max-width:640px){.proposal-prerequisite{align-items:stretch;flex-direction:column;gap:10px}.proposal-prerequisite>button{max-width:100%;width:100%;justify-content:center}}
+
+.proposal-applied-rules{margin-top:12px;border:1px solid #dce4f1;background:#f8faff;border-radius:10px;padding:12px;font-size:12px;color:#475569}
+.proposal-rule-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.proposal-rule-heading>strong{display:flex;align-items:center;gap:6px;color:#334155}
+.proposal-rule-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 16px;margin:0}
+.proposal-rule-summary dt{font-size:11px;color:#64748b}.proposal-rule-summary dd{margin:3px 0 0;font-weight:500;overflow-wrap:anywhere}
+.proposal-rule-met,.proposal-rule-missing{display:inline-block;border-radius:4px;padding:2px 5px;font-size:10px;margin-left:4px}.proposal-rule-met{background:#ecfdf5;color:#047857}.proposal-rule-missing{background:#fff7ed;color:#9a3412}
+.proposal-charge-breakdown{display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin:10px 0 0;font-size:12px}.proposal-charge-breakdown svg{color:#059669}
+.proposal-volume-tiers{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.proposal-volume-tiers span{padding:4px 7px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;font-size:11px}.proposal-volume-tiers .is-applied{background:#eef2ff;border-color:#c7d2fe;color:#4338ca;font-weight:600}
+.proposal-rule-price{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px;flex-wrap:wrap}
+.proposal-rule-tasks{margin-top:10px;border-top:1px solid #e2e8f0;padding-top:8px}.proposal-rule-tasks summary{cursor:pointer}.proposal-rule-tasks ul{list-style:disc;padding-left:20px;margin-top:6px}
+.dark .proposal-applied-rules{background:#172033;border-color:#334155;color:#cbd5e1}.dark .proposal-rule-heading>strong{color:#e2e8f0}.dark .proposal-rule-summary dt{color:#94a3b8}.dark .proposal-volume-tiers span{background:#1e293b;border-color:#475569}.dark .proposal-volume-tiers .is-applied{background:#312e81;color:#e0e7ff}
+@media(max-width:640px){.proposal-rule-summary{grid-template-columns:1fr}}

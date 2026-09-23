@@ -57,7 +57,7 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
         for(const dependency of [policy.requiresProductId,policy.includedFromProductId].filter(Boolean)){
           if(dependency===product.id||!(await db.query('SELECT 1 FROM products WHERE tenant_id=$1 AND id=$2',[user.tenantId,dependency])).rows.length)throw new TrackerError('invalid_dependency','Choose another product from this workspace.');
         }
-        await db.query('INSERT INTO proposal_product_policies(tenant_id,product_id,policy) VALUES($1,$2,$3::jsonb) ON CONFLICT(tenant_id,product_id) DO UPDATE SET policy=excluded.policy,updated_at=now()',[user.tenantId,product.id,JSON.stringify(policy)]);return {ok:true};
+        await db.query('INSERT INTO proposal_product_policies(tenant_id,product_id,policy) VALUES($1,$2,$3::jsonb) ON CONFLICT(tenant_id,product_id) DO UPDATE SET policy=excluded.policy,updated_at=now()',[user.tenantId,product.id,JSON.stringify(policy)]);return {ok:true,policy};
       }
       const row=await scopedProposal(db,user,String(b.id),req.method!=='GET');const ws=await workspaceFor(db,row);
       if(req.method==='GET')return workspaceResponse(db,user,row);

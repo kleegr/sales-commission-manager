@@ -55,3 +55,18 @@
 .dark .proposal-metrics small{color:#a3afc2}.dark .proposal-builder .proposal-editor>h2{border-color:#334155}
 @media(max-width:760px){.proposal-center-hero{padding:21px}.proposal-center-hero h1{font-size:25px}.proposal-center .proposal-metrics{gap:10px}.proposal-center .proposal-metrics>div{padding:15px}.proposal-center .proposal-metrics strong{font-size:28px}.proposal-metric-top svg{padding:6px}.proposal-metrics small{line-height:1.5}.proposal-center-tabs button{padding:10px}.ps-card{padding:16px}}
 @media print{.proposal-sheet-footer{background:white}.proposal-sheet h1{font-size:26px}.proposal-sheet-header{padding-bottom:18px}}
+.proposal-summary-toggle{display:none}
+.proposal-investment-card strong{font-family:inherit;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.proposal-builder .proposal-catalog-card.is-selected{border-color:#a59ce4;background:#f6f3ff;box-shadow:inset 3px 0 #7562d6}
+.dark .proposal-builder .proposal-catalog-card.is-selected{background:#292447}
+.version-history a[aria-disabled=true]{opacity:.5;cursor:wait}
+@media(max-width:760px){
+ .proposal-summary-toggle{display:block;margin-left:auto;font-size:11px;font-weight:650;color:#4f46e5;padding:4px 0}
+ .proposal-builder .proposal-builder-grid:not(.summary-expanded) .proposal-builder-summary>:not(.proposal-live-total):not(.proposal-summary-toggle){display:none}
+ .proposal-builder .proposal-builder-summary .proposal-live-total{margin:4px 0 0;padding:8px 12px;display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:8px}
+ .proposal-builder .proposal-builder-summary .proposal-live-total strong{font-size:21px;margin:0}
+ .proposal-builder .proposal-builder-summary .proposal-live-total small{display:none}
+ .proposal-builder .proposal-builder-grid.summary-expanded{grid-template-rows:minmax(120px,1fr) minmax(0,42%)}
+ .proposal-builder .summary-expanded .proposal-builder-summary>h2{margin-top:5px}
+ .dark .proposal-summary-toggle{color:#c7d2fe}
+}

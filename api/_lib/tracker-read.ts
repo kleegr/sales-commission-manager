@@ -10,7 +10,7 @@ const resources:Record<string,ResourceSpec>={
   directory:{table:'external_users',columns:'r.*,s.id AS participant_id,s.matched_by AS participant_match',search:"r.name||' '||r.email||' '||r.external_id",admin:true},
   people:{table:'salespeople',columns:'r.id,r.name,r.email,r.role,r.status,r.ghl_user_id,r.ghl_role,r.ghl_active,r.ghl_synced_at,r.team_id,r.manager_user_id,r.parent_salesperson_id,r.enrolled_at,r.referral_code',search:"r.name||' '||r.email",scope:'r.id',date:'r.created_at'},
   teams:{table:'teams',columns:'r.*',search:'r.name',admin:true},
-  logins:{table:'users',columns:'r.id,r.name,r.email,r.role,r.status,r.salesperson_id',search:"r.name||' '||r.email",admin:true},
+  logins:{table:'users',columns:'r.id,r.name,r.email,r.role,r.status,r.salesperson_id,r.kleegr_user_id',search:"r.name||' '||r.email",admin:true},
   legacyPlans:{table:'commission_plans',columns:'r.*',search:'r.name',admin:true},
   plans:{table:'plan_versions',columns:'r.*,p.name',search:'p.name',scope:'plan'},
   assignments:{table:'plan_assignments',columns:'r.*',search:'r.id',scope:'r.salesperson_id'},

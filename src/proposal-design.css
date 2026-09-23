@@ -1,0 +1,57 @@
+/* Shared visual language for the proposal workspace and client document. */
+.proposal-center{--proposal-ink:#182b49;--proposal-muted:#64748b;--proposal-line:#e0e7f1}
+.proposal-center-hero{padding:28px 30px;border:1px solid #dce5f5;border-radius:20px;background:radial-gradient(ellipse at top right,#e9e8ff,transparent 60%),linear-gradient(120deg,#fff,#f3f7ff);box-shadow:0 8px 30px #243a6506}
+.proposal-center-eyebrow{display:block;font-size:10px;letter-spacing:.17em;font-weight:750;color:#6366b6;margin-bottom:10px}
+.proposal-center-hero h1{font-size:30px;letter-spacing:-1px;color:#182b49}
+.proposal-center-hero p{max-width:650px;line-height:1.7}
+.proposal-center .proposal-metrics{gap:16px}
+.proposal-center .proposal-metrics>div{padding:22px;border:1px solid var(--proposal-line);border-radius:16px;box-shadow:0 4px 16px #243a6505}
+.proposal-metric-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.proposal-metric-top svg{color:#6366f1;background:#eef2ff;box-sizing:content-box;padding:10px;border-radius:12px}
+.proposal-metrics>div:nth-child(3) svg{background:#e9f8f0;color:#16825c}.proposal-metrics>div:nth-child(4) svg{background:#e8f3ff;color:#2873b8}
+.proposal-center .proposal-metrics strong{font-size:34px;color:#182b49;margin-top:6px;font-variant-numeric:tabular-nums}
+.proposal-metrics small{display:block;font-size:11px;color:#718098;margin-top:4px}
+.proposal-center-tabs{display:flex;gap:5px;padding:6px;background:#edf1f8;border:1px solid #e2e8f2;border-radius:13px;overflow-x:auto;scrollbar-width:thin}
+.proposal-center-tabs button{flex-shrink:0;border:0;border-radius:9px;padding:11px 15px;white-space:nowrap;font-size:12px}
+.proposal-center-tabs button[aria-current=page]{background:#fff;color:#4338ca;box-shadow:0 2px 7px #25375512}
+.proposal-center .proposal-register{border-radius:16px;box-shadow:0 6px 22px #25375506;overflow:hidden}
+.proposal-register thead th{background:#f5f7fb;color:#708098;font-size:10px;letter-spacing:.06em;text-transform:uppercase;padding-top:15px;padding-bottom:15px}
+.proposal-register tbody tr{transition:background .15s}.proposal-register tbody tr:hover{background:#fafbff}
+.proposal-register td{padding-top:23px;padding-bottom:23px}.proposal-register-title{font-size:14px;letter-spacing:-.15px}
+.proposal-register td:last-child button{border-radius:7px}.proposal-register-panel{box-shadow:inset 0 1px 3px #243a6504}
+.proposal-center :is(input,select,textarea){border-radius:9px}
+.proposal-builder-header h1{letter-spacing:-.8px}.proposal-builder-header>div>p{color:#748198}
+.proposal-builder .proposal-steps{border-radius:14px;background:#f4f6fc;border-color:#e0e7f1;padding:7px;gap:6px}
+.proposal-steps button{border-radius:9px}.proposal-steps button[aria-current=step]{background:white;box-shadow:0 2px 8px #243a6510;color:#4338ca}
+.proposal-builder .proposal-editor{border-radius:17px;border-color:#dfe6f0;box-shadow:0 6px 24px #25375505}
+.proposal-builder .proposal-editor>h2{font-size:18px;letter-spacing:-.35px;padding-bottom:13px;border-bottom:1px solid #edf1f7;margin-bottom:14px}
+.proposal-builder-summary{border-radius:17px;background:linear-gradient(155deg,#f8f7ff,#f6f9ff);border-color:#dddff7}
+.proposal-live-total{background:linear-gradient(120deg,#5146dc,#7845dc);box-shadow:0 7px 18px #6553d520;border-radius:13px}
+.proposal-builder .proposal-catalog-card{background:#fff;border-radius:12px;box-shadow:0 2px 5px #243a6503;transition:border-color .15s,box-shadow .15s}
+.proposal-catalog-card:hover{border-color:#adb9e4;box-shadow:0 4px 13px #243a6509}
+.proposal-catalog-card.is-selected{background:#f5f3ff;border-color:#aaa0ec}
+.proposal-catalog-card.is-required{background:#fffdf5;border-color:#e9b44d}
+.proposal-builder-footer{background:#fff;padding-top:14px}
+.ps-tabs{background:#f3f5fa;padding:5px;border:1px solid #e5eaf3;border-radius:12px;gap:3px}
+.ps-tabs button{padding:10px;border-radius:8px;font-size:11px}.ps-tabs button[aria-pressed=true]{background:#fff;color:#4f46e5;box-shadow:0 2px 7px #25375510}
+.ps-card{border-radius:15px;box-shadow:0 3px 12px #25375504;padding:21px}
+.ps-stat-grid>div{background:#f7f8fd;border-color:#e5e9f5;border-radius:12px}
+.ps-message{padding:17px;border-radius:13px}.ps-message.team{background:#f1f3ff;border-color:#e0e5fa}
+.ps-card-heading h3{font-size:15px;letter-spacing:-.2px}.ps-empty{background:#f8faff;padding:30px}
+.proposal-sheet h1{font-family:inherit;font-weight:750;letter-spacing:-1px}.proposal-sheet h2{font-family:inherit;font-weight:650;letter-spacing:-.25px}
+.proposal-sheet-header{padding-bottom:28px}.proposal-summary-callout{background:#faf9ff;border-color:#e4dcfb;border-radius:13px}
+.proposal-investment-card{border-radius:13px}.proposal-investment-card.is-recurring{background:linear-gradient(125deg,#6840d9,#8146e7)}
+.proposal-terms-card{background:#f7f9fc;border-radius:13px}.proposal-breakdown{border-radius:12px}
+.proposal-sheet-footer{background:#fafbfe}.proposal-client-toolbar{gap:10px}
+:is(.proposal-center,.proposal-builder,.ps-workspace) :is(button,a,input,select,textarea):focus-visible{outline:2px solid #6366f1;outline-offset:3px}
+.dark .proposal-center-hero{background:linear-gradient(120deg,#172237,#242441);border-color:#35415c}
+.dark .proposal-center-hero h1,.dark .proposal-center .proposal-metrics strong{color:#e2e8f0}
+.dark .proposal-center-tabs,.dark .ps-tabs,.dark .proposal-builder .proposal-steps{background:#182338;border-color:#334155}
+.dark .proposal-center-tabs button[aria-current=page],.dark .ps-tabs button[aria-pressed=true],.dark .proposal-steps button[aria-current=step]{background:#303452;color:#c7d2fe}
+.dark .proposal-register thead th,.dark .proposal-register tbody tr:hover,.dark .ps-empty{background:#182338;color:#b8c5d9}
+.dark .proposal-builder .proposal-catalog-card,.dark .proposal-builder-footer{background:#111827}
+.dark .proposal-builder .proposal-catalog-card.is-selected{background:#292447}.dark .proposal-builder .proposal-catalog-card.is-required{background:#292013}
+.dark .proposal-builder-summary,.dark .ps-stat-grid>div{background:#19243b;border-color:#35415c}
+.dark .proposal-metrics small{color:#a3afc2}.dark .proposal-builder .proposal-editor>h2{border-color:#334155}
+@media(max-width:760px){.proposal-center-hero{padding:21px}.proposal-center-hero h1{font-size:25px}.proposal-center .proposal-metrics{gap:10px}.proposal-center .proposal-metrics>div{padding:15px}.proposal-center .proposal-metrics strong{font-size:28px}.proposal-metric-top svg{padding:6px}.proposal-metrics small{line-height:1.5}.proposal-center-tabs button{padding:10px}.ps-card{padding:16px}}
+@media print{.proposal-sheet-footer{background:white}.proposal-sheet h1{font-size:26px}.proposal-sheet-header{padding-bottom:18px}}

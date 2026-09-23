@@ -11,6 +11,7 @@ import { FeaturesProvider } from "./store/FeaturesContext";
 import { SpPermissionsProvider } from "./store/SpPermissionsContext";
 import { installApiAuthInterceptor } from "./lib/api-auth";
 import "./index.css";
+import "./proposal-design.css";
 
 // Install the Bearer-token transport BEFORE anything renders, so the very first
 // request the app makes (AuthProvider's /api/auth/me) already carries the

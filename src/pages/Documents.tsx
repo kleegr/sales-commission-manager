@@ -577,11 +577,11 @@ export default function Documents() {
 
   return (
     <div className="space-y-6 proposal-center">
-      <PageHeader
+      <div className="proposal-center-hero"><span className="proposal-center-eyebrow">YOUR SALES WORKSPACE</span><PageHeader
         title="Proposals & contracts"
         subtitle="Choose your products, prepare a proposal, and track it from first view to payment."
         actions={headerActions}
-      />
+      /></div>
 
       {error && (
         <Card className="border-rose-200 bg-rose-50 text-sm text-rose-700 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-300">
@@ -591,7 +591,12 @@ export default function Documents() {
       {workspaceDoc&&<ProposalWorkspace key={`${workspaceDoc.id}:${workspaceTab}`} initialTab={workspaceTab} doc={workspaceDoc} products={catalog} currency={currency} digits={digits} onClose={()=>setWorkspaceDoc(null)} onChanged={refreshLists} onRevision={async id=>{await refreshLists();const result=await listDocuments();const revised=result.documents.find(d=>d.id===id);setWorkspaceDoc(null);if(revised)setGuided({draftKey:revised.id,existing:revised});}}/>}
       {savedNotice&&<p role="status" className="proposal-success">{savedNotice}</p>}
       {activeTab==='proposalDocs'&&resumableDraftKey&&<div className="proposal-success">You have an unfinished proposal. <button className="st-text-link" onClick={()=>setGuided({draftKey:resumableDraftKey})}>Continue your saved draft →</button></div>}
-      {activeTab==='proposalDocs'&&<div className="proposal-metrics">{[{label:'Drafts',value:proposalDocs.filter(d=>d.status==='draft').length},{label:'Awaiting client',value:proposalDocs.filter(d=>d.status==='sent'||d.status==='viewed').length},{label:'Approved',value:proposalDocs.filter(d=>d.status==='signed').length},{label:'Payment confirmed',value:proposalDocs.filter(d=>d.paymentConfirmed||d.ghlInvoiceStatus==='paid').length}].map(m=><div key={m.label}><span>{m.label}</span><strong>{m.value}</strong></div>)}</div>}
+      {activeTab==='proposalDocs'&&<div className="proposal-metrics">{[
+        {label:'Drafts',hint:'Prepare your next opportunity',icon:Pencil,value:proposalDocs.filter(d=>d.status==='draft').length},
+        {label:'Awaiting client',hint:'Shared and ready for a decision',icon:Send,value:proposalDocs.filter(d=>d.status==='sent'||d.status==='viewed').length},
+        {label:'Approved',hint:'Agreements accepted by clients',icon:CheckCircle2,value:proposalDocs.filter(d=>d.status==='signed').length},
+        {label:'Payment confirmed',hint:'Verified payments received',icon:FileSignature,value:proposalDocs.filter(d=>d.paymentConfirmed||d.ghlInvoiceStatus==='paid').length}
+      ].map(m=><div key={m.label}><div className="proposal-metric-top"><span>{m.label}</span><m.icon size={18} aria-hidden="true"/></div><strong>{m.value}</strong><small>{m.hint}</small></div>)}</div>}
       <Modal open={linkOpen} title={linkBusy ? 'Creating your proposal link' : 'Share proposal'} onClose={() => { if (!linkBusy) setLinkOpen(false); }} size="lg">
         {linkBusy && !shareResult && <p role="status" className="flex items-center gap-2 py-6"><Loader2 className="h-5 w-5 animate-spin"/>Creating your private approval link…</p>}
         {linkError && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-rose-700">{linkError}</p>}
@@ -599,10 +604,11 @@ export default function Documents() {
       </Modal>
 
       {/* Tabs */}
-      <div className="flex flex-wrap gap-1 border-b border-slate-200 dark:border-slate-800">
+      <nav className="proposal-center-tabs" aria-label="Proposal areas">
         {tabs.map((t) => (
           <button
             key={t.id}
+            aria-current={activeTab === t.id ? "page" : undefined}
             onClick={() => setTab(t.id)}
             className={
               "flex items-center gap-2 rounded-t-lg px-3 py-2 text-sm font-medium transition " +
@@ -615,7 +621,7 @@ export default function Documents() {
             {t.label}
           </button>
         ))}
-      </div>
+      </nav>
 
       {loading ? (
         <div className="flex items-center gap-2 py-16 text-slate-500">

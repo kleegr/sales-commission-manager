@@ -21,7 +21,7 @@ export function AppliedProductRules({product,item,items,products,currency,digits
       <div><dt>Allowed quantity</dt><dd>{rule.maxQty<1000000?`${rule.minQty}–${rule.maxQty} units`:`${rule.minQty}+ units`}</dd></div>
       <div><dt>{tier?'Volume price floor':'Price floor'}</dt><dd>{money(quote.floorMinor)} / unit{tier?` · ${tier.from}+ units`:''}</dd></div>
       {rule.requiresProductId&&<div><dt>Required product</dt><dd>{name(rule.requiresProductId)} <span className={present(rule.requiresProductId)?'proposal-rule-met':'proposal-rule-missing'}>{present(rule.requiresProductId)?'Added':'Needs to be added'}</span></dd></div>}
-      {rule.includedFromProductId&&<div><dt>Included units</dt><dd>{rule.includedPerParent} free per {name(rule.includedFromProductId)}{!present(rule.includedFromProductId)&&' · Add this product to receive the included units'}</dd></div>}
+      {rule.includedFromProductId&&<div><dt>Included units</dt><dd>{rule.includedPerParent>0?<>{rule.includedPerParent} free per {name(rule.includedFromProductId)}{!present(rule.includedFromProductId)&&' · Add this product to receive the included units'}</>:<>No free units configured for {name(rule.includedFromProductId)}.</>}</dd></div>}
     </dl>
     <p className="proposal-charge-breakdown"><Check size={14} aria-hidden="true"/>{item.qty} total − {quote.includedQty} included = <strong>{Math.max(0,item.qty-quote.includedQty)} charged</strong></p>
     {rule.tiers.length>0&&<div className="proposal-volume-tiers" aria-label="Volume price thresholds">{[...rule.tiers].sort((a,b)=>a.from-b.from).map(t=><span key={t.from} className={tier?.from===t.from?'is-applied':''}>{t.from}+ units: {money(t.unitPriceMinor)}{tier?.from===t.from?' · Current tier':''}</span>)}</div>}

@@ -32,12 +32,12 @@ export async function attributionCandidate(db:SQL,u:SessionUser,b:any){
   if(!['referral_code','field_mapping'].includes(b.method))throw new TrackerError('invalid_method','Choose a local referral code or an allowed provider field.');
   let code='';
   if(b.method==='field_mapping'){
-    if(!Array.isArray(policy.fieldIds)||!policy.fieldIds.includes(b.fieldId))throw new TrackerError('field_not_configured','An administrator must configure this GHL field in the attribution policy first.');
+    if(!Array.isArray(policy.fieldIds)||!policy.fieldIds.includes(b.fieldId))throw new TrackerError('field_not_configured','An administrator must configure this Kleeger field in the attribution policy first.');
     code=String(lead.provider_attribution_fields?.[b.fieldId]||'');
   }else code=required(b.code,'Referral code',200);
   const matches=(await db.query("SELECT id FROM salespeople WHERE tenant_id=$1 AND referral_code=$2 AND referral_code<>'' AND status='active'",[u.tenantId,code])).rows;
   if(matches.length!==1)throw new TrackerError('unresolved_code','This value does not uniquely identify an active local participant. No attribution was changed.');
-  const candidate=matches[0].id,evidence=b.method==='field_mapping'?`GHL field ${b.fieldId}: ${code}`:`Verified local referral code: ${code}`;
+  const candidate=matches[0].id,evidence=b.method==='field_mapping'?`Kleeger field ${b.fieldId}: ${code}`:`Verified local referral code: ${code}`;
   const hasPrior=!!lead.referrer_id&&lead.referrer_id!==candidate;
   const age=lead.attribution_at?Date.now()-new Date(lead.attribution_at).getTime():0;
   const precedence=policy.evidencePriority==='field_first'?['field_mapping','referral_code']:['referral_code','field_mapping'];const mayReplace=lead.attribution_method!=='manual'&&lead.attribution_method!=='referral_link'&&age<=Number(policy.windowDays||30)*86400000&&(precedence.indexOf(b.method)<precedence.indexOf(lead.attribution_method)||(policy.touch==='last'&&b.method===lead.attribution_method));

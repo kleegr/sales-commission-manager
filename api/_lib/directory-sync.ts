@@ -78,7 +78,7 @@ export async function persistContacts(tenantId: string, contacts: DirectoryConta
       // Profile ownership is synchronized independently of commission attribution.
       // An explicit local owner override remains authoritative until reviewed.
       await c.query(`INSERT INTO attribution_events(id,tenant_id,client_id,kind,previous_id,participant_id,method,evidence,reason,policy_version)
-        SELECT $3||r.id,$1,cl.id,'owner',cl.salesperson_id,s.id,'provider_sync',r.external_id,'GHL current owner changed; original referrer preserved',1
+        SELECT $3||r.id,$1,cl.id,'owner',cl.salesperson_id,s.id,'provider_sync',r.external_id,'Kleeger current owner changed; original referrer preserved',1
         FROM jsonb_to_recordset($2::jsonb) AS r(id text,external_id text,assigned_to text)
         JOIN clients cl ON cl.tenant_id=$1 AND cl.id=r.id LEFT JOIN salespeople s ON s.tenant_id=$1 AND s.ghl_user_id=r.assigned_to
         WHERE cl.salesperson_id IS DISTINCT FROM s.id AND NOT EXISTS(SELECT 1 FROM attribution_events a WHERE a.tenant_id=$1 AND a.client_id=cl.id AND a.kind='owner' AND a.method='manual')`,[tenantId,JSON.stringify(data),`sync_${randomUUID()}_`]);

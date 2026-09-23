@@ -17,7 +17,7 @@ export async function campaignCatalog(db:SQL,u:SessionUser,kind:string,page:numb
  if(!sourceKinds.includes(kind))throw new TrackerError('invalid_source','Choose a valid source type.');
  if(!readGatewayEnabled())throw new TrackerError('gateway_not_active','The connected asset browser requires the Smart Productivity gateway.',409);
  const location=(await db.query('SELECT ghl_location_id FROM tenants WHERE id=$1',[u.tenantId])).rows[0]?.ghl_location_id;
- if(!location)throw new TrackerError('location_required','Open your connected workspace to browse GHL assets.');
+ if(!location)throw new TrackerError('location_required','Open your connected workspace to browse Kleeger assets.');
  const resource=['funnel','website','store'].includes(kind)?'funnels':`${kind}s`,size=kind==='survey'?50:100;
  const result=await gatewayPage(location,resource,(page-1)*size),normalized=normalizeAssets(result.payload,kind,location);
  return {page,hasMore:kind!=='calendar'&&normalized.rawCount===size,rows:normalized.rows.map(r=>{

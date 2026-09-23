@@ -88,7 +88,7 @@ export default function Clients() {
     <div>
       <PageHeader
         title="Clients"
-        subtitle="GoHighLevel contacts for this sub-account, with their assigned rep and revenue"
+        subtitle="Kleeger contacts for this sub-account, with their assigned rep and revenue"
         actions={
           <Button onClick={openNew}>
             <Plus className="h-4 w-4" /> Add client

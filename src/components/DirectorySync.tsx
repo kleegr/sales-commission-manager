@@ -48,10 +48,10 @@ export function DirectorySync({ resource,onSynced }: { resource: 'team' | 'clien
 
   if (!allowed) return null;
   const issue = error || status?.[resource]?.error;
-  const message = issue || (!status ? 'Checking the GoHighLevel connection…'
+  const message = issue || (!status ? 'Checking the Kleeger connection…'
     : !status.configured ? 'The Smart Productivity token connection needs to be configured.'
     : !status.connected ? 'Open this app from your Smart Productivity sub-account to connect its data.'
-    : status[resource] && !status[resource]?.error ? `${status[resource]?.count} ${resource === 'team' ? 'GoHighLevel users' : 'GoHighLevel contacts'} synced for ${tenant}.`
+    : status[resource] && !status[resource]?.error ? `${status[resource]?.count} ${resource === 'team' ? 'Kleeger users' : 'Kleeger contacts'} synced for ${tenant}.`
     : 'Ready to sync data from this sub-account.');
   return <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900" aria-live="polite">
     <div className="flex items-start gap-2 text-sm">
@@ -59,6 +59,6 @@ export function DirectorySync({ resource,onSynced }: { resource: 'team' | 'clien
       <div><p className={issue ? 'text-amber-700 dark:text-amber-300' : 'text-slate-600 dark:text-slate-300'}>{busy ? 'Syncing this sub-account’s Team and Clients…' : message}</p>
         {status?.lastSuccessAt && <p className="mt-1 text-xs text-slate-400">Last complete sync: {new Date(status.lastSuccessAt).toLocaleString()}</p>}</div>
     </div>
-    <Button variant="secondary" disabled={busy} onClick={() => void sync()}><RefreshCw className={`h-4 w-4 ${busy ? 'animate-spin' : ''}`} />{busy ? 'Syncing…' : 'Sync from GoHighLevel'}</Button>
+    <Button variant="secondary" disabled={busy} onClick={() => void sync()}><RefreshCw className={`h-4 w-4 ${busy ? 'animate-spin' : ''}`} />{busy ? 'Syncing…' : 'Sync from Kleeger'}</Button>
   </div>;
 }

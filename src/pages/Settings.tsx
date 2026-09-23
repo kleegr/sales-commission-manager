@@ -397,7 +397,7 @@ function WorkspacePanel() {
       {onNeon && tenants.length > 0 && (
         <div className="space-y-3">
           <p className="text-sm text-slate-500">
-            This app is multi-tenant. Your session is bound to one workspace (GoHighLevel
+            This app is multi-tenant. Your session is bound to one workspace (Kleeger
             sub-account / location); you only ever see this workspace's isolated data.
           </p>
           <div className="space-y-2">
@@ -422,7 +422,7 @@ function WorkspacePanel() {
                     </p>
                     <p className="truncate text-xs text-slate-500">
                       <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">{t.slug}</code>
-                      {t.ghlLocationId ? ` · GHL ${t.ghlLocationId}` : ""}
+                      {t.ghlLocationId ? ` · Kleeger ${t.ghlLocationId}` : ""}
                       {t.counts
                         ? ` · ${t.counts.salespeople ?? 0} people, ${t.counts.clients ?? 0} clients, ${t.counts.payments ?? 0} payments`
                         : ""}

@@ -151,7 +151,7 @@ export default function People() {
     <div>
       <PageHeader
         title="Team"
-        subtitle="Users from this GoHighLevel sub-account and their commission plans"
+        subtitle="Users from this Kleeger sub-account and their commission plans"
         actions={
           <Button onClick={openNew}>
             <Plus className="h-4 w-4" /> Add person
@@ -222,7 +222,7 @@ export default function People() {
         <EmptyState
           icon={<Users className="h-6 w-6" />}
           title="No people yet"
-          description="Sync this sub-account’s GoHighLevel users, or add a team member manually."
+          description="Sync this sub-account’s Kleeger users, or add a team member manually."
           action={<Button onClick={openNew}><Plus className="h-4 w-4" /> Add person</Button>}
         />
       ) : (
@@ -247,7 +247,7 @@ export default function People() {
                       {s.name || "Unnamed"}
                     </Link>
                     <div className="text-xs text-slate-400">{s.email}</div>
-                    {s.ghlUserId && <div className="text-xs text-brand-600">GoHighLevel · {s.ghlRole || 'user'}{s.ghlActive === false ? ' · no longer assigned' : ''}</div>}
+                    {s.ghlUserId && <div className="text-xs text-brand-600">Kleeger · {s.ghlRole || 'user'}{s.ghlActive === false ? ' · no longer assigned' : ''}</div>}
                   </TD>
                   <TD><Badge tone="slate">{ROLE_LABEL[s.role]}</Badge></TD>
                   <TD className="text-slate-600 dark:text-slate-300">{planName(s.commissionPlanId)}</TD>

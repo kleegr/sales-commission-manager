@@ -193,7 +193,7 @@ function gatewayErrorFor(result: JsonResult): KleegrError {
     case 501:
       return new KleegrError("not_implemented", `Gateway resource not implemented: ${msg}`, 501, result.body);
     case 502:
-      return new KleegrError("ghl_upstream_error", `GoHighLevel upstream error: ${msg}`, 502, result.body);
+      return new KleegrError("ghl_upstream_error", `Kleeger upstream error: ${msg}`, 502, result.body);
     default:
       return new KleegrError("kleegr_error", `Kleegr error (${result.status}): ${msg}`, result.status || 502, result.body);
   }

@@ -181,9 +181,12 @@ export interface AppUserRow {
   email: string;
   role: string;
   salesperson_id: string | null;
+  role_managed_locally?: boolean;
+  status?: string;
+  kleegr_user_id?: string;
 }
 
-const USER_COLS = "id, tenant_id, name, email, role, salesperson_id";
+const USER_COLS = "id, tenant_id, name, email, role, salesperson_id, role_managed_locally, status, kleegr_user_id";
 
 /**
  * Mint a NEW local user id for a launched Kleegr user — TENANT-SCOPED.
@@ -222,6 +225,12 @@ export async function upsertUserForClaims(
   queryImpl: QueryFn = query,
 ): Promise<AppUserRow> {
   const q = queryImpl;
+  const resolvedUser = async (id:string) => {
+    const result=await q<AppUserRow>(`SELECT ${USER_COLS} FROM users WHERE id = $1 AND tenant_id = $2 LIMIT 1`,[id,tenantId]);
+    const user=result.rows[0];
+    if(!user || user.kleegr_user_id !== claims.sp_user_id) throw new Error('Verified user identity changed. Sign in again.');
+    return user;
+  };
   const email = (claims.email ?? "").trim().toLowerCase();
   const name = email ? email.split("@")[0] : `Kleegr ${claims.sp_user_id}`;
   const permsJson = JSON.stringify(claims.permissions ?? []);
@@ -235,13 +244,13 @@ export async function upsertUserForClaims(
   if (byKleegr.rows[0]) {
     const u = byKleegr.rows[0];
     await q(
-      `UPDATE users SET role = $2, kleegr_role = $3, kleegr_permissions = $4::jsonb,
+      `UPDATE users SET role = CASE WHEN role_managed_locally THEN role ELSE $2 END, kleegr_role = $3, kleegr_permissions = $4::jsonb,
           email = CASE WHEN $5 <> '' THEN $5 ELSE email END,
           last_login_at = now(), updated_at = now()
         WHERE id = $1`,
       [u.id, mappedRole, claims.role ?? null, permsJson, email],
     );
-    return { ...u, role: mappedRole };
+    return resolvedUser(u.id);
   }
 
   // 2. same email inside THIS tenant → link the existing row
@@ -253,13 +262,14 @@ export async function upsertUserForClaims(
     );
     if (byEmail.rows[0]) {
       const u = byEmail.rows[0];
+      if (u.kleegr_user_id && u.kleegr_user_id !== claims.sp_user_id) throw new Error("This email is linked to another verified user.");
       await q(
         `UPDATE users SET kleegr_user_id = $2, kleegr_role = $3, kleegr_permissions = $4::jsonb,
-            role = $5, last_login_at = now(), updated_at = now()
-          WHERE id = $1`,
+            role = CASE WHEN role_managed_locally THEN role ELSE $5 END, last_login_at = now(), updated_at = now()
+          WHERE id = $1 AND (kleegr_user_id IS NULL OR kleegr_user_id = $2)`,
         [u.id, claims.sp_user_id, claims.role ?? null, permsJson, mappedRole],
       );
-      return { ...u, role: mappedRole };
+      return resolvedUser(u.id);
     }
   }
 
@@ -274,11 +284,11 @@ export async function upsertUserForClaims(
       // than INSERTing a duplicate primary key.
       await q(
         `UPDATE users SET kleegr_user_id = $2, kleegr_role = $3, kleegr_permissions = $4::jsonb,
-            role = $5, last_login_at = now(), updated_at = now()
-          WHERE id = $1`,
+            role = CASE WHEN role_managed_locally THEN role ELSE $5 END, last_login_at = now(), updated_at = now()
+          WHERE id = $1 AND (kleegr_user_id IS NULL OR kleegr_user_id = $2)`,
         [u.id, claims.sp_user_id, claims.role ?? null, permsJson, mappedRole],
       );
-      return { ...u, role: mappedRole };
+      return resolvedUser(u.id);
     }
     // Belt-and-braces: never reuse an id owned by ANOTHER tenant. Deterministic
     // so a retry of this same launch lands on the same row.
@@ -293,8 +303,9 @@ export async function upsertUserForClaims(
       VALUES ($1,$2,$3,$4,$5,'active',$6,$7,$8::jsonb, now(), now(), now())
       ON CONFLICT (tenant_id, email) DO UPDATE SET
         kleegr_user_id = EXCLUDED.kleegr_user_id, kleegr_role = EXCLUDED.kleegr_role,
-        kleegr_permissions = EXCLUDED.kleegr_permissions, role = EXCLUDED.role,
-        last_login_at = now(), updated_at = now()`,
+        kleegr_permissions = EXCLUDED.kleegr_permissions, role = CASE WHEN users.role_managed_locally THEN users.role ELSE EXCLUDED.role END,
+        last_login_at = now(), updated_at = now()
+        WHERE users.kleegr_user_id IS NULL OR users.kleegr_user_id = EXCLUDED.kleegr_user_id`,
     [id, tenantId, name, safeEmail, mappedRole, claims.sp_user_id, claims.role ?? null, permsJson],
   );
   const created = await q<AppUserRow>(
@@ -302,7 +313,8 @@ export async function upsertUserForClaims(
        FROM users WHERE tenant_id = $1 AND lower(email) = $2 LIMIT 1`,
     [tenantId, safeEmail.toLowerCase()],
   );
-  return created.rows[0] ?? { id, tenant_id: tenantId, name, email: safeEmail, role: mappedRole, salesperson_id: null };
+  if (!created.rows[0]) throw new Error('User could not be created.');
+  return resolvedUser(created.rows[0].id);
 }
 
 // ---------------------------------------------------------------------------

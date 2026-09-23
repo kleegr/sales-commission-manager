@@ -1,3 +1,4 @@
+import {notificationFeed} from './notifications.js';
 import {publishPlan,assignPlan} from './tracker-people.js';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
@@ -140,6 +141,42 @@ try{
     const shared=await call(documents,{op:'link',id:made.body.id});const freeToken=shared.body.link.split('/p/')[1];
     const r=await pub({token:freeToken,name:'Client Test',email:'client@example.test',signature:'Client Test',agree:true});assert.equal(r.status,200);
     assert.equal((await db.query('SELECT receipt_event_key FROM documents WHERE id=$1',[made.body.id])).rows[0].receipt_event_key,null);
+  });
+
+  await check('proposal list exposes approval requirements and per-user client question alerts',async()=>{
+    await post({op:'policy',policy:{requireAll:true}});
+    const draft=await post({op:'revision',id:docId,kind:'revision'},'rep');assert.equal(draft.status,200);
+    const listing=await call(documents,{},'owner','GET');assert.equal(listing.status,200,JSON.stringify(listing.body));
+    assert.equal(listing.body.documents.find((d:any)=>d.id===draft.body.id).attention.needsApproval,true);
+    assert.equal(listing.body.documents.find((d:any)=>d.id===docId).attention.unreadQuestions,1);
+    await post({op:'request_approval',id:draft.body.id},'rep');
+    let feed=await get({op:'notifications'},'owner');assert.equal(feed.status,200,JSON.stringify(feed.body));
+    assert.ok(feed.body.items.some((i:any)=>i.documentId===draft.body.id&&i.title==='Internal approval pending'));
+    const question=feed.body.items.find((i:any)=>i.documentId===docId&&i.category==='question');assert.ok(question&&!question.read);
+    assert.equal((await post({op:'notification_read',ids:[question.id]},'owner')).status,200);
+    feed=await get({op:'notifications'},'owner');assert.equal(feed.body.items.find((i:any)=>i.id===question.id).read,true);
+    assert.equal((await get({op:'notifications'},'rep')).body.items.find((i:any)=>i.id===question.id).read,false);
+    assert.equal((await post({op:'notification_read',documentId:docId},'rep')).status,200);
+    assert.equal((await call(documents,{},'rep','GET')).body.documents.find((d:any)=>d.id===docId).attention.unreadQuestions,0);
+    await post({op:'review',id:draft.body.id,approved:true,note:'Reviewed for test'},'owner');
+    assert.equal((await call(documents,{},'rep','GET')).body.documents.find((d:any)=>d.id===draft.body.id).attention.needsApproval,false);
+  });
+  await check('payout updates are scoped and disabled features stay out of notifications',async()=>{
+    await db.query("INSERT INTO payout_batches(id,tenant_id,salesperson_id,status,updated_at) VALUES('notice-pay','a','sp','submitted','2026-01-01'),('other-pay','a','other-sp','paid','2026-01-02')");
+    const feed=(await get({op:'notifications'},'rep')).body.items;
+    assert.equal(feed.filter((i:any)=>i.category==='payout').length,1);
+    assert.ok(feed.some((i:any)=>i.title==='Payout submitted'));
+    const disabled=await notificationFeed(db,owner,{proposals:false,contracts:false,payouts:false});assert.equal(disabled.items.length,0);
+  });
+  await check('notifications enforce tenant and salesman scope and reject read mutations over GET',async()=>{
+    assert.equal((await get({op:'notifications'},'other')).body.items.length,0);
+    assert.equal((await get({op:'notifications'},'accountant')).status,403);
+    assert.equal((await get({op:'notification_read'},'owner')).status,405);
+    const feed=(await get({op:'notifications'},'owner')).body.items;
+    assert.equal((await post({op:'notification_read',ids:feed.map((i:any)=>i.id)},'other')).body.count,0);
+    await db.query("UPDATE documents SET salesperson_id='other-sp' WHERE tenant_id='a'");
+    assert.equal((await get({op:'notifications'},'rep')).body.items.filter((i:any)=>i.category!=='payout').length,0);
+    assert.equal((await get({op:'notifications'},'manager')).body.items.filter((i:any)=>i.category!=='payout').length,0);
   });
   console.log(`${checks} proposal-suite integration checks passed.`);
 }finally{await pg.close();}

@@ -11,7 +11,7 @@ import type {ClientDocument} from '../../types';
 
 export interface Prospect{name:string;email:string;company:string;phone:string;setupFee:number;monthlySubscription:number}
 /** The extra FLOW 4 columns /api/documents returns on every document row. */
-export type DocRow=ClientDocument&{prospect?:Prospect|null;sentTo?:string|null;hasLink?:boolean;linkExpiresAt?:string|null;acceptedAt?:string|null;acceptedByName?:string|null;acceptedEmail?:string|null;createdClientId?:string|null;createdOpportunityId?:string|null;receiptEventKey?:string|null};
+export type DocRow=ClientDocument&{attention?:{needsApproval:boolean;approvalStatus:string;unreadQuestions:number};prospect?:Prospect|null;sentTo?:string|null;hasLink?:boolean;linkExpiresAt?:string|null;acceptedAt?:string|null;acceptedByName?:string|null;acceptedEmail?:string|null;createdClientId?:string|null;createdOpportunityId?:string|null;receiptEventKey?:string|null};
 export interface ShareResult{link:string;to:string|null;email:'sent'|'queued'|'unavailable';emailError:string|null;expiresAt:string|null;status:string}
 export const emptyProspect=():Prospect=>({name:'',email:'',company:'',phone:'',setupFee:0,monthlySubscription:0});
 export const recipientOf=(d:DocRow,clientName:(id:string|null)=>string)=>d.clientId?clientName(d.clientId):d.prospect?(d.prospect.company||d.prospect.name):'—';

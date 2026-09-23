@@ -46,15 +46,15 @@ export async function normalizeOptions(db:SQL,u:SessionUser,row:any,raw:any):Pro
   return {deliveryDate:date(b.deliveryDate),renewalDate:date(b.renewalDate),effectiveDate:date(b.effectiveDate),followUpDate:date(b.followUpDate),approvalNote:txt(b.approvalNote),handoverNotes:txt(b.handoverNotes,4000),packages,value:b.value?{hoursPerMonth:integer(b.value.hoursPerMonth,0,100000),hourlyValueMinor:money(b.value.hourlyValueMinor),adoptionPercent:integer(b.value.adoptionPercent,0,100)}:null};
 }
 export const documentFingerprint=(row:any,options:any)=>{const {followUpDate,handoverNotes,...offer}=options||{};return createHash('sha256').update(JSON.stringify([row.title,row.sections,row.line_items,row.campaign_id,offer])).digest('hex');};
-export async function approvalState(db:SQL,row:any,ws:any) {
-  const policy=(await db.query('SELECT policy FROM proposal_policies WHERE tenant_id=$1',[row.tenant_id])).rows[0]?.policy||{};
+export async function approvalState(db:SQL,row:any,ws:any,context?:{policy:any;terms:string}) {
+  const policy=context?.policy||(await db.query('SELECT policy FROM proposal_policies WHERE tenant_id=$1',[row.tenant_id])).rows[0]?.policy||{};
   const total=proposalTotals(rowToDocument(row).lineItems).firstPayment;
   const amounts=[total,...(ws.options?.packages||[]).map((p:any)=>proposalTotals(p.items).firstPayment)];
   const reasons:string[]=[];
   if(policy.requireAll)reasons.push('All proposals need internal approval');
   if(policy.thresholdMinor&&amounts.some(a=>a>=BigInt(policy.thresholdMinor)))reasons.push('Proposal or package exceeds the approval threshold');
   if(ws.options?.approvalNote)reasons.push('An exception was requested');
-  if(policy.customTerms){const standard=(await db.query("SELECT profile->>'paymentTerms' AS payment_terms FROM business_profiles WHERE tenant_id=$1",[row.tenant_id])).rows[0]?.payment_terms||'';const terms=rowToDocument(row).sections.filter(s=>s.type==='terms').map(s=>s.content.trim()).join('\n');if(terms!==standard.trim())reasons.push('Custom terms need review');}
+  if(policy.customTerms){const standard=context?context.terms:(await db.query("SELECT profile->>'paymentTerms' AS payment_terms FROM business_profiles WHERE tenant_id=$1",[row.tenant_id])).rows[0]?.payment_terms||'';const terms=rowToDocument(row).sections.filter(s=>s.type==='terms').map(s=>s.content.trim()).join('\n');if(terms!==standard.trim())reasons.push('Custom terms need review');}
   const reviewedFingerprint=row.status==='signed'&&ws.shared_snapshot?.approvalFingerprint||documentFingerprint(row,ws.options);
   const current=ws.approval_hash===reviewedFingerprint;
   return {required:reasons.length>0,reasons,status:current?ws.approval_status:'not_requested',note:ws.review_note||'',reviewedAt:ws.reviewed_at||null};

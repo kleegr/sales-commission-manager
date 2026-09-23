@@ -1,4 +1,9 @@
 export const PROPOSAL_SUITE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS notification_reads (
+ tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+ user_id text NOT NULL, notification_key text NOT NULL, read_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(tenant_id,user_id,notification_key)
+);
 CREATE TABLE IF NOT EXISTS proposal_autosaves (
  tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
  user_id text NOT NULL, draft_key text NOT NULL, payload jsonb NOT NULL,

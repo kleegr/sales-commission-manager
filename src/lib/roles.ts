@@ -46,6 +46,7 @@ export function homePath(role: Role): string {
 // guard redirect owner -> /agency cleanly and hides the redundant Dashboard
 // nav item for the agency role.
 const ACCESS: Array<{ path: string; roles: Role[] }> = [
+  {path:"/notifications",roles:["owner","admin","sales_manager","salesperson","affiliate","partner"]},
   {path:"/operations",roles:["owner","admin","accountant","salesperson","affiliate","partner"]},
   {path:"/workspace-overview",roles:["owner","admin","sales_manager"]},
   {path:"/campaigns",roles:["owner","admin","sales_manager","salesperson","affiliate","partner"]},

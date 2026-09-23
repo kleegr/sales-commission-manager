@@ -1,3 +1,4 @@
+const Notifications = lazy(()=>import('./pages/Notifications'));
 import {lazy,Suspense} from 'react';
 import {PreferencesProvider} from './components/tracker/Experience';
 const Operations = lazy(()=>import('./pages/tracker/Operations'));
@@ -81,6 +82,7 @@ export default function App() {
         <Route path="/" element={<Guard><TrackerGate resource="dashboard"><Dashboard /></TrackerGate></Guard>} />
         <Route path="/products" element={<Guard><TrackerGate resource="products" /></Guard>} />
         <Route path="/agency" element={<Guard><TrackerGate resource="agency"><Agency /></TrackerGate></Guard>} />
+        <Route path="/notifications" element={<Guard><Notifications /></Guard>} />
         <Route path="/users" element={<Guard><CompanyUsers /></Guard>} />
         <Route path="/people" element={<Guard><TrackerGate resource="people"><People /></TrackerGate></Guard>} />
         <Route path="/people/:id" element={<Guard><TrackerGate resource="people"><SalespersonDetail /></TrackerGate></Guard>} />

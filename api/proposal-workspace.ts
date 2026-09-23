@@ -1,3 +1,4 @@
+import {notificationFeed,markNotifications} from './_lib/notifications.js';
 import {isNewProposalDraftKey} from '../src/lib/proposal-draft-key.js';
 import type {VercelRequest,VercelResponse} from '@vercel/node';
 import {ensureSchema} from './_lib/repository.js';
@@ -13,16 +14,19 @@ export default async function handler(req:VercelRequest,res:VercelResponse){
   res.setHeader('Cache-Control','no-store');
   try{
     await ensureSchema();const user=await getSessionUser(req);if(!user)return res.status(401).json({error:'unauthorized'});
-    const flags=await readTenantFlags(user.tenantId);if(flags.proposals===false)return res.status(403).json({error:'proposals_disabled'});
+    const flags=await readTenantFlags(user.tenantId);
     const b=req.method==='GET'?req.query:typeof req.body==='string'?JSON.parse(req.body):req.body||{};
     if(JSON.stringify(b).length>180000)throw new TrackerError('too_large','The proposal is too large.',413);
     const op=String(b.op||'workspace');
+    if(flags.proposals===false&&!['notifications','notification_read'].includes(op))return res.status(403).json({error:'proposals_disabled'});
     if(req.method!=='GET'){
       if(req.method!=='POST')return res.status(405).json({error:'method_not_allowed'});
       if(!csrfOk(req))return res.status(403).json({error:'csrf_check_failed'});
       if(!canCreateClientDoc(user.role))return res.status(403).json({error:'forbidden'});
     }
     const result=await database.transaction(async db=>{
+      if(op==='notifications'){if(req.method!=='GET')throw new TrackerError('method_not_allowed','Use GET.',405);return notificationFeed(db,user,flags);}
+      if(op==='notification_read'){if(req.method!=='POST')throw new TrackerError('method_not_allowed','Use POST.',405);return markNotifications(db,user,b,flags);}
       if(op==='latest_draft'){
         if(req.method!=='GET')throw new TrackerError('method_not_allowed','Use GET to read saved drafts.',405);
         const saved=(await db.query("SELECT draft_key AS key FROM proposal_autosaves WHERE tenant_id=$1 AND user_id=$2 AND (draft_key='new' OR draft_key LIKE 'new:%') ORDER BY updated_at DESC,draft_key DESC LIMIT 1",[user.tenantId,user.id])).rows[0];

@@ -1,3 +1,4 @@
+import {useSearchParams} from 'react-router-dom';
 import {newProposalDraftKey} from '../lib/proposal-draft-key';
 import {proposalRequest} from '../lib/proposal-workspace-client';
 import {ProposalWorkspace} from '../components/documents/ProposalWorkspace';
@@ -160,6 +161,8 @@ export default function Documents() {
   // Product catalog + campaigns for the line-item builder and campaign link.
   const [resumableDraftKey,setResumableDraftKey]=useState<string|null>(null);
   const [workspaceDoc,setWorkspaceDoc]=useState<DocRow|null>(null);
+  const [workspaceTab,setWorkspaceTab]=useState('overview');
+  const [searchParams,setSearchParams]=useSearchParams();
   const [catalog, setCatalog] = useState<CatalogProduct[]>([]);
   const [proposalSalespeople,setProposalSalespeople]=useState<{id:string;name:string;email?:string}[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(true);
@@ -187,6 +190,7 @@ export default function Documents() {
   const [error, setError] = useState<string | null>(null);
   const [templates, setTemplates] = useState<DocumentTemplate[]>([]);
   const [documents, setDocuments] = useState<ClientDocument[]>([]);
+  useEffect(()=>{const target=searchParams.get('proposal');if(!target||!documents.length)return;const doc=documents.find(d=>d.id===target);if(doc){setWorkspaceTab(['overview','approval','conversation','versions','handover'].includes(searchParams.get('workspace')||'')?searchParams.get('workspace')!:'overview');setWorkspaceDoc(doc);}setSearchParams({}, {replace:true});},[documents,searchParams,setSearchParams]);
   const [profile, setProfile] = useState<BusinessProfile | null>(null);
   const [profileError, setProfileError] = useState(false);
   const [ai, setAi] = useState<{ configured: boolean; model: string }>({ configured: false, model: "" });
@@ -584,7 +588,7 @@ export default function Documents() {
           {error}
         </Card>
       )}
-      {workspaceDoc&&<ProposalWorkspace doc={workspaceDoc} products={catalog} currency={currency} digits={digits} onClose={()=>setWorkspaceDoc(null)} onChanged={refreshLists} onRevision={async id=>{await refreshLists();const result=await listDocuments();const revised=result.documents.find(d=>d.id===id);setWorkspaceDoc(null);if(revised)setGuided({draftKey:revised.id,existing:revised});}}/>}
+      {workspaceDoc&&<ProposalWorkspace key={`${workspaceDoc.id}:${workspaceTab}`} initialTab={workspaceTab} doc={workspaceDoc} products={catalog} currency={currency} digits={digits} onClose={()=>setWorkspaceDoc(null)} onChanged={refreshLists} onRevision={async id=>{await refreshLists();const result=await listDocuments();const revised=result.documents.find(d=>d.id===id);setWorkspaceDoc(null);if(revised)setGuided({draftKey:revised.id,existing:revised});}}/>}
       {savedNotice&&<p role="status" className="proposal-success">{savedNotice}</p>}
       {activeTab==='proposalDocs'&&resumableDraftKey&&<div className="proposal-success">You have an unfinished proposal. <button className="st-text-link" onClick={()=>setGuided({draftKey:resumableDraftKey})}>Continue your saved draft →</button></div>}
       {activeTab==='proposalDocs'&&<div className="proposal-metrics">{[{label:'Drafts',value:proposalDocs.filter(d=>d.status==='draft').length},{label:'Awaiting client',value:proposalDocs.filter(d=>d.status==='sent'||d.status==='viewed').length},{label:'Approved',value:proposalDocs.filter(d=>d.status==='signed').length},{label:'Payment confirmed',value:proposalDocs.filter(d=>d.paymentConfirmed||d.ghlInvoiceStatus==='paid').length}].map(m=><div key={m.label}><span>{m.label}</span><strong>{m.value}</strong></div>)}</div>}
@@ -661,7 +665,7 @@ export default function Documents() {
               onSend={(d) => setShareDoc(d)}
               onLink={onNewLink}
               onPricing={(d) => setPricingDoc(d)}
-              onWorkspace={d=>setWorkspaceDoc(d)}
+              onWorkspace={(d,tab='overview')=>{setWorkspaceTab(tab);setWorkspaceDoc(d);}}
             />
           )}
 
@@ -677,7 +681,7 @@ export default function Documents() {
               onSend={(d) => setShareDoc(d)}
               onLink={onNewLink}
               onPricing={(d) => setPricingDoc(d)}
-              onWorkspace={d=>setWorkspaceDoc(d)}
+              onWorkspace={(d,tab='overview')=>{setWorkspaceTab(tab);setWorkspaceDoc(d);}}
             />
           )}
 
@@ -963,7 +967,7 @@ function ClientDocList({
   onSend: (d: DocRow) => void;
   onLink: (d: DocRow) => void;
   onPricing: (d: DocRow) => void;
-  onWorkspace: (d: DocRow) => void;
+  onWorkspace: (d: DocRow,tab?:string) => void;
 }) {
   const label = kind === "contract" ? "contract" : "proposal";
   const [search,setSearch]=useState('');
@@ -1012,7 +1016,7 @@ function ClientDocList({
                   <Fragment key={d.id}><TR>
                     <TD>
                       <button className="proposal-register-title" onClick={()=>onPreview(d)}>{d.title}</button>
-                      <button className="proposal-register-details" aria-expanded={expandedId===d.id} aria-controls={`activity-${d.id}`} onClick={()=>setExpandedId(expandedId===d.id?null:d.id)}>{expandedId===d.id?'Hide details':'Activity & payment details'} <span aria-hidden="true">{expandedId===d.id?'−':'+'}</span></button>
+                      <div className="proposal-attention">{d.attention?.needsApproval&&<button className="proposal-attention-approval" onClick={()=>onWorkspace(d,'approval')}>{d.attention.approvalStatus==='pending'?'Internal approval pending':d.attention.approvalStatus==='rejected'?'Internal changes requested':'Needs internal approval'}</button>}{!!d.attention?.unreadQuestions&&<button className="proposal-attention-question" onClick={()=>onWorkspace(d,'conversation')}>{d.attention.unreadQuestions} new client {d.attention.unreadQuestions===1?'question':'questions'}</button>}</div><button className="proposal-register-details" aria-expanded={expandedId===d.id} aria-controls={`activity-${d.id}`} onClick={()=>setExpandedId(expandedId===d.id?null:d.id)}>{expandedId===d.id?'Hide details':'Activity & payment details'} <span aria-hidden="true">{expandedId===d.id?'−':'+'}</span></button>
                     </TD>
                     {kind !== "contract" && <TD><Badge tone="slate">{DOC_TYPE_LABELS[d.kind] ?? d.kind}</Badge></TD>}
                     <TD>{recipientOf(d, clientName)}{!d.clientId && d.prospect && <> <Badge tone="violet">Prospect</Badge></>}</TD>

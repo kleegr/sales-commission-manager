@@ -1,3 +1,4 @@
+import {proposalAttention} from './_lib/notifications.js';
 import {suiteEvent} from './_lib/proposal-suite.js';
 // /api/documents — proposal/contract TEMPLATES + per-client DOCUMENTS, built
 // from structured, reorderable SECTIONS (not one text blob).
@@ -268,6 +269,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       docsSql += ` ORDER BY created_at DESC`;
       const docsRes = await query<any>(docsSql, params);
+      const attention=await proposalAttention({query},user,docsRes.rows);
 
       return res.status(200).json({
         templates: templatesRes.rows.map(rowToTemplate),
@@ -275,6 +277,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // lives in documents-core and is intentionally left untouched).
         documents: docsRes.rows.map((r) => ({
           ...rowToDocument(r),
+          attention:attention[r.id],
           ghlInvoiceId: r.ghl_invoice_id ?? null,
           ghlInvoiceStatus: r.ghl_invoice_status ?? null,
           paymentConfirmed: r.ghl_invoice_status === 'paid' || r.aggregate_paid || (BigInt(r.collected_line_minor || '0') > 0n && BigInt(r.collected_line_minor || '0') >= BigInt(lineItemsAmountMinor(rowToDocument(r).lineItems || []))),

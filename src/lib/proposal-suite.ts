@@ -15,21 +15,24 @@ export type PolicyProduct = {id:string;name:string;price_minor:string;proposal_p
 export function billableQty(item: Pick<DocumentLineItem,'qty'|'includedQty'>) {
   return Math.max(0,item.qty-Math.min(item.qty,Math.max(0,Number(item.includedQty)||0)));
 }
-export function productQuote(product:PolicyProduct,qty:number,items:DocumentLineItem[]) {
+export function productQuote(product:PolicyProduct,qty:number,items:DocumentLineItem[],catalog?:PolicyProduct[]) {
   const rule=product.proposal_policy||defaultProductPolicy;
   const tier=[...rule.tiers].sort((a,b)=>b.from-a.from).find(t=>qty>=t.from);
   const parentQty=items.filter(i=>i.productId===rule.includedFromProductId).reduce((n,i)=>n+i.qty,0);
   const includedQty=Math.min(qty,parentQty*rule.includedPerParent);
   const missing=rule.requiresProductId&&!items.some(i=>i.productId===rule.requiresProductId);
-  const error=qty<rule.minQty||qty>rule.maxQty?`${product.name}: choose ${rule.minQty}–${rule.maxQty} units.`:missing?`${product.name} needs its prerequisite product.`:'';
+  const required=catalog?.find(p=>p.id===rule.requiresProductId);
+  const missingMessage=required?`${product.name} requires ${required.name}. Add ${required.name} to continue.`:catalog?`${product.name} requires a product that is not available in your catalog. Ask an administrator to review its product rules.`:`${product.name} needs its prerequisite product.`;
+  const error=qty<rule.minQty||qty>rule.maxQty?`${product.name}: choose ${rule.minQty}–${rule.maxQty} units.`:missing?missingMessage:'';
   return {floorMinor:tier?.unitPriceMinor||String(product.price_minor),includedQty,error};
 }
 /** Refresh inclusions on every basket change; catalog rules alone determine free units. */
-export function configuredItems(items:DocumentLineItem[],products:PolicyProduct[],previous:DocumentLineItem[]=[]):DocumentLineItem[] {
+export function configuredItems(items:DocumentLineItem[],products:PolicyProduct[],previous:DocumentLineItem[]=[],previousProducts:PolicyProduct[]=products):DocumentLineItem[] {
   return items.map(item=>{
     const p=products.find(p=>p.id===item.productId);if(!p)return item;
     const quote=productQuote(p,item.qty,items),old=previous.find(i=>i.productId===item.productId);
-    const oldFloor=old?productQuote(p,old.qty,previous).floorMinor:String(p.price_minor);
+    const oldProduct=previousProducts.find(product=>product.id===item.productId)||p;
+    const oldFloor=old?productQuote(oldProduct,old.qty,previous).floorMinor:String(p.price_minor);
     const automatic=!old||old.unitPriceMinor===oldFloor;
     return {...item,includedQty:quote.includedQty,unitPriceMinor:automatic&&(!old||item.unitPriceMinor===old.unitPriceMinor)?quote.floorMinor:item.unitPriceMinor};
   });

@@ -51,9 +51,9 @@ async function jsonRequest(url: string, init: RequestInit, fetchImpl: typeof fet
   catch { throw new DirectoryError('upstream_unreachable', 'The data provider could not be reached. Please retry.'); }
   if (!res.ok) {
     // Never include response bodies: OAuth diagnostics can contain credentials.
-    if (res.status === 401) throw new DirectoryError('token_rejected', 'GoHighLevel rejected the connection. Reconnect this sub-account in Smart Productivity.');
-    if (res.status === 403) throw new DirectoryError('scope_required', 'The connected GHL app needs users.readonly and contacts.readonly access.');
-    if (res.status === 429) throw new DirectoryError('rate_limited', 'GoHighLevel is busy. Please retry shortly.', 429);
+    if (res.status === 401) throw new DirectoryError('token_rejected', 'Kleeger rejected the connection. Reconnect this sub-account in Smart Productivity.');
+    if (res.status === 403) throw new DirectoryError('scope_required', 'The connected Kleeger app needs users.readonly and contacts.readonly access.');
+    if (res.status === 429) throw new DirectoryError('rate_limited', 'Kleeger is busy. Please retry shortly.', 429);
     throw new DirectoryError('upstream_error', 'The data provider could not complete the request.');
   }
   try { return await res.json(); }
@@ -100,7 +100,7 @@ export async function fetchDirectoryUsers(locationId: string, tokens: Tokens, fe
       params.set('limit', String(PAGE_SIZE)); params.set('skip', String(page * PAGE_SIZE));
     }
     const payload = await ghlRequest(`${tokens.agency ? '/users/search' : '/users/'}?${params}`, (tokens.agency || tokens.location).accessToken, undefined, fetchImpl);
-    if (!Array.isArray(payload.users)) throw new DirectoryError('invalid_users', 'GoHighLevel did not return a user list.');
+    if (!Array.isArray(payload.users)) throw new DirectoryError('invalid_users', 'Kleeger did not return a user list.');
     let added = 0;
     for (const raw of payload.users) { const person = normalizePerson(raw, locationId); if (person) { if (!records.has(person.id)) added++; records.set(person.id, person); } }
     if (!tokens.agency || payload.users.length < PAGE_SIZE || (Number.isFinite(payload.count) && (page + 1) * PAGE_SIZE >= payload.count)) return [...records.values()];
@@ -113,7 +113,7 @@ export async function fetchDirectoryContacts(locationId: string, tokens: Tokens,
   const records = new Map<string, DirectoryContact>();
   for (let page = 1; page <= MAX_PAGES; page++) {
     const payload = readGatewayEnabled() ? (await gatewayPage(locationId,'contacts',(page-1)*PAGE_SIZE,fetchImpl)).payload : await ghlRequest('/contacts/search', tokens.location.accessToken, { locationId, page, pageLimit: PAGE_SIZE }, fetchImpl);
-    if (!Array.isArray(payload.contacts)) throw new DirectoryError('invalid_contacts', 'GoHighLevel did not return a contact list.');
+    if (!Array.isArray(payload.contacts)) throw new DirectoryError('invalid_contacts', 'Kleeger did not return a contact list.');
     let added = 0;
     for (const raw of payload.contacts) { const contact = normalizeDirectoryContact(raw, locationId); if (contact) { if (!records.has(contact.id)) added++; records.set(contact.id, contact); } }
     if (payload.contacts.length < PAGE_SIZE || (Number.isFinite(payload.total) && page * PAGE_SIZE >= payload.total)) return [...records.values()];

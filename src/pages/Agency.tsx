@@ -212,7 +212,7 @@ export default function Agency() {
         title="Agency Control"
         subtitle={
           agencyScope
-            ? "Every GoHighLevel sub-account that uses the Commission Manager, in one place"
+            ? "Every Kleeger sub-account that uses the Commission Manager, in one place"
             : "Your sub-account overview"
         }
         actions={
@@ -349,10 +349,10 @@ function TenantCard({
               <MapPin className="h-3 w-3" />
               {t.ghlLocationId ? (
                 <>
-                  GHL <span className="font-mono">{t.ghlLocationId}</span>
+                  Kleeger <span className="font-mono">{t.ghlLocationId}</span>
                 </>
               ) : (
-                <span className="italic">GHL location not connected</span>
+                <span className="italic">Kleeger location not connected</span>
               )}
             </span>
           </p>
@@ -429,7 +429,7 @@ function IntegrationsCard() {
           <div>
             <p className="text-sm font-semibold text-slate-900 dark:text-white">Kleegr integration</p>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Sales Commission Manager connects to GoHighLevel through Kleegr Smart Productivity.
+              Sales Commission Manager connects to Kleeger through Kleegr Smart Productivity.
             </p>
           </div>
         </div>

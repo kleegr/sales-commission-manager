@@ -705,7 +705,7 @@ export default function Documents() {
       >
         <div className="space-y-4">
           {createKind !== "contract" && (
-            <Field label="Document type" hint="Proposals and quotes present pricing; invoices and payment requests collect payment in GoHighLevel.">
+            <Field label="Document type" hint="Proposals and quotes present pricing; invoices and payment requests collect payment in Kleeger.">
               <Select value={cDocType} onChange={(e) => setCDocType(e.target.value as ClientDocKind)}>
                 {SALES_DOC_TYPES.map((k) => <option key={k} value={k}>{DOC_TYPE_LABELS[k]}</option>)}
               </Select>
@@ -1149,7 +1149,7 @@ function InvoiceState({ doc }: { doc: DocRow }) {
     <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs dark:border-slate-800 dark:bg-slate-800/40">
       <div className="flex flex-wrap items-center gap-2">
         <Badge tone={paid ? "green" : "amber"}>{paid ? "Paid" : (doc.ghlInvoiceStatus || "Awaiting payment")}</Badge>
-        <span className="text-slate-500">Invoice sent — payment is collected in GoHighLevel.</span>
+        <span className="text-slate-500">Invoice sent — payment is collected in Kleeger.</span>
       </div>
       <div className="mt-1.5 flex items-center gap-2">
         <a href={doc.ghlInvoiceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-brand-600 hover:underline dark:text-brand-300">

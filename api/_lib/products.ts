@@ -190,8 +190,8 @@ export async function readGhlProducts(locationId:string,fetchImpl:typeof fetch=f
       if(isPrice){resource='productPrice';const m=path.match(/\/products\/([^/]+)\/price/);gp.productId=m?m[1]:'';}
       const body=await gatewayPage(locationId,resource,Number(params.offset||0),fetchImpl,gp);return body.payload;
     }
-    let r:Response;try{r=await fetchImpl(`${GHL}${path}?${new URLSearchParams(params)}`,{headers,redirect:'error',signal:AbortSignal.timeout(20000)});}catch{throw new TrackerError('provider_unreachable','GoHighLevel could not be reached to sync products.',502);}
-    if(!r.ok)throw new TrackerError(r.status===429?'rate_limited':r.status===403?'scope_required':r.status===401?'ghl_not_connected':'provider_error',r.status===403?'The connected GHL app needs products.readonly and products/prices.readonly access.':'GoHighLevel could not list products.',r.status===429?429:r.status===401?409:502);
+    let r:Response;try{r=await fetchImpl(`${GHL}${path}?${new URLSearchParams(params)}`,{headers,redirect:'error',signal:AbortSignal.timeout(20000)});}catch{throw new TrackerError('provider_unreachable','Kleeger could not be reached to sync products.',502);}
+    if(!r.ok)throw new TrackerError(r.status===429?'rate_limited':r.status===403?'scope_required':r.status===401?'ghl_not_connected':'provider_error',r.status===403?'The connected Kleeger app needs products.readonly and products/prices.readonly access.':'Kleeger could not list products.',r.status===429?429:r.status===401?409:502);
     return r.json();
   };
   const out:GhlSyncedProduct[]=[];
@@ -215,7 +215,7 @@ export async function readGhlProducts(locationId:string,fetchImpl:typeof fetch=f
 export async function syncGhlProducts(db:SQL,u:SessionUser,b:any,reader=readGhlProducts,fetchImpl:typeof fetch=fetch){
   admin(u);await lock(db,u.tenantId);
   const location=(await db.query("SELECT ghl_location_id FROM tenants WHERE id=$1 AND status='active' AND kleegr_connection_status='connected'",[u.tenantId])).rows[0]?.ghl_location_id;
-  if(!location)throw new TrackerError('ghl_not_connected','Open this workspace from the connected GoHighLevel sub-account before syncing products.',409);
+  if(!location)throw new TrackerError('ghl_not_connected','Open this workspace from the connected Kleeger sub-account before syncing products.',409);
   const defaultCurrency=await workspaceCurrency(db,u.tenantId);
   let synced:GhlSyncedProduct[];
   try{synced=await reader(location,fetchImpl,defaultCurrency);}
@@ -223,10 +223,10 @@ export async function syncGhlProducts(db:SQL,u:SessionUser,b:any,reader=readGhlP
     // Surface the real reason instead of a vague provider_error. The most common
     // cause is the connected GoHighLevel app lacking the Products scope — that
     // needs the app's scopes updated + a reconnect; it can't be fixed by retry.
-    if(e&&(e.code==='scope_required'||e.code==='gateway_scope_mismatch'))throw new TrackerError('scope_required','Product sync needs Products access. Ask your admin to enable products.readonly and products/prices.readonly on the connected GoHighLevel app, then reconnect this sub-account. You can still add products manually with Add Product.',403);
-    if(e&&(e.code==='token_service_not_configured'||e.code==='reconnect_required'||e.code==='location_required'||e.code==='token_rejected'))throw new TrackerError('ghl_not_connected','GoHighLevel access is unavailable. Reconnect this sub-account and retry. You can still add products manually with Add Product.',409);
-    if(e&&(e.code==='gateway_unreachable'||e.code==='gateway_not_configured'||e.code==='gateway_error'))throw new TrackerError('provider_unreachable','GoHighLevel could not be reached for the sync. Try again shortly, or add products manually with Add Product.',502);
-    throw new TrackerError('provider_error','GoHighLevel could not complete the product sync. You can still add products manually with Add Product.',502);}
+    if(e&&(e.code==='scope_required'||e.code==='gateway_scope_mismatch'))throw new TrackerError('scope_required','Product sync needs Products access. Ask your admin to enable products.readonly and products/prices.readonly on the connected Kleeger app, then reconnect this sub-account. You can still add products manually with Add Product.',403);
+    if(e&&(e.code==='token_service_not_configured'||e.code==='reconnect_required'||e.code==='location_required'||e.code==='token_rejected'))throw new TrackerError('ghl_not_connected','Kleeger access is unavailable. Reconnect this sub-account and retry. You can still add products manually with Add Product.',409);
+    if(e&&(e.code==='gateway_unreachable'||e.code==='gateway_not_configured'||e.code==='gateway_error'))throw new TrackerError('provider_unreachable','Kleeger could not be reached for the sync. Try again shortly, or add products manually with Add Product.',502);
+    throw new TrackerError('provider_error','Kleeger could not complete the product sync. You can still add products manually with Add Product.',502);}
   let created=0,updated=0;
   for(const p of synced){
     const existing=(await db.query('SELECT id FROM products WHERE tenant_id=$1 AND ghl_product_id=$2',[u.tenantId,p.ghlProductId])).rows[0];

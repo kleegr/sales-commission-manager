@@ -28,11 +28,11 @@ export function AdminGettingStarted({refreshToken=0}:{refreshToken?:number}){
  const [docCount,setDocCount]=useState(0),[docsLoaded,setDocsLoaded]=useState(false),[docsError,setDocsError]=useState(false);
  useEffect(()=>{let live=true;fetch('/api/documents',{headers:{accept:'application/json'}}).then(r=>{if(!r.ok)throw new Error('load');return r.json();}).then(b=>{if(live){setDocCount((b?.documents||[]).filter((d:any)=>d.kind==='proposal'&&['sent','viewed','signed'].includes(d.status)).length);setDocsLoaded(true);setDocsError(false);}}).catch(()=>{if(live){setDocsLoaded(true);setDocsError(true);}});return()=>{live=false;};},[refreshToken]);
  const steps=[
-  {label:'Add your products',hint:'Add products manually or sync them from GoHighLevel, and set each price.',to:'/products',cta:'Add products',done:products.total>0},
+  {label:'Add your products',hint:'Add products manually or sync them from Kleeger, and set each price.',to:'/products',cta:'Add products',done:products.total>0},
   {label:'Create a campaign & commission',hint:'Set how much your team earns, and optionally pay some products differently.',to:'/plans',cta:'Create a campaign',done:campaigns.total>0},
   {label:'Add salespeople & assign products',hint:'Add your team, then choose which products each person can sell.',to:'/people',cta:'Add people',done:people.total>0&&assignments.total>0},
   {label:'Create & send a proposal',hint:'Build a proposal from your products and send it for approval.',to:'/documents',cta:'Create a proposal',done:docCount>0},
-  {label:'Get paid & pay commission',hint:'Payment is collected in GoHighLevel; then run payouts to your team.',to:'/payouts',cta:'Open payouts',done:payouts.total>0},
+  {label:'Get paid & pay commission',hint:'Payment is collected in Kleeger; then run payouts to your team.',to:'/payouts',cta:'Open payouts',done:payouts.total>0},
  ];
  const done=steps.filter(s=>s.done).length,total=steps.length,pct=Math.round(done/total*100);
  return <section className="st-panel st-guide"><button type="button" className="st-guide-head" aria-expanded={open} onClick={()=>setOpen(v=>!v)}><span className="st-guide-icon"><Rocket size={18}/></span><span className="st-guide-title"><strong>Workspace onboarding</strong><small className="st-help">{![products,campaigns,people,assignments,payouts].every(c=>c.loaded)||!docsLoaded?"Loading your setup progress…":[products,campaigns,people,assignments,payouts].some(c=>c.error)||docsError?"Some setup progress is unavailable. Refresh to retry.":done===total?"Setup complete — revisit any step below.":`${done} of ${total} complete · Your path from first product to first payout`}</small></span>{open?<ChevronUp size={18}/>:<ChevronDown size={18}/>}</button>
@@ -43,7 +43,7 @@ export function AdminGettingStarted({refreshToken=0}:{refreshToken?:number}){
 export function SalespersonGuide(){
  const steps=[
   {n:1,label:'Create a proposal',hint:'Pick your products, set quantities and prices, and add a title.',to:'/documents'},
-  {n:2,label:'Send it for approval',hint:'Share a private link — your customer approves and pays in GoHighLevel.',to:'/documents'},
+  {n:2,label:'Send it for approval',hint:'Share a private link — your customer approves and pays in Kleeger.',to:'/documents'},
   {n:3,label:'Track your commission',hint:'Once the sale is paid, watch your earnings and payouts here.',to:'/payouts'},
  ];
  return <section className="st-panel st-guide"><div className="st-guide-head-static"><span className="st-guide-icon"><Rocket size={18}/></span><span className="st-guide-title"><strong>How to earn</strong><small className="st-help">Create a proposal, send it, and get paid — here's the whole flow.</small></span></div>

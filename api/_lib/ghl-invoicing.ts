@@ -53,8 +53,8 @@ export function activeGhlInvoiceClient():GhlInvoiceClient{return currentClient??
 async function ghlFetch(path:string,token:string,method:'GET'|'POST',body:unknown,fetchImpl:typeof fetch):Promise<any>{
   let r:Response;
   try{r=await fetchImpl(`${GHL}${path}`,{method,headers:{Authorization:`Bearer ${token}`,Version:'2021-07-28',accept:'application/json','content-type':'application/json'},redirect:'error',signal:AbortSignal.timeout(20000),...(method==='GET'||body===undefined?{}:{body:JSON.stringify(body)})});}
-  catch{throw new TrackerError('provider_unreachable','GoHighLevel could not be reached to issue the invoice.',502);}
-  if(!r.ok)throw new TrackerError(r.status===429?'rate_limited':r.status===403?'scope_required':r.status===401?'ghl_not_connected':'provider_error',r.status===403?'The connected GHL app needs invoices.write and contacts.write access.':'GoHighLevel could not issue the invoice.',r.status===429?429:r.status===401?409:502);
+  catch{throw new TrackerError('provider_unreachable','Kleeger could not be reached to issue the invoice.',502);}
+  if(!r.ok)throw new TrackerError(r.status===429?'rate_limited':r.status===403?'scope_required':r.status===401?'ghl_not_connected':'provider_error',r.status===403?'The connected Kleeger app needs invoices.write and contacts.write access.':'Kleeger could not issue the invoice.',r.status===429?429:r.status===401?409:502);
   try{return await r.json();}catch{return {};}
 }
 
@@ -71,11 +71,11 @@ export function liveGhlInvoiceClient(fetchImpl:typeof fetch=fetch):GhlInvoiceCli
         const up=await ghlFetch('/contacts/',token,'POST',{locationId:req.locationId,email:req.contact.email,phone:req.contact.phone||undefined,name:req.contact.name||undefined,firstName:firstName||undefined,lastName:rest.join(' ')||undefined,companyName:req.contact.companyName||undefined},fetchImpl);
         contactId=str(up?.contact?.id||up?.id)|| (up?.meta?.contactId?String(up.meta.contactId):null);
       }
-      if(!contactId)throw new TrackerError('ghl_contact_failed','GoHighLevel did not return a contact for the invoice recipient.',502);
+      if(!contactId)throw new TrackerError('ghl_contact_failed','Kleeger did not return a contact for the invoice recipient.',502);
       // 2. Create the invoice.
       const created=await ghlFetch('/invoices/',token,'POST',{altId:req.locationId,altType:'location',locationId:req.locationId,contactId,name:req.name,title:req.title,currency:req.currency,issueDate:req.dueDate,dueDate:req.dueDate,items:req.items.map(i=>({name:i.name,quantity:i.quantity,price:i.price,currency:i.currency}))},fetchImpl);
       const invoiceId=str(created?._id||created?.id||created?.invoice?._id||created?.invoice?.id);
-      if(!invoiceId)throw new TrackerError('ghl_invoice_failed','GoHighLevel did not return an invoice id.',502);
+      if(!invoiceId)throw new TrackerError('ghl_invoice_failed','Kleeger did not return an invoice id.',502);
       // 3. Send it so the client gets a hosted pay link.
       let status=str(created?.status)||'draft',url=str(created?.invoiceUrl||created?.url)||null;
       try{const sent=await ghlFetch(`/invoices/${invoiceId}/send`,token,'POST',{altId:req.locationId,altType:'location',userId:'system',action:'sms_and_email'},fetchImpl);
@@ -107,7 +107,7 @@ export async function createInvoiceForDocument(db:SQL,u:SessionUser,documentId:s
   if(!row)throw new TrackerError('not_found','Document not found.',404);
   if(row.ghl_invoice_id)return {invoiceId:row.ghl_invoice_id,status:row.ghl_invoice_status,url:row.ghl_invoice_url,contactId:null,documentId};
   const location=(await db.query("SELECT ghl_location_id FROM tenants WHERE id=$1 AND status='active' AND kleegr_connection_status='connected'",[u.tenantId])).rows[0]?.ghl_location_id;
-  if(!location)throw new TrackerError('ghl_not_connected','Open this workspace from the connected GoHighLevel sub-account before invoicing.',409);
+  if(!location)throw new TrackerError('ghl_not_connected','Open this workspace from the connected Kleeger sub-account before invoicing.',409);
   const w=(await db.query('SELECT currency,payout_terms FROM tracker_workspaces WHERE tenant_id=$1',[u.tenantId])).rows[0];
   const currency=w?.currency||'USD',digits=Number(w?.payout_terms?.minorDigits??2);
   const d=rowToDocument(row);
@@ -223,7 +223,7 @@ export async function applyInvoicePaidEvent(db:SQL,event:InvoicePaidEvent):Promi
   const tenantId:string=row.tenant_id;
   await lock(db,tenantId);
   await db.query('UPDATE documents SET ghl_invoice_status=$3,updated_at=now() WHERE tenant_id=$1 AND id=$2',[tenantId,row.id,'paid']);
-  const system:SessionUser={id:`ghl-invoice:${row.id}`,tenantId,tenantSlug:'',tenantName:'',name:'GHL Invoice',email:'',role:'owner',salespersonId:null};
+  const system:SessionUser={id:`ghl-invoice:${row.id}`,tenantId,tenantSlug:'',tenantName:'',name:'Kleeger Invoice',email:'',role:'owner',salespersonId:null};
   const timezone=(await db.query('SELECT timezone FROM tracker_workspaces WHERE tenant_id=$1',[tenantId])).rows[0]?.timezone||'UTC';
   const date=new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
   const result=await postProposalLines(db,system,row,{date,source:'ghl',externalId:event.ghlInvoiceId});
@@ -333,7 +333,7 @@ export async function applyProductSaleEvent(db:SQL,lines:ProductSaleLine[],opts:
   const tenant=locationId?(await db.query("SELECT id FROM tenants WHERE ghl_location_id=$1 AND status='active' LIMIT 1",[locationId])).rows[0]:null;
   if(!tenant)return{applied:false,action:'no_tenant',tenantId:null,orderId,credited:0,skipped:lines.length};
   const tenantId:string=tenant.id,at=opts.at||new Date().toISOString().slice(0,10);
-  const system:SessionUser={id:`ghl-order:${orderId||'unknown'}`,tenantId,tenantSlug:'',tenantName:'',name:'GHL Order',email:'',role:'owner',salespersonId:null};
+  const system:SessionUser={id:`ghl-order:${orderId||'unknown'}`,tenantId,tenantSlug:'',tenantName:'',name:'Kleeger Order',email:'',role:'owner',salespersonId:null};
   let credited=0,skipped=0;
   for(const line of lines){
     if(!line.productGhlId||BigInt(line.amountMinor||'0')<=0n){skipped++;continue;}
@@ -342,7 +342,7 @@ export async function applyProductSaleEvent(db:SQL,lines:ProductSaleLine[],opts:
     const attr=await attributeProductSale(db,tenantId,{productGhlId:line.productGhlId,ref:line.ref||undefined,contactId:line.contactId||undefined});
     if(!attr){skipped++;continue;}
     const clientId=line.contactId?(await db.query('SELECT id FROM clients WHERE tenant_id=$1 AND ghl_contact_id=$2 LIMIT 1',[tenantId,line.contactId])).rows[0]?.id||null:null;
-    const res:any=await recordProductCommission(db,system,{tenantId,productId:attr.productId,salespersonId:attr.salespersonId,orderAmountMinor:line.amountMinor,currency:line.currency,eventKey:`productsale:${orderId}:${line.productGhlId}`,at,contactId:line.contactId||undefined,clientId:clientId||undefined,source:'ghl',notes:`GHL order ${orderId} paid — product ${line.productGhlId} credited to rep ${attr.salespersonId}.`});
+    const res:any=await recordProductCommission(db,system,{tenantId,productId:attr.productId,salespersonId:attr.salespersonId,orderAmountMinor:line.amountMinor,currency:line.currency,eventKey:`productsale:${orderId}:${line.productGhlId}`,at,contactId:line.contactId||undefined,clientId:clientId||undefined,source:'ghl',notes:`Kleeger order ${orderId} paid — product ${line.productGhlId} credited to rep ${attr.salespersonId}.`});
     if(res&&(res.skipped||res.duplicate))skipped++;else credited++;
   }
   return{applied:true,action:'product_sale',tenantId,orderId,credited,skipped};

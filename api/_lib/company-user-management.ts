@@ -11,12 +11,12 @@ async function actor(db:SQL,u:SessionUser){
 async function target(db:SQL,u:SessionUser,b:any){
   if(b.userId){const row=(await db.query('SELECT * FROM users WHERE tenant_id=$1 AND id=$2 FOR UPDATE',[u.tenantId,b.userId])).rows[0];if(!row)throw new TrackerError('not_found','User not found in this company.',404);return row;}
   const external=(await db.query("SELECT * FROM external_users WHERE tenant_id=$1 AND provider='ghl' AND external_id=$2 AND active=true",[u.tenantId,required(b.externalId,'Connected user')])).rows[0];
-  if(!external)throw new TrackerError('not_found','Choose an active GoHighLevel user in this company.',404);
+  if(!external)throw new TrackerError('not_found','Choose an active Kleeger user in this company.',404);
   const linked=(await db.query('SELECT * FROM users WHERE tenant_id=$1 AND kleegr_user_id=$2 FOR UPDATE',[u.tenantId,external.external_id])).rows;
   if(linked.length>1)throw new TrackerError('ambiguous_user','Multiple logins are linked to this user. Review them before changing access.',409);
   if(linked[0])return linked[0];
   const email=String(external.email||'').trim().toLowerCase();
-  if(!email)throw new TrackerError('email_required','Add an email to this GoHighLevel user before granting app access.');
+  if(!email)throw new TrackerError('email_required','Add an email to this Kleeger user before granting app access.');
   if((await db.query('SELECT id FROM users WHERE tenant_id=$1 AND lower(trim(email))=$2',[u.tenantId,email])).rows.length)throw new TrackerError('existing_login','This email already has an app login. Change the role on that login instead.',409);
   return {id:null,tenant_id:u.tenantId,name:external.name,email,kleegr_user_id:external.external_id,role:null,status:null,salesperson_id:null};
 }

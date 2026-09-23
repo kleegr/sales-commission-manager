@@ -16,7 +16,7 @@ export const KLEEGR_MANIFEST = {
   appName: "Sales Commission Manager",
   appVersion: "1.0.0",
   description:
-    "Commission tracking, payout management, sales plans, reports, and client commission visibility for Kleegr-powered GoHighLevel sub-accounts.",
+    "Commission tracking, payout management, sales plans, reports, and client commission visibility for Kleegr-powered Kleeger sub-accounts.",
   icon: "BadgeDollarSign",
   appType: "external",
   category: "sales",

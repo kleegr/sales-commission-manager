@@ -21,10 +21,10 @@ export function UserAccessEditor({person,enrollOnly,onClose,onSaved}:{person:Com
       {enrollOnly?<p>This adds an active salesman profile without changing their user role. Commission plans and campaign assignments are configured separately.</p>:<>
         <Field label="User role"><Select aria-label="User role" value={role} onChange={e=>{setRole(e.target.value);setConfirmed(false);}}><option value="none">No app access</option>{Object.keys(ROLE_LABEL).map(r=><option key={r} value={r} disabled={r==='owner'&&user?.role!=='owner'}>{r==='owner'?'Owner':r==='salesperson'?'Salesman':ROLE_LABEL[r as Role]}</option>)}</Select></Field>
         <p className="proposal-caption">{descriptions[role]}</p><p className="proposal-caption">An Owner, Admin or other user can also be a salesman. Keep their user role and use Make salesman in the Users list to add salesman enrollment. Changing this dropdown to Salesman replaces their current access role.</p>
-        {!person.login&&<p className="proposal-caption">This connected user will sign in through GoHighLevel / Smart Productivity. No password or invitation email is created.</p>}
+        {!person.login&&<p className="proposal-caption">This connected user will sign in through Kleeger / Smart Productivity. No password or invitation email is created.</p>}
         <Field label="Reason for change"><Textarea aria-label="Reason for change" rows={3} value={reason} onChange={e=>setReason(e.target.value)} placeholder="Why is this access needed?"/></Field>
         <label className="flex items-start gap-2"><input type="checkbox" checked={confirmed} onChange={e=>setConfirmed(e.target.checked)}/><span>I confirm this app access change for {person.name}.</span></label>
-        <p className="proposal-caption">The change is recorded in the audit history. Their existing sessions will end; the saved role applies on their next sign-in and persists across future launches. GoHighLevel permissions are unchanged.</p>
+        <p className="proposal-caption">The change is recorded in the audit history. Their existing sessions will end; the saved role applies on their next sign-in and persists across future launches. Kleeger permissions are unchanged.</p>
       </>}
       {error&&<p role="alert" className="proposal-error">{error}</p>}
     </div>

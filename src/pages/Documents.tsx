@@ -190,7 +190,7 @@ export default function Documents() {
   const [error, setError] = useState<string | null>(null);
   const [templates, setTemplates] = useState<DocumentTemplate[]>([]);
   const [documents, setDocuments] = useState<ClientDocument[]>([]);
-  useEffect(()=>{const target=searchParams.get('proposal');if(!target||!documents.length)return;const doc=documents.find(d=>d.id===target);if(doc){setWorkspaceTab(['overview','approval','conversation','versions','handover'].includes(searchParams.get('workspace')||'')?searchParams.get('workspace')!:'overview');setWorkspaceDoc(doc);}setSearchParams({}, {replace:true});},[documents,searchParams,setSearchParams]);
+  useEffect(()=>{const target=searchParams.get('proposal');if(!target||!documents.length)return;const doc=documents.find(d=>d.id===target);if(doc){setWorkspaceTab(['overview','options','approval','conversation','versions','handover'].includes(searchParams.get('workspace')||'')?searchParams.get('workspace')!:'overview');setWorkspaceDoc(doc);}},[documents,searchParams,setSearchParams]);
   const [profile, setProfile] = useState<BusinessProfile | null>(null);
   const [profileError, setProfileError] = useState(false);
   const [ai, setAi] = useState<{ configured: boolean; model: string }>({ configured: false, model: "" });
@@ -573,7 +573,9 @@ export default function Documents() {
     </div>
   );
 
-  if(guided) return <ProposalBuilder key={guided.draftKey} draftKey={guided.draftKey} onPolicySaved={(id,policy)=>setCatalog(current=>current.map(product=>product.id===id?{...product,proposal_policy:policy}:product))} existing={guided.existing} clients={clients} salespeople={proposalSalespeople} salespersonId={user?.salespersonId} self={isSelf} products={catalog} campaigns={campaignOptions} currency={currency} digits={digits} loading={catalogLoading} loadError={catalogError} branding={brandingFromProfile(profile,companyName)} aiReady={aiOn&&ai.configured} businessName={profile?.businessName} defaultTerms={profile?.paymentTerms} onClose={()=>setGuided(null)} onSaved={async(id)=>{await refreshLists();setGuided(null);setTab('proposalDocs');const result=await listDocuments();const saved=result.documents.find(d=>d.id===id);if(saved)setWorkspaceDoc(saved);setSavedNotice('Proposal saved as a draft. Preview it, then share a client approval link.');}}/>;
+  if(guided) return <ProposalBuilder key={guided.draftKey} draftKey={guided.draftKey} onPolicySaved={(id,policy)=>setCatalog(current=>current.map(product=>product.id===id?{...product,proposal_policy:policy}:product))} existing={guided.existing} clients={clients} salespeople={proposalSalespeople} salespersonId={user?.salespersonId} self={isSelf} products={catalog} campaigns={campaignOptions} currency={currency} digits={digits} loading={catalogLoading} loadError={catalogError} branding={brandingFromProfile(profile,companyName)} aiReady={aiOn&&ai.configured} businessName={profile?.businessName} defaultTerms={profile?.paymentTerms} onClose={()=>setGuided(null)} onSaved={async(id)=>{await refreshLists();setGuided(null);setTab('proposalDocs');const result=await listDocuments();const saved=result.documents.find(d=>d.id===id);if(saved){setWorkspaceTab('overview');setWorkspaceDoc(saved);setSearchParams({proposal:saved.id,workspace:'overview'}, {replace:true});}setSavedNotice('Proposal saved as a draft. Preview it, then share a client approval link.');}}/>;
+
+if(workspaceDoc) return <ProposalWorkspace key={`${workspaceDoc.id}:${workspaceTab}`} initialTab={workspaceTab} doc={workspaceDoc} products={catalog} currency={currency} digits={digits} onClose={()=>{setWorkspaceDoc(null);setSearchParams({}, {replace:true});}} onChanged={refreshLists} onRevision={async id=>{await refreshLists();const result=await listDocuments();const revised=result.documents.find(d=>d.id===id);setWorkspaceDoc(null);setSearchParams({}, {replace:true});if(revised)setGuided({draftKey:revised.id,existing:revised});}}/>;
 
   return (
     <div className="space-y-6 proposal-center">
@@ -588,7 +590,7 @@ export default function Documents() {
           {error}
         </Card>
       )}
-      {workspaceDoc&&<ProposalWorkspace key={`${workspaceDoc.id}:${workspaceTab}`} initialTab={workspaceTab} doc={workspaceDoc} products={catalog} currency={currency} digits={digits} onClose={()=>setWorkspaceDoc(null)} onChanged={refreshLists} onRevision={async id=>{await refreshLists();const result=await listDocuments();const revised=result.documents.find(d=>d.id===id);setWorkspaceDoc(null);if(revised)setGuided({draftKey:revised.id,existing:revised});}}/>}
+
       {savedNotice&&<p role="status" className="proposal-success">{savedNotice}</p>}
       {activeTab==='proposalDocs'&&resumableDraftKey&&<div className="proposal-success">You have an unfinished proposal. <button className="st-text-link" onClick={()=>setGuided({draftKey:resumableDraftKey})}>Continue your saved draft →</button></div>}
       {activeTab==='proposalDocs'&&<div className="proposal-metrics">{[
@@ -671,7 +673,7 @@ export default function Documents() {
               onSend={(d) => setShareDoc(d)}
               onLink={onNewLink}
               onPricing={(d) => setPricingDoc(d)}
-              onWorkspace={(d,tab='overview')=>{setWorkspaceTab(tab);setWorkspaceDoc(d);}}
+              onWorkspace={(d,tab='overview')=>{setWorkspaceTab(tab);setWorkspaceDoc(d);setSearchParams({proposal:d.id,workspace:tab}, {replace:true});}}
             />
           )}
 
@@ -687,7 +689,7 @@ export default function Documents() {
               onSend={(d) => setShareDoc(d)}
               onLink={onNewLink}
               onPricing={(d) => setPricingDoc(d)}
-              onWorkspace={(d,tab='overview')=>{setWorkspaceTab(tab);setWorkspaceDoc(d);}}
+              onWorkspace={(d,tab='overview')=>{setWorkspaceTab(tab);setWorkspaceDoc(d);setSearchParams({proposal:d.id,workspace:tab}, {replace:true});}}
             />
           )}
 

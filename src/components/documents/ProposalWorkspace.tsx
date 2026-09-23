@@ -27,7 +27,7 @@ export function ProposalWorkspace({doc,products,currency,digits,onClose,onChange
   const set=<K extends keyof ProposalOptions>(key:K,value:ProposalOptions[K])=>setOptions(o=>({...o,[key]:value}));
   const locked=data?.status!=='draft';
   const dirty=!!data&&JSON.stringify(options)!==JSON.stringify(data.options);
-  function close(){if(busy)return;if(dirty&&!window.confirm('Close without saving your offer options?'))return;onClose();}
+  function close(){if(busy)return false;if(dirty&&!window.confirm('Close without saving your offer options?'))return false;onClose();return true;}
   const monthly=proposalTotals(doc.lineItems||[]).recurring.month||0n;
   const value=options.value?valueEstimate(options.value,monthly.toString()):null;
   return <Modal open size="xl" title={<span>{doc.title}<small className="ps-modal-subtitle">Proposal workspace</small></span>} onClose={close} footer={<div className="ps-actions"><span role="status">{notice}</span><Button variant="secondary" disabled={busy} onClick={close}>Close</Button>{!locked&&dirty&&<Button disabled={busy||!dirty} onClick={()=>void action('options',{options,version:data.version},'Offer options saved. Review and share when ready.')}>Save offer options</Button>}</div>}><div className="ps-workspace"><nav className="ps-tabs" aria-label="Proposal workspace">{tabs.map(t=><button key={t.id} type="button" aria-pressed={tab===t.id} onClick={()=>setTab(t.id)}><t.icon size={15}/>{t.label}</button>)}</nav>{error&&<p role="alert" className="proposal-error">{error}</p>}{!data?<p role="status">Loading proposal workspace…</p>:<div className="ps-workspace-body">

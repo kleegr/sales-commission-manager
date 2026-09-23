@@ -993,9 +993,9 @@ function ClientDocList({
         <Card className="py-10">
           <EmptyState
             icon={kind === "contract" ? <FileSignature className="h-6 w-6" /> : <FileText className="h-6 w-6" />}
-            title={`No ${label}s yet`}
-            description={`Create a ${label} for a specific client. Their details merge in automatically, and you can edit every section before sending.`}
-            action={<Button onClick={onNew}><Plus className="h-4 w-4" /> Create for client</Button>}
+            title={search||statusFilter?`No matching ${label}s`:`No ${label}s yet`}
+            description={search||statusFilter?"Try another search or clear your filters to see your proposals.":`Create a ${label} for a specific client. Their details merge in automatically, and you can edit every section before sending.`}
+            action={search||statusFilter?<Button variant="secondary" onClick={()=>{setSearch('');setStatusFilter('');}}>Clear filters</Button>:<Button onClick={onNew}><Plus className="h-4 w-4" /> Create for client</Button>}
           />
         </Card>
       ) : (

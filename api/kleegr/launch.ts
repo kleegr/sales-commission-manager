@@ -65,7 +65,8 @@ function safeJson(s: string): unknown {
   }
 }
 
-function homePathFor(role: LaunchRole): string {
+function homePathFor(role: string): string {
+  if (role === "accountant") return "/operations";
   if (role === "owner") return "/agency";
   if (role === "admin" || role === "sales_manager") return "/";
   return "/portal";
@@ -144,6 +145,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       name: null,
     });
     const user = await upsertUserForClaims(tenant.id, claims, mappedRole);
+    if (user.status && user.status !== "active") return sendLaunchError(res, 403, "app_access_disabled");
 
     // 5b. A self-scoped role (salesperson/affiliate/partner) is sent to /portal by
     //     homePathFor() below, and that workspace renders ONLY the salespeople row
@@ -163,7 +165,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           WHERE u.id=$1 AND u.tenant_id=$2 AND u.salesperson_id IS NULL
           AND s.tenant_id=u.tenant_id AND (s.kleegr_user_id=$3 OR s.ghl_user_id=$3)
           AND s.enrolled_at IS NOT NULL`, [user.id,tenant.id,claims.sp_user_id]);
-      } else await ensureSalespersonForUser(tenant.id, user, claims, mappedRole);
+      } else await ensureSalespersonForUser(tenant.id, user, claims, user.role as LaunchRole);
     } catch (err) {
       console.error(
         "[scm:error] launch salesperson link:",
@@ -217,7 +219,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     //
     //    The cookie is still set for direct (non-framed) browsing, so nothing
     //    about the standard web login path changes.
-    const target = `${homePathFor(mappedRole)}?kleegr=connected`;
+    const target = `${homePathFor(user.role)}?kleegr=connected`;
     res.status(200);
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     // The body carries a live session token — it must never be cached by a

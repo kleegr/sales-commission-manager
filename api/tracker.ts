@@ -1,3 +1,4 @@
+import {changeCompanyUserRole,enrollCompanyUser} from './_lib/company-user-management.js';
 import {confirmProposalReceipt} from './_lib/ghl-invoicing.js';
 import {syncProposalHandover} from './_lib/proposal-suite.js';
 import {saveSalesman,importSalesmen,createStructure,updateStructure,preferences,mediaFolder,saveMediaFile,readFile,experienceRead} from './_lib/tracker-experience.js';
@@ -18,6 +19,7 @@ import {saveProduct,deleteProduct,assignProducts,setCampaignStructures,syncGhlPr
 export const config={maxDuration:60};
 async function workspaceRead<T>(tenantId:string,fn:(db:SQL)=>Promise<T>){return database.transaction(async db=>{await db.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');const w=(await db.query('SELECT timezone FROM tracker_workspaces WHERE tenant_id=$1',[tenantId])).rows[0];if(w)await db.query("SELECT set_config('TimeZone',$1,true)",[w.timezone]);return fn(db);});}
 export const mutations:Record<string,(db:SQL,u:any,b:any)=>Promise<any>>={
+  changeCompanyUserRole,enrollCompanyUser,
   salesman:saveSalesman,importSalesmen,structure:createStructure,updateStructure,preferences,mediaFolder,mediaFile:saveMediaFile,
   enroll,linkSalesman,participant:saveParticipant,team:saveTeam,plan:publishPlan,assignment:assignPlan,
   lead:createLead,editLead,attribution:attributeLead,attributionCandidate,opportunity:saveOpportunity,campaign:saveCampaign,

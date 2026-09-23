@@ -106,8 +106,8 @@ class FakeUsersDb {
       const target = this.byId(String(p[0]));
       if (target) {
         if (sql.includes("kleegr_user_id = $2")) target.kleegr_user_id = p[1] ?? null;
-        if (sql.includes("role = $2")) target.role = String(p[1]);
-        if (sql.includes("role = $5")) target.role = String(p[4]);
+        if (sql.includes("role = $2") || sql.includes("THEN role ELSE $2 END")) target.role = String(p[1]);
+        if (sql.includes("role = $5") || sql.includes("THEN role ELSE $5 END")) target.role = String(p[4]);
         if (sql.includes("email = CASE WHEN $5") && p[4]) target.email = String(p[4]);
       }
       return wrap([]);

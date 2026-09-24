@@ -427,9 +427,9 @@ function IntegrationsCard() {
             <Plug className="h-5 w-5" />
           </span>
           <div>
-            <p className="text-sm font-semibold text-slate-900 dark:text-white">Kleegr integration</p>
+            <p className="text-sm font-semibold text-slate-900 dark:text-white">Kleeger integration</p>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Sales Commission Manager connects to Kleeger through Kleegr Smart Productivity.
+              Sales Commission Manager connects to Kleeger through Kleeger Smart Productivity.
             </p>
           </div>
         </div>

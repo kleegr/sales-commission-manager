@@ -105,7 +105,7 @@ input[type="number"] {
 .st-nav>a,.st-more>summary{display:flex;align-items:center;gap:7px;padding:16px 2px;color:#667085;font-size:13px;font-weight:500;white-space:nowrap;border-bottom:2px solid transparent;transition:color .15s ease,border-color .15s ease}
 .st-nav>a[aria-current=page]{color:#2563eb;border-color:#2563eb;font-weight:600}
 .st-nav>a:hover,.st-more>summary:hover{color:#2563eb}
-.st-main{max-width:1800px;width:100%;margin:auto;padding:32px;outline:none}
+.st-main{max-width:none;width:100%;margin:0;padding:24px;outline:none}
 .st-page{display:flex;flex-direction:column;gap:24px}
 .st-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap}
 .st-heading h1{font-size:26px;font-weight:700;letter-spacing:-.6px;line-height:1.25;background:linear-gradient(to right,#2563eb,#4f46e5);-webkit-background-clip:text;background-clip:text;color:transparent}
@@ -815,3 +815,19 @@ input[type="number"] {
 
 /* Company directory: distinguish access from commission enrollment. */
 .company-users-header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:20px}.company-users-header h1{display:flex;align-items:center;gap:10px;font-size:26px;font-weight:700}.company-users-header p,.company-users-help{font-size:13px;color:#64748b;line-height:1.6}.company-users-help{padding:12px 0}.company-users-help a{color:#2455ed}.company-user-counts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:18px 0}.company-user-counts>div,.company-users-panel{background:white;border:1px solid #e2e8f0;border-radius:14px;box-shadow:0 4px 15px #142b5010}.company-user-counts>div{padding:18px}.company-user-counts span{font-size:12px;color:#64748b}.company-user-counts strong{display:block;font-size:26px;margin-top:8px}.company-users-panel{padding:20px}.company-users-filters{display:grid;grid-template-columns:2fr 1fr 1fr;gap:14px}.company-users-filters label{display:grid;gap:6px;font-size:12px;font-weight:500}.company-users-filters input,.company-users-filters select{width:100%;height:38px;min-width:0;border:1px solid #cbd5e1;border-radius:8px;background:transparent;padding:0 10px;font-size:13px}.company-role{display:inline-flex;border-radius:6px;padding:4px 8px;background:#f1f5f9;color:#64748b;font-size:12px}.company-role.has-role{background:#eef2ff;color:#334fd3}.company-users-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:18px;color:#64748b;font-size:12px}.company-users-footer>div{display:flex;gap:8px}.company-users-empty{padding:35px;text-align:center;color:#64748b}.dark .company-user-counts>div,.dark .company-users-panel{background:#0f172a;border-color:#334155}.dark .company-role{background:#1e293b;color:#cbd5e1}.dark .company-role.has-role{background:#1e2c58;color:#bdcaff}@media(max-width:720px){.company-user-counts{grid-template-columns:repeat(2,minmax(0,1fr))}.company-users-filters{grid-template-columns:1fr}.company-users-header{align-items:flex-start}.company-users-panel{padding:14px}}
+
+/* Consistent, accessible disclosure cards; native keyboard behavior is retained. */
+.st-main details:not(.st-menu){border:1px solid #dfe6f1;border-radius:13px;background:#fff;box-shadow:0 2px 8px #25375504;overflow:hidden}
+.st-main details:not(.st-menu)>summary{display:flex;align-items:center;justify-content:space-between;gap:16px;list-style:none;cursor:pointer;padding:17px 20px;font-size:13px;font-weight:650;color:#334155;line-height:1.5;background:#fafbfe}
+.st-main details:not(.st-menu)>summary::-webkit-details-marker{display:none}
+.st-main details:not(.st-menu)>summary::after{content:'';width:8px;height:8px;flex-shrink:0;border-right:2px solid #7a87a0;border-bottom:2px solid #7a87a0;transform:rotate(45deg);transition:transform .15s;margin-right:4px}
+.st-main details:not(.st-menu)[open]>summary{border-bottom:1px solid #e5eaf3;color:#4f46e5;background:#f5f6ff}
+.st-main details:not(.st-menu)[open]>summary::after{transform:rotate(225deg)}
+.st-main details.st-disclosure{padding:0}
+.st-main details.st-disclosure>div{padding:18px 20px;margin:0}
+.st-main details:not(.st-menu)>summary:hover{background:#f0f3fc}
+.dark .st-main details:not(.st-menu){background:#162033;border-color:#334155}
+.dark .st-main details:not(.st-menu)>summary{background:#1b263b;color:#dbe4f2;border-color:#334155}
+@media(max-width:640px){.st-main details:not(.st-menu)>summary{padding:14px}.st-main details.st-disclosure>div{padding:14px}}
+
+.st-campaign-stats{grid-template-columns:repeat(3,minmax(0,1fr))}@media(max-width:640px){.st-campaign-stats{grid-template-columns:1fr}}
